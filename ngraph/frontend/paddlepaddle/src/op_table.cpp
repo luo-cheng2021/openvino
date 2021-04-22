@@ -31,6 +31,11 @@
 #include "op/cast.hpp"
 #include "op/softmax.hpp"
 #include "op/split.hpp"
+#include "op/transpose2.hpp"
+#include "op/rnn.hpp"
+#include "op/fill_constant.hpp"
+#include "op/assign_value.hpp"
+#include "op/uniform_random.hpp"
 
 #include "op_table.hpp"
 
@@ -58,10 +63,18 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"scale", op::scale},
             {"leaky_relu", op::leaky_relu},
             {"nearest_interp_v2", op::nearest_interp_v2},
+            {"nearest_interp", op::nearest_interp_v2},
+            {"bilinear_interp_v2", op::bilinear_interp_v2},
+            {"bilinear_interp", op::bilinear_interp_v2},
             {"concat", op::concat},
             {"cast", op::cast},
             {"softmax", op::softmax},
-            {"split", op::split}
+            {"split", op::split},
+            {"transpose2", op::transpose2},
+            {"rnn", op::rnn},
+            {"fill_constant", op::fill_constant},
+            {"assign_value", op::assign_value},
+            {"uniform_random", op::uniform_random}
     };
 };
 

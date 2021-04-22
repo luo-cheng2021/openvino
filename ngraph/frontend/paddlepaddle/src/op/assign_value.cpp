@@ -14,15 +14,20 @@
 // limitations under the License.
 //*****************************************************************************
 
-#pragma once
-#include "node_context.hpp"
-
+#include <ngraph/opsets/opset6.hpp>
+#include "assign_value.hpp"
 namespace ngraph {
-namespace frontend {
-namespace pdpd {
-namespace op {
+    namespace frontend {
+        namespace pdpd {
+            namespace op {
 
-NamedOutputs nearest_interp_v2 (const NodeContext& node_context);
-NamedOutputs bilinear_interp_v2 (const NodeContext& node_context);
+                NamedOutputs assign_value (const NodeContext& node) {
+                    std::vector<float> values = node.get_attribute<std::vector<float>>("fp32_values");
+                    std::vector<int32_t> shape = node.get_attribute<std::vector<int32_t>>("shape");
+                    return node.default_single_output_mapping({opset6::Constant::create(element::f32, Shape{shape.begin(), shape.end()}, values)}, {"Out"});
+                }
 
-}}}}
+            }
+        }
+    }
+}

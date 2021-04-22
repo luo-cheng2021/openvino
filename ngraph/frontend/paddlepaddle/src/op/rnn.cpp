@@ -14,15 +14,23 @@
 // limitations under the License.
 //*****************************************************************************
 
-#pragma once
-#include "node_context.hpp"
+#include <ngraph/opsets/opset6.hpp>
+#include "rnn.hpp"
+#include "lstm.hpp"
+#include "paddlepaddle_frontend/utility.hpp"
 
 namespace ngraph {
-namespace frontend {
-namespace pdpd {
-namespace op {
+    namespace frontend {
+        namespace pdpd {
+            namespace op {
 
-NamedOutputs nearest_interp_v2 (const NodeContext& node_context);
-NamedOutputs bilinear_interp_v2 (const NodeContext& node_context);
+                NamedOutputs rnn (const NodeContext& node) {
+                    auto mode = node.get_attribute<std::string>("mode");
+                    PDPD_ASSERT(mode == "LSTM", "RNN only support LSTM now");
+                    return lstm(node);
+                }
 
-}}}}
+            }
+        }
+    }
+}

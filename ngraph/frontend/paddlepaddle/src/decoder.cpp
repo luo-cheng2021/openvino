@@ -157,5 +157,25 @@ std::vector<std::string> DecoderPDPDProto::get_output_names() const {
     return output_names;
 }
 
+std::vector<int64_t> DecoderPDPDProto::get_longs(const std::string& name, const std::vector<int64_t>& def) const
+{
+    std::cout << "Running get_longs" << std::endl;
+    std::vector<proto::OpDesc_Attr> attrs;
+    for (const auto &attr : op.attrs()) {
+        if (attr.name() == name)
+            attrs.push_back(attr);
+    }
+    if (attrs.empty()) {
+        return def;
+    } else if (attrs.size() > 1) {
+        // TODO: raise exception here
+        return def;
+    } else {
+        std::vector<int64_t> res;
+        std::copy(attrs[0].longs().begin(), attrs[0].longs().end(), std::back_inserter(res));
+        return res;
+    }
+}
+
 }
 }
