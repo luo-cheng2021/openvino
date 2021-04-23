@@ -32,10 +32,20 @@
 #include "op/softmax.hpp"
 #include "op/split.hpp"
 #include "op/transpose2.hpp"
+#include "op/yolo_box.hpp"
+#include "op/multiclass_nms.hpp"
 #include "op/rnn.hpp"
 #include "op/fill_constant.hpp"
-#include "op/assign_value.hpp"
 #include "op/uniform_random.hpp"
+#include "op/assign_value.hpp"
+#include "op/sigmoid.hpp"
+#include "op/hard_sigmoid.hpp"
+#include "op/relu6.hpp"
+#include "op/pow.hpp"
+#include "op/squeeze.hpp"
+#include "op/unsqueeze.hpp"
+#include "op/slice.hpp"
+#include "op/hard_swish.hpp"
 
 #include "op_table.hpp"
 
@@ -63,19 +73,32 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"scale", op::scale},
             {"leaky_relu", op::leaky_relu},
             {"nearest_interp_v2", op::nearest_interp_v2},
-            {"nearest_interp", op::nearest_interp_v2},
             {"bilinear_interp_v2", op::bilinear_interp_v2},
+            {"nearest_interp", op::nearest_interp_v2},
             {"bilinear_interp", op::bilinear_interp_v2},
             {"concat", op::concat},
             {"cast", op::cast},
-            {"softmax", op::softmax},
             {"split", op::split},
+            {"max_pool2d_with_index", op::pool2d}, //adaptive_max_pool2d
+            {"softmax", op::softmax},
             {"transpose2", op::transpose2},
+            {"yolo_box", op::yolo_box},
+            {"multiclass_nms3", op::multiclass_nms},
             {"rnn", op::rnn},
             {"fill_constant", op::fill_constant},
+            {"bmm", op::matmul},
+            {"depthwise_conv2d", op::conv2d},
+            {"uniform_random", op::uniform_random},
             {"assign_value", op::assign_value},
-            {"uniform_random", op::uniform_random}
-    };
+            {"sigmoid", op::sigmoid},
+            {"hard_sigmoid", op::hard_sigmoid},
+            {"relu6", op::relu6},
+            {"pow", op::pow},
+            {"squeeze2", op::squeeze},
+            {"unsqueeze2", op::unsqueeze},
+            {"slice", op::slice},
+            {"hard_swish", op::hard_swish}
+        };
 };
 
 }}}
