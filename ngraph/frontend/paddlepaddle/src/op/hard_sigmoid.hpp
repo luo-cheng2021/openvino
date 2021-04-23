@@ -22,6 +22,6 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector hard_sigmoid (const NodeContext& node);
+NamedOutputs hard_sigmoid (const NodeContext& node);
 
 }}}}

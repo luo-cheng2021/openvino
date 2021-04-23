@@ -132,7 +132,7 @@ namespace fuzzyOp {
         auto test_case = test::TestCase<TestEngine>(function);
 
         const auto parameters = function->get_parameters();
-        for (auto i = 0; i < parameters.size(); i++) {
+        for (size_t i = 0; i < parameters.size(); i++) {
             // read input npy file
             std::string datafile = modelfolder+"/input"+std::to_string((parameters.size()-1)-i)+".npy"; 
 
@@ -153,7 +153,7 @@ namespace fuzzyOp {
         }
         
         const auto results = function->get_results();
-        for (auto i = 0; i < results.size(); i++) {
+        for (size_t i = 0; i < results.size(); i++) {
             // read expected output npy file
             std::string datafile = modelfolder+"/output"+std::to_string(i)+".npy";
 

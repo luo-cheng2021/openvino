@@ -23,11 +23,11 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector unsqueeze (const NodeContext& node) {
+NamedOutputs unsqueeze (const NodeContext& node) {
     auto data = node.get_ng_input("X");
     auto axes = node.get_attribute<std::vector<int32_t>>("axes");
     auto axesNode = ngraph::opset6::Constant::create(ngraph::element::i32, {axes.size()}, axes);
-    return {std::make_shared<ngraph::opset6::Unsqueeze>(data, axesNode)};
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Unsqueeze>(data, axesNode)}, {"Out"});
 }
 
 }}}}

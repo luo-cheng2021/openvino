@@ -22,10 +22,18 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector scale (const NodeContext& node) {
+NamedOutputs scale (const NodeContext& node) {
     auto data = node.get_ng_input("X");
     auto scale = ngraph::opset6::Constant::create(ngraph::element::f32, {1}, {node.get_attribute<float>("scale")});
-    return {std::make_shared<ngraph::opset6::Multiply>(data, scale)};
+    auto bias = ngraph::opset6::Constant::create(ngraph::element::f32, {1}, {node.get_attribute<float>("bias")});
+    auto bias_after_scale = node.get_attribute<bool>("bias_after_scale");
+    if(!bias_after_scale) {
+        auto node_add = std::make_shared<ngraph::opset6::Add>(data, bias);
+        return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Multiply>(node_add, scale)}, {"Out"});
+    } else {
+        auto node_multiply =  std::make_shared<ngraph::opset6::Multiply>(data, scale);
+        return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Add>(node_multiply, bias)}, {"Out"});
+    }
 }
 
 }}}}

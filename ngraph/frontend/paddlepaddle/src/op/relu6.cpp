@@ -23,11 +23,11 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector relu6 (const NodeContext& node) {
+NamedOutputs relu6 (const NodeContext& node) {
     auto data = node.get_ng_input("X");
     auto threshold = node.get_attribute<float>("threshold");
-    MY_ASSERT(threshold >= 0, "relu6: threshold must greater than 0!");
-    return {std::make_shared<ngraph::opset6::Clamp>(data, 0.0, threshold)};     
+    PDPD_ASSERT(threshold >= 0, "relu6: threshold must greater than 0!");
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Clamp>(data, 0.0, threshold)}, {"Out"});
 }
 
 }}}}

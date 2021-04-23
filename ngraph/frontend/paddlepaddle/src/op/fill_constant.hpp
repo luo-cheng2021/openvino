@@ -23,7 +23,7 @@ namespace ngraph {
         namespace pdpd {
             namespace op {
 
-                OutputVector fill_constant(const NodeContext &node);
+                NamedOutputs fill_constant(const NodeContext &node);
 
             }
         }

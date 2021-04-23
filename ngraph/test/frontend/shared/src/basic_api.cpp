@@ -4,6 +4,7 @@
 
 #include <regex>
 #include "../include/basic_api.hpp"
+#include "../include/utils.hpp"
 
 using namespace ngraph;
 using namespace ngraph::frontend;

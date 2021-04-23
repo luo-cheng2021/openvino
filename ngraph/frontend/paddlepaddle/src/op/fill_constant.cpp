@@ -15,7 +15,6 @@
 //*****************************************************************************
 
 #include <ngraph/opsets/opset6.hpp>
-#include "relu.hpp"
 #include "fill_constant.hpp"
 
 
@@ -24,10 +23,10 @@ namespace ngraph {
         namespace pdpd {
             namespace op {
 
-                OutputVector fill_constant (const NodeContext& node) {
+                NamedOutputs fill_constant (const NodeContext& node) {
                     auto value = node.get_attribute<float>("value");
                     auto shape = node.get_attribute<std::vector<int64_t>>("shape");
-                    return {std::make_shared<ngraph::opset6::Constant>(ngraph::element::f32, Shape(shape.begin(), shape.end()), value)};
+                    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Constant>(ngraph::element::f32, Shape(shape.begin(), shape.end()), value)}, {"Out"});
                 }
 
             }}}}

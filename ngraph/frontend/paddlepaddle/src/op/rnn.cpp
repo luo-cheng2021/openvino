@@ -17,15 +17,16 @@
 #include <ngraph/opsets/opset6.hpp>
 #include "rnn.hpp"
 #include "lstm.hpp"
+#include "paddlepaddle_frontend/utility.hpp"
 
 namespace ngraph {
     namespace frontend {
         namespace pdpd {
             namespace op {
 
-                OutputVector rnn (const NodeContext& node) {
+                NamedOutputs rnn (const NodeContext& node) {
                     auto mode = node.get_attribute<std::string>("mode");
-                    MY_ASSERT(mode == "LSTM", "RNN only support LSTM now");
+                    PDPD_ASSERT(mode == "LSTM", "RNN only support LSTM now");
                     return lstm(node);
                 }
 

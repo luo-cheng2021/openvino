@@ -23,7 +23,7 @@ namespace ngraph {
         namespace pdpd {
             namespace op {
 
-                OutputVector uniform_random (const NodeContext &node);
+                NamedOutputs uniform_random (const NodeContext &node);
 
             }
         }

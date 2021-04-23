@@ -22,8 +22,8 @@ namespace ngraph {
         namespace pdpd {
             namespace op {
 
-                OutputVector uniform_random (const NodeContext& node) {
-                    return {std::make_shared<opset6::Parameter>(element::f32, PartialShape{Dimension::dynamic(), Dimension::dynamic(), Dimension::dynamic(), Dimension::dynamic()})};
+                NamedOutputs uniform_random (const NodeContext& node) {
+                    return node.default_single_output_mapping({std::make_shared<opset6::Parameter>(element::f32, PartialShape{Dimension::dynamic(), Dimension::dynamic(), Dimension::dynamic(), Dimension::dynamic()})}, {"Out"});
                 }
 
             }

@@ -23,13 +23,13 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector hard_sigmoid (const NodeContext& node) {
+NamedOutputs hard_sigmoid (const NodeContext& node) {
     auto data = node.get_ng_input("X");
     auto slope = node.get_attribute<float>("slope");
-    MY_ASSERT(slope >= 0, "hard_sigmoid: slope must greater than 0!");
+    PDPD_ASSERT(slope >= 0, "hard_sigmoid: slope must greater than 0!");
     auto alpha = ngraph::opset6::Constant::create(ngraph::element::f32, {}, {slope});
     auto beta = ngraph::opset6::Constant::create(ngraph::element::f32, {}, {node.get_attribute<float>("offset")});
-    return {std::make_shared<ngraph::opset6::HardSigmoid>(data, alpha, beta)};     
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::HardSigmoid>(data, alpha, beta)}, {"Out"});
 }
 
 }}}}

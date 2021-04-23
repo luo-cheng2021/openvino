@@ -22,9 +22,9 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector sigmoid (const NodeContext& node) {
+NamedOutputs sigmoid (const NodeContext& node) {
     auto data = node.get_ng_input("X");
-    return {std::make_shared<ngraph::opset6::Sigmoid>(data)};     
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Sigmoid>(data)}, {"Out"});
 }
 
 }}}}

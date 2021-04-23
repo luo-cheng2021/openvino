@@ -23,7 +23,7 @@ namespace ngraph {
         namespace pdpd {
             namespace op {
 
-                OutputVector rnn(const NodeContext &node);
+                NamedOutputs rnn(const NodeContext &node);
 
             }
         }

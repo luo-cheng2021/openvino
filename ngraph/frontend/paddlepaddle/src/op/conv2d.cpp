@@ -61,7 +61,7 @@ std::pair<CoordinateDiff, CoordinateDiff> get_pads(const NodeContext& node,
 
     if (pads.size() == kernel_rank * 2)
     {
-        for(int i = 0; i < pads.size(); i++)
+        for(size_t i = 0; i < pads.size(); i++)
         {
             if(i & 0x01)
             {
@@ -89,10 +89,10 @@ std::pair<CoordinateDiff, CoordinateDiff> get_pads(const NodeContext& node)
     return get_pads(node, data_spatial_dims);
 }
 
-OutputVector conv2d (const NodeContext& node) {
+NamedOutputs conv2d (const NodeContext& node) {
     auto data = node.get_ng_input("Input");
     auto filters = node.get_ng_input("Filter");
-    // TODO: resolve padding according to spec
+
     const auto strides = node.get_attribute<std::vector<int32_t>>("strides");
     const auto dilations = node.get_attribute<std::vector<int32_t>>("dilations");
     const auto auto_pad_type = get_auto_pad(node);
@@ -108,25 +108,25 @@ OutputVector conv2d (const NodeContext& node) {
 
         const auto reshaped_filters =
                 ngraph::builder::opset1::reshape(filters, filters_shape);
-        return {std::make_shared<opset6::GroupConvolution>(
+        return node.default_single_output_mapping({std::make_shared<opset6::GroupConvolution>(
                 data,
                 reshaped_filters,
                 ngraph::Strides(strides.begin(), strides.end()),
                 pads_begin,
                 pads_end,
                 ngraph::Strides(dilations.begin(), dilations.end()),
-                auto_pad_type)};
+                auto_pad_type)}, {"Output"});
     }
     else
     {
-        return {std::make_shared<opset6::Convolution>(
+        return node.default_single_output_mapping({std::make_shared<opset6::Convolution>(
                     data,
                     filters,
                     ngraph::Strides(strides.begin(), strides.end()),
                     pads_begin,
                     pads_end,
                     ngraph::Strides(dilations.begin(), dilations.end()),
-                    auto_pad_type)};
+                    auto_pad_type)}, {"Output"});
     }
 }
 

@@ -23,12 +23,12 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector pow (const NodeContext& node) {
+NamedOutputs pow (const NodeContext& node) {
     auto x = node.get_ng_input("X");
     Output<Node> factorNode;
     auto factor = node.get_attribute<float>("factor");
     factorNode = ngraph::opset6::Constant::create(ngraph::element::f32, {}, {factor});
-    return {std::make_shared<ngraph::opset6::Power>(x, factorNode)};  
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Power>(x, factorNode)}, {"Out"});
 }
 
 }}}}

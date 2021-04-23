@@ -53,7 +53,8 @@ calculate_scales_based_on_sizes(const Output<ngraph::Node>& data,
 
     return scales;
 }
-OutputVector nearest_interp_v2 (const NodeContext& node) {
+
+NamedOutputs nearest_interp_v2 (const NodeContext& node) {
     auto x = node.get_ng_input("X");
 
     using InterpolateMode = ngraph::opset6::Interpolate::InterpolateMode;
@@ -88,68 +89,67 @@ OutputVector nearest_interp_v2 (const NodeContext& node) {
         target_spatial_shape = opset6::Constant::create<int64_t>(element::i64, Shape{4}, {1, 1, out_h, out_w});
         scales = calculate_scales_based_on_sizes(x, target_spatial_shape);
     }
-    
+
     attrs.coordinate_transformation_mode = CoordinateTransformMode::asymmetric;
     attrs.nearest_mode = Nearest_mode::round_prefer_floor;
     attrs.antialias = false;
     attrs.pads_begin = {0, 0, 0, 0};
     attrs.pads_end = {0, 0, 0, 0};
 
-    return {std::make_shared<ngraph::opset6::Interpolate>(x, target_spatial_shape, scales, attrs)};
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Interpolate>(x, target_spatial_shape, scales, attrs)}, {"Out"});
 }
 
-    OutputVector bilinear_interp_v2 (const NodeContext& node) {
-        auto x = node.get_ng_input("X");
+NamedOutputs bilinear_interp_v2 (const NodeContext& node) {
+    auto x = node.get_ng_input("X");
 
-        using InterpolateMode = ngraph::opset6::Interpolate::InterpolateMode;
-        using CoordinateTransformMode = ngraph::opset6::Interpolate::CoordinateTransformMode;
-        using Nearest_mode = ngraph::opset6::Interpolate::NearestMode;
-        using InterpolateAttrs = ngraph::opset6::Interpolate::InterpolateAttrs;
-        using ShapeCalcMode = ngraph::opset6::Interpolate::ShapeCalcMode;
+    using InterpolateMode = ngraph::opset6::Interpolate::InterpolateMode;
+    using CoordinateTransformMode = ngraph::opset6::Interpolate::CoordinateTransformMode;
+    using Nearest_mode = ngraph::opset6::Interpolate::NearestMode;
+    using InterpolateAttrs = ngraph::opset6::Interpolate::InterpolateAttrs;
+    using ShapeCalcMode = ngraph::opset6::Interpolate::ShapeCalcMode;
 
-        InterpolateAttrs attrs;
+    InterpolateAttrs attrs;
 
-        attrs.mode = InterpolateMode::linear_onnx;
+    attrs.mode = InterpolateMode::linear_onnx;
 
-        auto out_w = node.get_attribute<int>("out_w");
-        auto out_h = node.get_attribute<int>("out_h");
-        auto scale = node.get_attribute<std::vector<float>>("scale");
-        Output<Node> scales;
-        Output<Node> target_spatial_shape;
-        if (out_w <= 0 || out_h <= 0) {
-            attrs.shape_calculation_mode = ShapeCalcMode::scales;
-            scales = opset6::Constant::create<float>(element::f32, Shape{2}, std::vector<float>(scale.begin(), scale.end()));
-            target_spatial_shape = calculate_output_shape_based_on_scales(x, scales);
-        }
-        else {
-            attrs.shape_calculation_mode = ShapeCalcMode::sizes;
-            target_spatial_shape = opset6::Constant::create<int64_t>(element::i64, Shape{4}, {1, 1, out_h, out_w});
-            scales = calculate_scales_based_on_sizes(x, target_spatial_shape);
-        }
-
-        bool align_corners = node.get_attribute<bool>("align_corners");
-        int32_t align_mode = node.get_attribute<int32_t>("align_mode");
-
-        if(!align_corners && align_mode == 1)
-        {
-            attrs.coordinate_transformation_mode = CoordinateTransformMode::asymmetric;
-        }
-        else if(!align_corners && align_mode == 0)
-        {
-            attrs.coordinate_transformation_mode = CoordinateTransformMode::half_pixel;
-        }
-        else if(align_corners)
-        {
-            attrs.coordinate_transformation_mode = CoordinateTransformMode::align_corners;
-        }
-
-        auto axes = ngraph::opset6::Constant::create<int64_t>(element::i64, Shape{2}, {2, 3});
-
-        attrs.nearest_mode = Nearest_mode::round_prefer_floor;
-        attrs.antialias = false;
-        attrs.pads_begin = {0, 0, 0, 0};
-        attrs.pads_end = {0, 0, 0, 0};
-
-        return {std::make_shared<ngraph::opset6::Interpolate>(x, target_spatial_shape, scales, attrs)};
+    auto out_w = node.get_attribute<int>("out_w");
+    auto out_h = node.get_attribute<int>("out_h");
+    auto scale = node.get_attribute<std::vector<float>>("scale");
+    Output<Node> scales;
+    Output<Node> target_spatial_shape;
+    if (out_w <= 0 || out_h <= 0) {
+        attrs.shape_calculation_mode = ShapeCalcMode::scales;
+        scales = opset6::Constant::create<float>(element::f32, Shape{2}, std::vector<float>(scale.begin(), scale.end()));
+        target_spatial_shape = calculate_output_shape_based_on_scales(x, scales);
     }
+    else {
+        attrs.shape_calculation_mode = ShapeCalcMode::sizes;
+        target_spatial_shape = opset6::Constant::create<int64_t>(element::i64, Shape{4}, {1, 1, out_h, out_w});
+        scales = calculate_scales_based_on_sizes(x, target_spatial_shape);
+    }
+
+    bool align_corners = node.get_attribute<bool>("align_corners");
+    int32_t align_mode = node.get_attribute<int32_t>("align_mode");
+
+    if(!align_corners && align_mode == 1)
+    {
+        attrs.coordinate_transformation_mode = CoordinateTransformMode::asymmetric;
+    }
+    else if(!align_corners && align_mode == 0)
+    {
+        attrs.coordinate_transformation_mode = CoordinateTransformMode::half_pixel;
+    }
+    else if(align_corners)
+    {
+        attrs.coordinate_transformation_mode = CoordinateTransformMode::align_corners;
+    }
+
+    attrs.nearest_mode = Nearest_mode::round_prefer_floor;
+    attrs.antialias = false;
+    attrs.pads_begin = {0, 0, 0, 0};
+    attrs.pads_end = {0, 0, 0, 0};
+
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Interpolate>(x, target_spatial_shape, scales, attrs)}, {"Out"});
+}
+
 }}}}

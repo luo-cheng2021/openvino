@@ -21,10 +21,10 @@ namespace ngraph {
         namespace pdpd {
             namespace op {
 
-                OutputVector assign_value (const NodeContext& node) {
+                NamedOutputs assign_value (const NodeContext& node) {
                     std::vector<float> values = node.get_attribute<std::vector<float>>("fp32_values");
                     std::vector<int32_t> shape = node.get_attribute<std::vector<int32_t>>("shape");
-                    return {opset6::Constant::create(element::f32, Shape{shape.begin(), shape.end()}, values)};
+                    return node.default_single_output_mapping({opset6::Constant::create(element::f32, Shape{shape.begin(), shape.end()}, values)}, {"Out"});
                 }
 
             }

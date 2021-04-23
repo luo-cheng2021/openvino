@@ -23,23 +23,23 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector squeeze (const NodeContext& node) {
+NamedOutputs squeeze (const NodeContext& node) {
     auto data = node.get_ng_input("X");
     auto axes = node.get_attribute<std::vector<int32_t>>("axes");
-    MY_ASSERT(data.get_partial_shape().rank().is_static(), "squeeze: X rank must be static!");
+    PDPD_ASSERT(data.get_partial_shape().rank().is_static(), "squeeze: X rank must be static!");
 
     auto shape = data.get_partial_shape().to_shape();
     for (auto &&i : axes) {
-        auto idx = i;
+        size_t idx = i;
         if (idx < 0) {
             idx = i + shape.size();
         }
-        MY_ASSERT(idx < shape.size(), "squeeze: axes value must be < max_rank.");
-        MY_ASSERT(shape[idx] == 1, "squeeze: the specified dimension is not equal to one.");
+        PDPD_ASSERT(idx < shape.size(), "squeeze: axes value must be < max_rank.");
+        PDPD_ASSERT(shape[idx] == 1, "squeeze: the specified dimension is not equal to one.");
     }
     
     auto axesNode = ngraph::opset6::Constant::create(ngraph::element::i32, {axes.size()}, axes);
-    return {std::make_shared<ngraph::opset6::Squeeze>(data, axesNode)};
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Squeeze>(data, axesNode)}, {"Out"});
 }
 
 }}}}

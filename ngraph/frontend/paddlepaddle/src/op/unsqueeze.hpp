@@ -22,6 +22,6 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector unsqueeze (const NodeContext& node);
+NamedOutputs unsqueeze (const NodeContext& node);
 
 }}}}

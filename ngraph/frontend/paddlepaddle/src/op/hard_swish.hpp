@@ -22,6 +22,6 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector hard_swish (const NodeContext& node);
+NamedOutputs hard_swish (const NodeContext& node);
 
 }}}}

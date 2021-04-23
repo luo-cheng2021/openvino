@@ -22,6 +22,6 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector yolo_box (const NodeContext& node);
+NamedOutputs yolo_box (const NodeContext& node);
 
 }}}}

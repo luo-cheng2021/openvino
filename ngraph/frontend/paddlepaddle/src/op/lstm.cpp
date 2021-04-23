@@ -16,6 +16,7 @@
 
 #include <ngraph/opsets/opset6.hpp>
 #include "lstm.hpp"
+#include "paddlepaddle_frontend/utility.hpp"
 #include "ngraph/builder/reshape.hpp"
 #include "ngraph/builder/split.hpp"
 
@@ -172,9 +173,9 @@ namespace ngraph {
 
                     };
                 }
-                OutputVector lstm (const NodeContext& node) {
+                NamedOutputs lstm (const NodeContext& node) {
                     auto mode = node.get_attribute<std::string>("mode");
-                    MY_ASSERT(mode == "LSTM", "RNN only support LSTM now");
+                    PDPD_ASSERT(mode == "LSTM", "RNN only support LSTM now");
                     auto prev_inputs = node.get_ng_inputs("Input");
                     Output<Node> prev_output = prev_inputs[0];
                     LSTMAttributes attrs(node);
@@ -198,8 +199,10 @@ namespace ngraph {
                         Y_h = lstm_sequence->output(1);
                         Y_c = lstm_sequence->output(2);
                     }
-
-                    return {prev_output};
+                    NamedOutputs named_outputs;
+                    named_outputs["Out"] = {prev_output};
+                    named_outputs["State"] = {Y_h, Y_c};
+                    return named_outputs;
 
                 }
 

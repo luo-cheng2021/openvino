@@ -25,7 +25,7 @@ namespace op {
     using namespace opset6;
     using namespace element;
 
-OutputVector yolo_box (const NodeContext& node_context) {
+NamedOutputs yolo_box (const NodeContext& node_context) {
     auto data = node_context.get_ng_input("X");
     auto image_size = node_context.get_ng_input("ImgSize");
 
@@ -70,11 +70,11 @@ OutputVector yolo_box (const NodeContext& node_context) {
 
     //  range x/y
     std::vector<float> range_x, range_y;
-    for (size_t i = 0; i < input_width; i++)
+    for (int32_t i = 0; i < input_width; i++)
     {
         range_x.push_back(i);
     }
-    for (size_t j = 0; j < input_height; j++)
+    for (int32_t j = 0; j < input_height; j++)
     {
         range_y.push_back(j);
     }
@@ -277,17 +277,11 @@ OutputVector yolo_box (const NodeContext& node_context) {
     auto node_score_shape = Constant::create<int64_t>(i64, {score_shape.size()}, score_shape);
     auto node_score_new_shape = std::make_shared<Reshape>(node_score, node_score_shape, false); //outputs=node.output('Scores')
 
-    //TODO: combine the two output nodes into 1, to satisfy frontend/pdpd.
-#if 0
-    return OutputVector{node_pred_box_result, node_score_new_shape};
-#else    
-    auto node_result_concat = std::make_shared<Concat>(OutputVector{node_pred_box_result, node_score_new_shape}, 2);
+    NamedOutputs outputs;
+    outputs["Boxes"] = {node_pred_box_result};
+    outputs["Scores"] = {node_score_new_shape};
+    return outputs;
 
-    auto result_split_axis = Constant::create<int64_t>(i64, {1}, {2}); //(1,xx,6) -> bboxes(1,xx,4) and scores(1,xx,class_num)
-    auto result_split_axes_lengths = Constant::create<int64_t>(i64, {2}, {4, class_num});
-    auto node_result = std::make_shared<VariadicSplit>(node_result_concat, result_split_axis, result_split_axes_lengths);
-    return node_result->outputs();
-#endif
 }
 
 }}}}

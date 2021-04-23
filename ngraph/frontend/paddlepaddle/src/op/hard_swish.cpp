@@ -23,21 +23,21 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector hard_swish (const NodeContext& node) {
+NamedOutputs hard_swish (const NodeContext& node) {
     auto data = node.get_ng_input("X");
     if (node.has_attribute<float>("threshold")) {
         auto threshold = node.get_attribute<float>("threshold");
-        MY_ASSERT(std::abs(threshold - 6.0) < 0.001, "hard_swish: threshold must = 6.0.");
+        PDPD_ASSERT(std::abs(threshold - 6.0) < 0.001, "hard_swish: threshold must = 6.0.");
     }
     if (node.has_attribute<float>("scale")) {
         auto scale = node.get_attribute<float>("scale");
-        MY_ASSERT(std::abs(scale - 6.0) < 0.001, "hard_swish: scale must = 6.0.");
+        PDPD_ASSERT(std::abs(scale - 6.0) < 0.001, "hard_swish: scale must = 6.0.");
     }
     if (node.has_attribute<float>("offset")) {    
         auto offset = node.get_attribute<float>("offset");
-        MY_ASSERT(std::abs(offset - 3.0) < 0.001, "hard_swish: offset must = 3.0.");
+        PDPD_ASSERT(std::abs(offset - 3.0) < 0.001, "hard_swish: offset must = 3.0.");
     }
-    return {std::make_shared<ngraph::opset6::HSwish>(data)};
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::HSwish>(data)}, {"Out"});
 }
 
 }}}}
