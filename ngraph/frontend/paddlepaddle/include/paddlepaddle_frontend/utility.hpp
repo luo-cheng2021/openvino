@@ -1,5 +1,5 @@
 //*****************************************************************************
-// Copyright 2017-2020 Intel Corporation
+// Copyright 2017-2021 Intel Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,19 +16,19 @@
 
 #pragma once
 
-#include <ngraph/pass/pass.hpp>
-#include <ngraph/util.hpp>
+#include <frontend_manager/frontend_manager.hpp>
 
 namespace ngraph {
-namespace pass {
+namespace frontend {
 
-class NGRAPH_API TransposeSinking : public ngraph::pass::FunctionPass {
- public:
-  TransposeSinking() {
-    set_property(ngraph::pass::PassProperty::REQUIRE_STATIC_SHAPE, true);
-  }
-  bool run_on_function(std::shared_ptr<ngraph::Function> function) override;
-};
+inline void MY_ASSERT(bool ex, const std::string& msg = "Unspecified error.") {
+    if (!ex) throw std::runtime_error(msg);
+}
 
-}  // namespace pass
-}  // namespace ngraph
+inline void NOT_IMPLEMENTED(const std::string& name = "Unspecified")
+{
+    throw std::runtime_error(name + " is not implemented");
+}
+
+} // namespace frontend
+} // namespace ngraph

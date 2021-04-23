@@ -16,7 +16,7 @@
 
 #pragma once
 #include "decoder.hpp"
-#include "utility.hpp"
+#include <paddlepaddle_frontend/utility.hpp>
 
 namespace ngraph {
 namespace frontend {
@@ -99,6 +99,15 @@ inline bool NodeContext::get_attribute (const std::string& name, const bool& def
 template <>
 inline ngraph::element::Type NodeContext::get_attribute (const std::string& name, const ngraph::element::Type& def) const
 { return node.get_dtype(name, def); }
+
+template <>
+inline std::vector<int64_t> NodeContext::get_attribute (const std::string& name, const std::vector<int64_t>& def) const
+{ return node.get_longs(name, def); }
+
+template <>
+inline int64_t NodeContext::get_attribute (const std::string& name, const int64_t& def) const
+{ return node.get_long(name, def); }
+
 
 }
 }

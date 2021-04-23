@@ -71,4 +71,3 @@ ngraph/src/ngraphConfigVersion.cmake
 ngraph/src/protobuf/
 ngraph/src/src/
 ngraph/src/test/
-ngraph/test/files/paddlepaddle/models/*

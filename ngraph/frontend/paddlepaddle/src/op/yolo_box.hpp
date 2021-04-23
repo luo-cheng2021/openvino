@@ -15,22 +15,13 @@
 //*****************************************************************************
 
 #pragma once
-
-#include <frontend_manager/frontend_manager.hpp>
-
-#include <paddlepaddle_frontend/place.hpp>
+#include "node_context.hpp"
 
 namespace ngraph {
 namespace frontend {
+namespace pdpd {
+namespace op {
 
-inline void MY_ASSERT(bool ex, const std::string& msg = "Unspecified error.") {
-    if (!ex) throw std::runtime_error(msg);
-}
+OutputVector yolo_box (const NodeContext& node);
 
-inline void NOT_IMPLEMENTED(const std::string& name = "Unspecified")
-{
-    throw std::runtime_error(name + " is not implemented");
-}
-
-} // namespace frontend
-} // namespace ngraph
+}}}}

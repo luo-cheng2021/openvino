@@ -2,105 +2,143 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "../include/paddlepaddle_frontend/model.hpp"
+#include <paddlepaddle_frontend/model.hpp>
+#include <paddlepaddle_frontend/utility.hpp>
 
+#include <fstream>
 #include "framework.pb.h"
-#include "utility.hpp"
+#include "decoder.hpp"
 
 namespace ngraph {
 namespace frontend {
 
-class InputModelPDPD::InputModelPDPDImpl {  
-    std::vector<std::vector<std::shared_ptr<OpPlacePDPD>>> op_places;
-    std::vector<std::map<std::string, std::shared_ptr<VarPlacePDPD>>> var_places;
-    std::shared_ptr<paddle::framework::proto::ProgramDesc> fw_ptr;
-    std::ifstream weights_stream;
-    bool weights_composed = false;
-public:
-    std::string path;
+using namespace paddle::framework::proto;
 
-    InputModelPDPDImpl (const std::string& _path);
+class InputModelPDPD::InputModelPDPDImpl {
+public:
+
+    InputModelPDPDImpl (const std::string& _path, const InputModel& input_model);
     std::vector<Place::Ptr> getInputs () const;
     std::vector<Place::Ptr> getOutputs () const;
-    Place::Ptr getPlaceByTensorName (const std::string& tensorName);
+    Place::Ptr getPlaceByTensorName (const std::string& tensorName) const;
     void overrideAllOutputs (const std::vector<Place::Ptr>& outputs);
     void overrideAllInputs (const std::vector<Place::Ptr>& inputs);
     void extractSubgraph (const std::vector<Place::Ptr>& inputs, const std::vector<Place::Ptr>& outputs);
     void setDefaultShape (Place::Ptr place, const ngraph::Shape&);
     void setPartialShape (Place::Ptr place, const ngraph::PartialShape&);
+    void setElementType (Place::Ptr place, const ngraph::element::Type&);
     
     template<typename T>
-    std::vector<T> getWeight(const std::string& name, int64_t tensor_length);
-    std::vector<std::shared_ptr<OpPlacePDPD>> getOpPlaces(int i) const { return op_places[i]; } 
-    std::map<std::string, std::shared_ptr<VarPlacePDPD>> getVarPlaces(int i) const { return var_places[i]; }
-    size_t getBlockNumber() const { return op_places.size(); }
+    std::vector<T> readWeight(const std::string& name, int64_t tensor_length);
+    std::vector<std::shared_ptr<OpPlacePDPD>> getOpPlaces(int i) const { return m_op_places_blocks[i]; }
+    std::map<std::string, std::shared_ptr<TensorPlacePDPD>> getVarPlaces(int i) const { return m_var_places_blocks[i]; }
+    size_t getBlockNumber() const { return m_op_places_blocks.size(); }
+
+private:
+    std::vector<std::vector<std::shared_ptr<OpPlacePDPD>>> m_op_places_blocks;
+    std::vector<std::map<std::string, std::shared_ptr<TensorPlacePDPD>>> m_var_places_blocks;
+    std::shared_ptr<ProgramDesc> m_fw_ptr;
+    std::ifstream m_weights_stream;
+    bool m_weights_composed = false;
+    const InputModel& m_input_model;
+    std::vector<Place::Ptr> m_inputs;
+    std::vector<Place::Ptr> m_outputs;
+    std::string m_path;
 };
 
-InputModelPDPD::InputModelPDPDImpl::InputModelPDPDImpl(const std::string& _path) : path(_path), fw_ptr{std::make_shared<paddle::framework::proto::ProgramDesc>()} {
+InputModelPDPD::InputModelPDPDImpl::InputModelPDPDImpl(const std::string& _path, const InputModel& input_model)
+    : m_path(_path),
+      m_fw_ptr{std::make_shared<ProgramDesc>()},
+      m_input_model(input_model) {
     std::string ext = ".pdmodel";            
-    std::string model_file(path);
-    if (path.length() >= ext.length() && (0 == path.compare(path.length() - ext.length(), ext.length(), ext)))
+    std::string model_file(m_path);
+    if (m_path.length() >= ext.length() && (0 == m_path.compare(m_path.length() - ext.length(), ext.length(), ext)))
     {
-        weights_composed = true;
-        auto weights_file = path.replace(path.size() - ext.size(), ext.size(), ".pdiparams");
-        weights_stream = std::ifstream(weights_file, std::ios::binary);
-        if (!weights_stream || !weights_stream.is_open())
+        m_weights_composed = true;
+        auto weights_file = m_path.replace(m_path.size() - ext.size(), ext.size(), ".pdiparams");
+        m_weights_stream = std::ifstream(weights_file, std::ios::binary);
+        if (!m_weights_stream || !m_weights_stream.is_open())
         {
             std::cerr << "Model file cannot be opened" << std::endl;
         }
     } else {
-        weights_composed = false;
+        m_weights_composed = false;
         model_file += "/__model__";
     }
 
     std::ifstream pb_stream(model_file, std::ios::binary);
-    std::cout << "Model Parsed: " << fw_ptr->ParseFromIstream(&pb_stream) << std::endl;
+    std::cout << "Model Parsed: " << m_fw_ptr->ParseFromIstream(&pb_stream) << std::endl;
 
-    std::cout << "Blocks number: " << fw_ptr->blocks().size() << std::endl;
-    for (const auto& block : fw_ptr->blocks()) {
-        var_places.push_back(std::map<std::string, std::shared_ptr<VarPlacePDPD>>());
-        for (int i = 0; i < block.vars().size(); i++) {
-            var_places.back()[block.vars()[i].name()] = std::make_shared<VarPlacePDPD>(VarPlacePDPD(&(block.vars()[i])));
+    std::cout << "Blocks number: " << m_fw_ptr->blocks().size() << std::endl;
+
+    const int cnt_of_blocks = m_fw_ptr->blocks_size();
+    const auto& blocks = m_fw_ptr->blocks();
+    m_var_places_blocks.resize(cnt_of_blocks);
+    m_op_places_blocks.resize(cnt_of_blocks);
+
+    for (int block_idx = 0; block_idx < cnt_of_blocks; block_idx++) {
+        const auto& block = blocks[block_idx];
+        auto& var_place_block = m_var_places_blocks[block_idx];
+        auto& op_place_block = m_op_places_blocks[block_idx];
+
+        for (const auto& var : block.vars()) {
+            var_place_block[var.name()] = std::make_shared<TensorPlacePDPD>(m_input_model, std::make_shared<VarDesc>(var));
         }
 
-        op_places.push_back(std::vector<std::shared_ptr<OpPlacePDPD>>());
-        for (int i = 0; i < block.ops_size(); i++) {
-            auto& op = block.ops()[i];
-            auto op_place = std::make_shared<OpPlacePDPD>(OpPlacePDPD(&op));
+        for (const auto& op : block.ops()) {
+            auto op_place = std::make_shared<OpPlacePDPD>(m_input_model, std::make_shared<OpDesc>(op));
+            op_place_block.push_back(op_place);
+
             for (const auto &output : op.outputs()) {
-                std::vector<std::weak_ptr<VarPlacePDPD>> out_vars;
-                for (auto& var_name : output.arguments()) {
-                    auto& var = var_places.back().at(var_name);
-                    var->producing_ops.push_back(op_place);
-                    out_vars.push_back(var);
+                auto out_port = std::make_shared<OutPortPlacePDPD>(m_input_model);
+                op_place->addOutPort(out_port, output.parameter());
+                out_port->setOp(op_place);
+                for (const auto &var_name : output.arguments()) {
+                    const auto& tensor = var_place_block.at(var_name);
+                    tensor->addProducingPort(out_port);
+                    out_port->addTargetTensor(tensor);
                 }
-                op_place->outputs[output.parameter()] = out_vars;
             }
-            std::map<std::string, google::protobuf::RepeatedPtrField<std::string>> inputs_dict;
+
             for (const auto &input : op.inputs()) {
-                std::vector<std::weak_ptr<VarPlacePDPD>> in_vars;
-                for (auto& var_name : input.arguments()) {
-                    auto& var = var_places.back().at(var_name);
-                    var->consuming_ops.push_back(op_place);
-                    in_vars.push_back(var);
+                auto in_port = std::make_shared<InPortPlacePDPD>(m_input_model);
+                op_place->addInPort(in_port, input.parameter());
+                in_port->setOp(op_place);
+                for (const auto &var_name : input.arguments()) {
+                    const auto& tensor = var_place_block.at(var_name);
+                    tensor->addConsumingPort(in_port);
+                    in_port->addSourceTensor(tensor);
                 }
-                op_place->inputs[input.parameter()] = in_vars;
             }
-            op_places.back().push_back(op_place);
+
+            // Determine outputs and inputs
+            if (op.type() == "feed") {
+                const auto& place = op_place->getOutputPortByName("Out")->getTargetTensor(0);
+                const auto& var_place = std::dynamic_pointer_cast<TensorPlacePDPD>(place);
+                const auto& tensor_desc = var_place->getDesc()->type().lod_tensor().tensor();
+                const auto& dims = tensor_desc.dims();
+
+                var_place->setElementType(TYPE_MAP[tensor_desc.data_type()]);
+                var_place->setPartialShape(PartialShape(std::vector<Dimension>(dims.begin(), dims.end())));
+                m_inputs.push_back(place);
+            } else if (op.type() == "fetch") {
+                auto place = op_place->getInputPortByName("X")->getSourceTensor(0);
+                m_outputs.push_back(place);
+            }
         }
     }
 }
 
 template<typename T>
-std::vector<T> InputModelPDPD::InputModelPDPDImpl::getWeight(const std::string& name, int64_t tensor_length) {
+std::vector<T> InputModelPDPD::InputModelPDPDImpl::readWeight(const std::string& name, int64_t tensor_length) {
     std::vector<T> tensor_data(tensor_length, 0);
 
     std::ifstream is;
     std::ifstream* stream_ptr;
-    if (weights_composed) {
-        stream_ptr = &weights_stream;
+    if (m_weights_composed) {
+        stream_ptr = &m_weights_stream;
     } else {
-        is = std::ifstream(path + "/" + name, std::ios::in | std::ifstream::binary);
+        is = std::ifstream(m_path + "/" + name, std::ios::in | std::ifstream::binary);
         if (!is || !is.is_open())
         {
             std::cout << "File not opened" << std::endl;
@@ -119,53 +157,67 @@ std::vector<T> InputModelPDPD::InputModelPDPDImpl::getWeight(const std::string& 
 }
 
 std::vector<Place::Ptr> InputModelPDPD::InputModelPDPDImpl::getInputs () const {
-    NOT_IMPLEMENTED("getInputs");
+    return m_inputs;
 }
 
 std::vector<Place::Ptr> InputModelPDPD::InputModelPDPDImpl::getOutputs () const {
-    NOT_IMPLEMENTED("getOutputs");
+    return m_outputs;
 }
 
-Place::Ptr InputModelPDPD::InputModelPDPDImpl::getPlaceByTensorName (const std::string& tensorName) {
-    for (auto var_places_in_block : var_places) {
+Place::Ptr InputModelPDPD::InputModelPDPDImpl::getPlaceByTensorName (const std::string& tensorName) const {
+    for (const auto& var_places_in_block : m_var_places_blocks) {
         if (var_places_in_block.count(tensorName))
             return var_places_in_block.at(tensorName);
     }
     return nullptr;
 }
 
-void InputModelPDPD::InputModelPDPDImpl::overrideAllOutputs (const std::vector<Place::Ptr>& outputs) {
-    NOT_IMPLEMENTED("overrideAllOutputs");
+void InputModelPDPD::InputModelPDPDImpl::overrideAllInputs (const std::vector<Place::Ptr>& inputs) {
+    // TODO: resolve for different kind of places
+    m_inputs = inputs;
 }
 
-void InputModelPDPD::InputModelPDPDImpl::overrideAllInputs (const std::vector<Place::Ptr>& inputs) {
-    NOT_IMPLEMENTED("overrideAllInputs");
+void InputModelPDPD::InputModelPDPDImpl::overrideAllOutputs (const std::vector<Place::Ptr>& outputs) {
+    // TODO: resolve for different kind of places
+    m_outputs = outputs;
 }
 
 void InputModelPDPD::InputModelPDPDImpl::extractSubgraph (const std::vector<Place::Ptr>& inputs, const std::vector<Place::Ptr>& outputs) {
-    NOT_IMPLEMENTED("extractSubgraph");
+    overrideAllInputs(inputs);
+    overrideAllOutputs(outputs);
 }
 
-void InputModelPDPD::InputModelPDPDImpl::setDefaultShape (Place::Ptr place, const ngraph::Shape&) {
+void InputModelPDPD::InputModelPDPDImpl::setDefaultShape (Place::Ptr place, const ngraph::Shape& shape) {
     NOT_IMPLEMENTED("setDefaultShape");
 }
 
-void InputModelPDPD::InputModelPDPDImpl::setPartialShape (Place::Ptr place, const ngraph::PartialShape&) {
-    NOT_IMPLEMENTED("setPartialShape");
+void InputModelPDPD::InputModelPDPDImpl::setPartialShape (Place::Ptr place, const ngraph::PartialShape& p_shape) {
+    auto var_place = std::dynamic_pointer_cast<TensorPlacePDPD>(place);
+    if (var_place) {
+        var_place->setPartialShape(p_shape);
+    }
+    // TODO: resolve for port places
 }
 
-InputModelPDPD::InputModelPDPD (const std::string& _path) : _impl{std::make_shared<InputModelPDPDImpl>(_path)} {}
+void InputModelPDPD::InputModelPDPDImpl::setElementType (Place::Ptr place, const ngraph::element::Type& type) {
+    auto var_place = std::dynamic_pointer_cast<TensorPlacePDPD>(place);
+    if (var_place) {
+        var_place->setElementType(type);
+    }
+    // TODO: resolve for port places
+}
 
-//template<typename T>
-std::vector<float> InputModelPDPD::getWeight(const std::string& name, int64_t tensor_length) {
-    return _impl->getWeight<float>(name, tensor_length);
+InputModelPDPD::InputModelPDPD (const std::string& _path) : _impl{std::make_shared<InputModelPDPDImpl>(_path, *this)} {}
+
+std::vector<float> InputModelPDPD::readWeight(const std::string& name, int64_t tensor_length) {
+    return _impl->readWeight<float>(name, tensor_length);
 }
 
 std::vector<std::shared_ptr<OpPlacePDPD>> InputModelPDPD::getOpPlaces(int i) const {
     return _impl->getOpPlaces(i);
 }
 
-std::map<std::string, std::shared_ptr<VarPlacePDPD>> InputModelPDPD::getVarPlaces(int i) const {
+std::map<std::string, std::shared_ptr<TensorPlacePDPD>> InputModelPDPD::getVarPlaces(int i) const {
     return _impl->getVarPlaces(i);
 }
 
@@ -181,7 +233,7 @@ std::vector<Place::Ptr> InputModelPDPD::getOutputs () const {
     return _impl->getOutputs();
 }
 
-Place::Ptr InputModelPDPD::getPlaceByTensorName (const std::string& tensorName) {
+Place::Ptr InputModelPDPD::getPlaceByTensorName (const std::string& tensorName) const {
     return _impl->getPlaceByTensorName(tensorName);
 }
 
@@ -203,6 +255,10 @@ void InputModelPDPD::setDefaultShape (Place::Ptr place, const ngraph::Shape& sha
 
 void InputModelPDPD::setPartialShape (Place::Ptr place, const ngraph::PartialShape& p_shape) {
     return _impl->setPartialShape(place, p_shape);
+}
+
+void InputModelPDPD::setElementType (Place::Ptr place, const ngraph::element::Type& type) {
+    return _impl->setElementType(place, type);
 }
 
 } // namespace frontend

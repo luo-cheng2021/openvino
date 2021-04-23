@@ -23,5 +23,6 @@ namespace pdpd {
 namespace op {
 
 OutputVector nearest_interp_v2 (const NodeContext& node_context);
+OutputVector bilinear_interp_v2 (const NodeContext& node_context);
 
 }}}}

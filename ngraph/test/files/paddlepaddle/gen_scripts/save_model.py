@@ -33,25 +33,27 @@ def print_alike(arr):
 
     print(print_array(arr, "}"))
 
-
-def saveModel(name, exe, feedkeys:list, fetchlist:list, inputs:list, outputs:list, **kwargv):
-    for key, value in kwargv.items():
-            print ("%s == %s" %(key, value))           
+def saveModel(name, exe, feedkeys:list, fetchlist:list, inputs:list, outputs:list):
+    model_dir =  os.path.dirname(os.path.abspath(__file__)) + '/../models/%s' %(name)
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)      
 
     print("\n\n------------- %s -----------\n" % (name))
     for i, input in enumerate(inputs):
-        print("INPUT %s :" % (feedkeys[i]), input.shape, input.dtype)
+        print("INPUT %s :" % (feedkeys[i]), input.shape, input.dtype, "\n")
         print_alike(input)
-        np.save(os.path.join("../models/"+name, "input{}".format(i)), input)
+        np.save(os.path.join(model_dir, "input{}".format(i)), input)
+        np.save(os.path.join(model_dir, "input{}.{}.{}".format(i, feedkeys[i], input.dtype)), input)
     print("\n")
+
     for i, output in enumerate(outputs):
-        print("OUTPUT %s :" % (fetchlist[i]),output.shape, output.dtype)
+        print("OUTPUT %s :" % (fetchlist[i]),output.shape, output.dtype, "\n")
         print_alike(output)
-        np.save(os.path.join("../models/"+name, "output{}".format(i)), output)     
+        np.save(os.path.join(model_dir, "output{}".format(i)), output)     
 
     # composited model + scattered model
-    pdpd.fluid.io.save_inference_model("../models/"+name, feedkeys, fetchlist, exe)
-    pdpd.fluid.io.save_inference_model("../models/"+name, feedkeys, fetchlist, exe, model_filename=name+".pdmodel", params_filename=name+".pdiparams")   
+    pdpd.fluid.io.save_inference_model(model_dir, feedkeys, fetchlist, exe)
+    pdpd.fluid.io.save_inference_model(model_dir, feedkeys, fetchlist, exe, model_filename=name+".pdmodel", params_filename=name+".pdiparams")   
 
 
 if __name__ == "__main__":

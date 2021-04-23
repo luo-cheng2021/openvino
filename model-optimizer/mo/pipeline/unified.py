@@ -11,9 +11,6 @@ from extensions.front.user_data_repack import UserDataRepack
 from extensions.front.input_cut import InputCut
 from extensions.front.output_cut import OutputCut
 from mo.utils.class_registration import apply_replacements_list
-from ngraph import FrontEndManager
-from ngraph import function_to_cnn
-from ngraph import PartialShape
 import logging as log
 
 
@@ -29,15 +26,22 @@ def unified_pipeline(argv: argparse.Namespace):
     return graph
 
 def moc_pipeline(argv: argparse.Namespace):
+    from ngraph import FrontEndManager # pylint: disable=import-error
+    from ngraph import function_to_cnn # pylint: disable=import-error
+    from ngraph import PartialShape    # pylint: disable=import-error
     log.info('New MOC pipeline')
-    fem = argv.feManager if 'feManager' in argv else FrontEndManager()
+    fem = argv.feManager
     log.info('fem.availableFrontEnds: ' + str(fem.availableFrontEnds()))
     log.info('Initializing new FE for framework {}'.format(argv.framework))
     fe = fem.loadByFramework(argv.framework)
     print(fe)
     inputModel = fe.loadFromFile(argv.input_model)
-
-
+    try:
+        place = inputModel.getPlaceByTensorName('x')
+        print(place)
+        print(place.isEqual(None))
+    except Exception:
+        log.exception('Failed to call model API with hardcoded input name "x"')
     # Wrap nGraph network to Graph for smoothly pass through the legacy code in MO.
     # This trick doesn't mean that we will hold Graph forever as a wrapper, it is derived from
     # NX graph and this is not required. But Graph has several methods that can be implemented for nGraph
@@ -54,9 +58,8 @@ def moc_pipeline(argv: argparse.Namespace):
     apply_replacements_list(graph, transforms)
     user_shapes = graph.graph['user_shapes']
     if len(user_shapes) > 0:
-        assert len(inputModel.getInputs()) == 1
-        assert len(user_shapes) == 1
-        inputModel.setPartialShape(user_shapes[0]['node'], PartialShape(user_shapes[0]['shape']))
+        for user_shape in user_shapes:
+            inputModel.setPartialShape(user_shape['node'], PartialShape(user_shape['shape']))
     nGraphModel = fe.convert(inputModel)
     network = function_to_cnn(nGraphModel)
     graph.graph['network'] = network
