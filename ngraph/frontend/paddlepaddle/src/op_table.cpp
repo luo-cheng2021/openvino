@@ -46,6 +46,7 @@
 #include "op/unsqueeze.hpp"
 #include "op/slice.hpp"
 #include "op/hard_swish.hpp"
+#include "op/dropout.hpp"
 
 #include "op_table.hpp"
 
@@ -97,7 +98,8 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"squeeze2", op::squeeze},
             {"unsqueeze2", op::unsqueeze},
             {"slice", op::slice},
-            {"hard_swish", op::hard_swish}
+            {"hard_swish", op::hard_swish},
+            {"dropout", op::dropout}
         };
 };
 
