@@ -16,4 +16,4 @@ avgAdaptivePool2D_test1,
 scale_test1,
 scale_test2,
 reshape,
-dropout,
+dropout
