@@ -47,7 +47,9 @@
 #include "op/slice.hpp"
 #include "op/hard_swish.hpp"
 #include "op/clip.hpp"
-
+#include "op/greater_equal.hpp"
+#include "op/log.hpp"
+#include "op/fill_constant_batch_size_like.hpp"
 #include "op_table.hpp"
 
 
@@ -99,7 +101,10 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"unsqueeze2", op::unsqueeze},
             {"slice", op::slice},
             {"hard_swish", op::hard_swish},
-            {"clip", op::clip}
+            {"clip", op::clip},
+            {"greater_equal", op::greater_equal},
+            {"log", op::log},
+            {"fill_constant_batch_size_like", op::fill_constant_batch_size_like}
         };
 };
 
