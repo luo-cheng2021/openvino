@@ -46,6 +46,8 @@
 #include "op/unsqueeze.hpp"
 #include "op/slice.hpp"
 #include "op/hard_swish.hpp"
+#include "op/flatten_contiguous_range.hpp"
+#include "op/pad3d.hpp"
 #include "op/clip.hpp"
 #include "op/greater_equal.hpp"
 #include "op/log.hpp"
@@ -87,6 +89,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"transpose2", op::transpose2},
             {"yolo_box", op::yolo_box},
             {"multiclass_nms3", op::multiclass_nms},
+	          {"flatten_contiguous_range", op::flatten_contiguous_range},
             {"rnn", op::rnn},
             {"fill_constant", op::fill_constant},
             {"bmm", op::matmul},
@@ -101,6 +104,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"unsqueeze2", op::unsqueeze},
             {"slice", op::slice},
             {"hard_swish", op::hard_swish},
+            {"pad3d", op::pad3d},
             {"clip", op::clip},
             {"greater_equal", op::greater_equal},
             {"log", op::log},
