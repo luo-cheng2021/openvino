@@ -46,6 +46,7 @@
 #include "op/unsqueeze.hpp"
 #include "op/slice.hpp"
 #include "op/hard_swish.hpp"
+#include "op/dropout.hpp"
 #include "op/flatten_contiguous_range.hpp"
 #include "op/pad3d.hpp"
 #include "op/clip.hpp"
@@ -104,6 +105,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"unsqueeze2", op::unsqueeze},
             {"slice", op::slice},
             {"hard_swish", op::hard_swish},
+            {"dropout", op::dropout},
             {"pad3d", op::pad3d},
             {"clip", op::clip},
             {"greater_equal", op::greater_equal},
