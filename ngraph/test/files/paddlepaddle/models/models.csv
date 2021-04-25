@@ -16,3 +16,6 @@ avgAdaptivePool2D_test1,
 scale_test1,
 scale_test2,
 reshape,
+paddle_concat_axis,
+paddle_concat_minus_axis,
+paddle_rnn_lstm_layer_1_bidirectional
