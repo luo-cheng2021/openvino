@@ -97,7 +97,8 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"squeeze2", op::squeeze},
             {"unsqueeze2", op::unsqueeze},
             {"slice", op::slice},
-            {"hard_swish", op::hard_swish}
+            {"hard_swish", op::hard_swish},
+            {"sync_batch_norm", op::batch_norm}
         };
 };
 
