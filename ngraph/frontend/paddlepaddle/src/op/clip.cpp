@@ -23,12 +23,12 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
-OutputVector clip (const NodeContext& node) {
+NamedOutputs clip (const NodeContext& node) {
     auto data = node.get_ng_input("X");
     auto min = node.get_attribute<float>("min");
     auto max = node.get_attribute<float>("max");
-    MY_ASSERT(max >= min, "clip: max value must greater than min value!");
-    return {std::make_shared<ngraph::opset6::Clamp>(data, min, max)};     
+    PDPD_ASSERT(max >= min, "clip: max value must greater than min value!");
+    return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Clamp>(data, min, max)}, {"Out"});     
 }
 
 }}}}
