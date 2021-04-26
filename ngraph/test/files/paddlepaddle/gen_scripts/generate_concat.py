@@ -25,11 +25,11 @@ if __name__ == "__main__":
     y = np.zeros([1, 1, 4, 4]).astype(np.float32)
     test_cases = [
         {
-            "name": "paddle_concat_axis",
+            "name": "concat_axis",
             "axes": 0
         },
         {
-            "name": "paddle_concat_minus_axis",
+            "name": "concat_minus_axis",
             "axes": -1
         }
     ]

@@ -13,11 +13,11 @@ static const std::string PATH_TO_MODELS = "/paddlepaddle/models/";
 using concatTestParam = FrontendOpTestParam;
 using concatTest = FrontendOpTest;
 
-static concatTestParam paddle_concat_axis() {
+static concatTestParam concat_axis() {
     concatTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_concat_axis/";
-    res.m_modelName =    "paddle_concat_axis.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "paddle_concat_axis";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.0, 1.0, 1.0, 1.0},
                                                               {1.0, 1.0, 1.0, 1.0},
@@ -45,8 +45,8 @@ static concatTestParam paddle_concat_axis() {
 static concatTestParam paddle_concat_minus_axis() {
     concatTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_concat_minus_axis/";
-    res.m_modelName =    "paddle_concat_minus_axis.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "concat_minus_axis";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.0, 1.0, 1.0, 1.0},
                                                               {1.0, 1.0, 1.0, 1.0},
@@ -73,7 +73,7 @@ TEST_P(concatTest, test_concat) {
 
 INSTANTIATE_TEST_CASE_P(FrontendOpTest, concatTest,
                         ::testing::Values(
-                                paddle_concat_axis()
-                                paddle_concat_minus_axis()
+                                concat_axis(),
+                                concat_minus_axis()
                         ),
                         concatTest::getTestCaseName);

@@ -13,11 +13,11 @@ static const std::string PATH_TO_MODELS = "/paddlepaddle/models/";
 using interpolateParam = FrontendOpTestParam;
 using interpolateTest = FrontendOpTest;
 
-static interpolateParam paddle_bilinear_downsample_false_1() {
+static interpolateParam bilinear_downsample_false_1() {
     interpolateParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_bilinear_downsample_false_1/";
-    res.m_modelName =    "paddle_bilinear_downsample_false_1.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "bilinear_downsample_false_1.pdmodel";
 
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.f, 2.f, 3.f, 4.f},
@@ -30,11 +30,11 @@ static interpolateParam paddle_bilinear_downsample_false_1() {
     return res;
 }
 
-static interpolateParam paddle_bilinear_downsample_false_0() {
+static interpolateParam bilinear_downsample_false_0() {
     interpolateParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_bilinear_downsample_false_0/";
-    res.m_modelName =    "paddle_bilinear_downsample_false_0.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "bilinear_downsample_false_0";
 
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.f, 2.f, 3.f, 4.f},
@@ -47,11 +47,11 @@ static interpolateParam paddle_bilinear_downsample_false_0() {
     return res;
 }
 
-static interpolateParam paddle_bilinear_downsample_true_0() {
+static interpolateParam bilinear_downsample_true_0() {
     interpolateParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_bilinear_downsample_true_0/";
-    res.m_modelName =    "paddle_bilinear_downsample_true_0.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "bilinear_downsample_true_0";
 
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.f, 2.f, 3.f, 4.f},
@@ -64,11 +64,11 @@ static interpolateParam paddle_bilinear_downsample_true_0() {
     return res;
 }
 
-static interpolateParam paddle_bilinear_upsample_false_1() {
+static interpolateParam bilinear_upsample_false_1() {
     interpolateParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_bilinear_upsample_false_1/";
-    res.m_modelName =    "paddle_bilinear_upsample_false_1.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "bilinear_upsample_false_1";
 
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.f, 2.f, 3.f, 4.f},
@@ -87,11 +87,11 @@ static interpolateParam paddle_bilinear_upsample_false_1() {
     return res;
 }
 
-static interpolateParam paddle_bilinear_upsample_false_0() {
+static interpolateParam bilinear_upsample_false_0() {
     interpolateParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_bilinear_upsample_false_0/";
-    res.m_modelName =    "paddle_bilinear_upsample_false_0.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "bilinear_upsample_false_0";
 
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.f, 2.f, 3.f, 4.f},
@@ -113,8 +113,8 @@ static interpolateParam paddle_bilinear_upsample_false_0() {
 static interpolateParam paddle_bilinear_upsample_true_0() {
     interpolateParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_bilinear_upsample_true_0/";
-    res.m_modelName =    "paddle_bilinear_upsample_true_0.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "bilinear_upsample_true_0";
 
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.f, 2.f, 3.f, 4.f},
@@ -136,8 +136,8 @@ static interpolateParam paddle_bilinear_upsample_true_0() {
 static interpolateParam paddle_nearest_downsample_false_0() {
     interpolateParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_nearest_downsample_false_0/";
-    res.m_modelName =    "paddle_nearest_downsample_false_0.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "nearest_downsample_false_0";
 
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.f, 2.f, 3.f, 4.f},
@@ -153,8 +153,8 @@ static interpolateParam paddle_nearest_downsample_false_0() {
 static interpolateParam paddle_nearest_upsample_false_0() {
     interpolateParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_nearest_upsample_false_0/";
-    res.m_modelName =    "paddle_nearest_upsample_false_0.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "nearest_upsample_false_0";
 
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{1.f, 2.f, 3.f, 4.f},
@@ -179,12 +179,12 @@ TEST_P(interpolateTest, test_interpolate) {
 
 INSTANTIATE_TEST_CASE_P(FrontendOpTest, interpolateTest,
                         ::testing::Values(
-                                paddle_bilinear_downsample_false_1(),
-                                paddle_bilinear_downsample_false_0(),
-                                paddle_bilinear_downsample_true_0(),
-                                paddle_bilinear_upsample_false_1(),
-                                paddle_bilinear_upsample_false_0(),
-                                paddle_bilinear_upsample_true_0(),
-                                paddle_nearest_downsample_false_0()
+                                bilinear_downsample_false_1(),
+                                bilinear_downsample_false_0(),
+                                bilinear_downsample_true_0(),
+                                bilinear_upsample_false_1(),
+                                bilinear_upsample_false_0(),
+                                bilinear_upsample_true_0(),
+                                nearest_downsample_false_0()
                         ),
                         interpolateTest::getTestCaseName);

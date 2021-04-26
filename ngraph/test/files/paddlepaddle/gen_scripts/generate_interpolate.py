@@ -40,9 +40,9 @@ def resize_upsample_bilinear():
         [13, 14, 15, 16]
     ]]], dtype=np.float32)
 
-    test_case = [{'name': 'paddle_bilinear_upsample_false_1', 'align_corners': False, 'align_mode': 1},
-                 {'name': 'paddle_bilinear_upsample_false_0', 'align_corners': False, 'align_mode': 0},
-                 {'name': 'paddle_bilinear_upsample_true_0', 'align_corners': True, 'align_mode': 0}]
+    test_case = [{'name': 'bilinear_upsample_false_1', 'align_corners': False, 'align_mode': 1},
+                 {'name': 'bilinear_upsample_false_0', 'align_corners': False, 'align_mode': 0},
+                 {'name': 'bilinear_upsample_true_0', 'align_corners': True, 'align_mode': 0}]
 
     for test in test_case:
         pdpd_result = pdpd_interpolate(data, [8, 8], None, mode='bilinear', align_corners=test['align_corners'],
@@ -59,9 +59,9 @@ def resize_downsample_bilinear():
         [13, 14, 15, 16]
     ]]], dtype=np.float32)
     data_28 = data.reshape([1, 1, 2, 8])
-    test_case = [{'name': 'paddle_bilinear_downsample_false_1', 'align_corners': False, 'align_mode': 1},
-                 {'name': 'paddle_bilinear_downsample_false_0', 'align_corners': False, 'align_mode': 0},
-                 {'name': 'paddle_bilinear_downsample_true_0', 'align_corners': True, 'align_mode': 0}]
+    test_case = [{'name': 'bilinear_downsample_false_1', 'align_corners': False, 'align_mode': 1},
+                 {'name': 'bilinear_downsample_false_0', 'align_corners': False, 'align_mode': 0},
+                 {'name': 'bilinear_downsample_true_0', 'align_corners': True, 'align_mode': 0}]
 
     for test in test_case:
         pdpd_result = pdpd_interpolate(data_28, [2, 4], None, mode='bilinear', align_corners=test['align_corners'],
@@ -78,7 +78,7 @@ def resize_upsample_nearest():
         [13, 14, 15, 16]
     ]]], dtype=np.float32)
 
-    test_case = [{'name': 'paddle_nearest_upsample_false_0', 'align_corners': False, 'align_mode': 0}]
+    test_case = [{'name': 'nearest_upsample_false_0', 'align_corners': False, 'align_mode': 0}]
 
     for test in test_case:
         pdpd_result = pdpd_interpolate(data, [8, 8], None, mode='nearest', align_corners=test['align_corners'],
@@ -95,7 +95,7 @@ def resize_downsample_nearest():
         [13, 14, 15, 16]
     ]]], dtype=np.float32)
     data_28 = data.reshape([1, 1, 2, 8])
-    test_case = [{'name': 'paddle_nearest_downsample_false_0', 'align_corners': False, 'align_mode': 1}]
+    test_case = [{'name': 'nearest_downsample_false_0', 'align_corners': False, 'align_mode': 1}]
 
     for test in test_case:
         pdpd_result = pdpd_interpolate(data_28, [2, 4], None, mode='nearest', align_corners=test['align_corners'],

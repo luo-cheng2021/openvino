@@ -18,7 +18,7 @@ def pdpd_bmm(x1, x2):
     outs = exe.run(
         feed={'x1': x1, 'x2': x2},
         fetch_list=[result])
-    saveModel("paddle_bmm", exe, feedkeys=['x1', 'x2'], fetchlist=[result], inputs=[x1, x2], outputs=[outs[0]])
+    saveModel("bmm", exe, feedkeys=['x1', 'x2'], fetchlist=[result], inputs=[x1, x2], outputs=[outs[0]])
 
     return outs[0]
 

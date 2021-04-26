@@ -17,7 +17,7 @@ static bmmTestParam bmm() {
     bmmTestParam res;
     res.m_frontEndName = PDPD;
     res.m_modelsPath =   PATH_TO_MODELS;
-    res.m_modelName =    "paddle_bmm/paddle_bmm.pdmodel";
+    res.m_modelName =    "paddle_bmm";
 
     res.inputs.emplace_back(test::NDArray<float, 3>{{{{1., 1., 1., 1., 1., 1., 1.},
                                                              {1., 1., 1., 1., 1., 1., 1.},

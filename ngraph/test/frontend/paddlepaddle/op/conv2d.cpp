@@ -13,11 +13,11 @@ static const std::string PATH_TO_MODELS = "/paddlepaddle/models/";
 using conv2dTestParam = FrontendOpTestParam;
 using conv2dTest = FrontendOpTest;
 
-static conv2dTestParam paddle_conv2d_SAME_padding() {
+static conv2dTestParam conv2d_SAME_padding() {
     conv2dTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_conv2d_SAME_padding/";
-    res.m_modelName =    "paddle_conv2d_SAME_padding.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODEL;
+    res.m_modelName =    "conv2d_SAME_padding";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{0.f, 1.f, 2.f, 3.f, 4.f},
                                                           {5.f, 6.f, 7.f, 8.f, 9.f},
@@ -37,11 +37,11 @@ static conv2dTestParam paddle_conv2d_SAME_padding() {
     return res;
 }
 
-static conv2dTestParam paddle_conv2d_VALID_padding() {
+static conv2dTestParam conv2d_VALID_padding() {
     conv2dTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_conv2d_VALID_padding/";
-    res.m_modelName =    "paddle_conv2d_VALID_padding.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "conv2d_VALID_padding";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{0.f, 1.f, 2.f, 3.f, 4.f},
                                                               {5.f, 6.f, 7.f, 8.f, 9.f},
@@ -60,11 +60,11 @@ static conv2dTestParam paddle_conv2d_VALID_padding() {
     return res;
 }
 
-static conv2dTestParam paddle_conv2d_strides_padding() {
+static conv2dTestParam conv2d_strides_padding() {
     conv2dTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_conv2d_strides_padding/";
-    res.m_modelName =    "paddle_conv2d_strides_padding.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "conv2d_strides_padding";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{0.f, 1.f, 2.f, 3.f, 4.f},
                                                               {5.f, 6.f, 7.f, 8.f, 9.f},
@@ -84,11 +84,11 @@ static conv2dTestParam paddle_conv2d_strides_padding() {
     return res;
 }
 
-static conv2dTestParam paddle_conv2d_strides_no_padding() {
+static conv2dTestParam conv2d_strides_no_padding() {
     conv2dTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_conv2d_strides_no_padding/";
-    res.m_modelName =    "paddle_conv2d_strides_no_padding.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "conv2d_strides_no_padding";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{0.f, 1.f, 2.f, 3.f, 4.f},
                                                               {5.f, 6.f, 7.f, 8.f, 9.f},
@@ -107,11 +107,11 @@ static conv2dTestParam paddle_conv2d_strides_no_padding() {
     return res;
 }
 
-static conv2dTestParam paddle_conv2d_strides_assymetric_padding() {
+static conv2dTestParam conv2d_strides_assymetric_padding() {
     conv2dTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_conv2d_strides_assymetric_padding/";
-    res.m_modelName =    "paddle_conv2d_strides_assymetric_padding.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "conv2d_strides_assymetric_padding";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{0.f, 1.f, 2.f, 3.f, 4.f},
                                                               {5.f, 6.f, 7.f, 8.f, 9.f},
@@ -131,11 +131,11 @@ static conv2dTestParam paddle_conv2d_strides_assymetric_padding() {
     return res;
 }
 
-static conv2dTestParam paddle_conv2d_dilation_assymetric_pads_strides() {
+static conv2dTestParam conv2d_dilation_assymetric_pads_strides() {
     conv2dTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_conv2d_dilation_assymetric_pads_strides/";
-    res.m_modelName =    "paddle_conv2d_dilation_assymetric_pads_strides.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "conv2d_dilation_assymetric_pads_strides";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{0.f, 1.f, 2.f, 3.f, 4.f},
                                                               {5.f, 6.f, 7.f, 8.f, 9.f},
@@ -154,11 +154,11 @@ static conv2dTestParam paddle_conv2d_dilation_assymetric_pads_strides() {
     return res;
 }
 
-static conv2dTestParam paddle_depthwise_conv2d_convolotuin() {
+static conv2dTestParam depthwise_conv2d_convolution() {
     conv2dTestParam res;
     res.m_frontEndName = PDPD;
-    res.m_modelsPath =   PATH_TO_MODELS + "paddle_depthwise_conv2d_convolotuin/";
-    res.m_modelName =    "paddle_depthwise_conv2d_convolotuin.pdmodel";
+    res.m_modelsPath =   PATH_TO_MODELS;
+    res.m_modelName =    "depthwise_conv2d_convolution";
 
     res.inputs.emplace_back(test::NDArray<float, 4>{{{{{0.f, 1.f, 2.f},
                                                               {3.f, 4.f, 5.f},
@@ -190,12 +190,12 @@ ASSERT_NO_THROW(validateOp());
 
 INSTANTIATE_TEST_CASE_P(FrontendOpTest, conv2dTest,
         ::testing::Values(
-                paddle_conv2d_SAME_padding(),
-                paddle_conv2d_VALID_padding(),
-                paddle_conv2d_strides_padding(),
-                paddle_conv2d_strides_no_padding(),
-                paddle_conv2d_strides_assymetric_padding(),
-                paddle_conv2d_dilation_assymetric_pads_strides(),
-                paddle_depthwise_conv2d_convolotuin()
+                conv2d_SAME_padding(),
+                conv2d_VALID_padding(),
+                conv2d_strides_padding(),
+                conv2d_strides_no_padding(),
+                conv2d_strides_assymetric_padding(),
+                conv2d_dilation_assymetric_pads_strides(),
+                depthwise_conv2d_convolution()
                 ),
         conv2dTest::getTestCaseName);

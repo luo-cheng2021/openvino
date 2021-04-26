@@ -54,6 +54,17 @@ calculate_scales_based_on_sizes(const Output<ngraph::Node>& data,
     return scales;
 }
 
+std::shared_ptr<ngraph::Node>
+extract_out_sizes(const Output<ngraph::Node>& data, const std::vector<int64_t>& out_sizes)
+{
+    const auto shape_of_x = std::make_shared<opset6::ShapeOf>(data);
+    auto shape_begin = opset6::Constant::create(element::Type_t::i64, {1}, {0});
+    auto shape_end = opset6::Constant::create(element::Type_t::i32, Shape{1}, {2});
+    auto nc_node = std::make_shared<opset6::StridedSlice>(shape_of_x, shape_begin, shape_end, std::vector<int64_t>{0}, std::vector<int64_t>{0});
+    auto hw_node = opset6::Constant::create<int64_t>(element::i64, Shape{2}, out_sizes);
+    return std::make_shared<opset6::Concat>(OutputVector{nc_node, hw_node}, 0);;
+}
+
 NamedOutputs nearest_interp_v2 (const NodeContext& node) {
     auto x = node.get_ng_input("X");
 
@@ -70,12 +81,6 @@ NamedOutputs nearest_interp_v2 (const NodeContext& node) {
     auto out_w = node.get_attribute<int>("out_w");
     auto out_h = node.get_attribute<int>("out_h");
     auto scale = node.get_attribute<std::vector<float>>("scale");
-    if (out_w <= 0 || out_h <= 0) {
-        attrs.shape_calculation_mode = ShapeCalcMode::scales;
-    }
-    else {
-        attrs.shape_calculation_mode = ShapeCalcMode::sizes;
-    }
 
     Output<Node> scales;
     Output<Node> target_spatial_shape;
@@ -86,7 +91,7 @@ NamedOutputs nearest_interp_v2 (const NodeContext& node) {
     }
     else {
         attrs.shape_calculation_mode = ShapeCalcMode::sizes;
-        target_spatial_shape = opset6::Constant::create<int64_t>(element::i64, Shape{4}, {1, 1, out_h, out_w});
+        target_spatial_shape = extract_out_sizes(x, {out_h, out_w});
         scales = calculate_scales_based_on_sizes(x, target_spatial_shape);
     }
 
@@ -124,7 +129,7 @@ NamedOutputs bilinear_interp_v2 (const NodeContext& node) {
     }
     else {
         attrs.shape_calculation_mode = ShapeCalcMode::sizes;
-        target_spatial_shape = opset6::Constant::create<int64_t>(element::i64, Shape{4}, {1, 1, out_h, out_w});
+        target_spatial_shape = extract_out_sizes(x, {out_h, out_w});
         scales = calculate_scales_based_on_sizes(x, target_spatial_shape);
     }
 
