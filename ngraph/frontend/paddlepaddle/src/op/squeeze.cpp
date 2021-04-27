@@ -25,17 +25,9 @@ namespace op {
 
 NamedOutputs squeeze (const NodeContext& node) {
     auto data = node.get_ng_input("X");
-    auto axes = node.get_attribute<std::vector<int32_t>>("axes");
-    PDPD_ASSERT(data.get_partial_shape().rank().is_static(), "squeeze: X rank must be static!");
-
-    auto shape = data.get_partial_shape().to_shape();
-    for (auto &&i : axes) {
-        size_t idx = i;
-        if (idx < 0) {
-            idx = i + shape.size();
-        }
-        PDPD_ASSERT(idx < shape.size(), "squeeze: axes value must be < max_rank.");
-        PDPD_ASSERT(shape[idx] == 1, "squeeze: the specified dimension is not equal to one.");
+    std::vector<int32_t> axes;
+    if (node.has_attribute<std::vector<int32_t>>("axes")) {
+        axes = node.get_attribute<std::vector<int32_t>>("axes");
     }
     
     auto axesNode = ngraph::opset6::Constant::create(ngraph::element::i32, {axes.size()}, axes);

@@ -25,7 +25,10 @@ namespace op {
 
 NamedOutputs relu6 (const NodeContext& node) {
     auto data = node.get_ng_input("X");
-    auto threshold = node.get_attribute<float>("threshold");
+    auto threshold = 6.0f;
+    if (node.has_attribute<float>("threshold")) {
+        threshold = node.get_attribute<float>("threshold");
+    }
     PDPD_ASSERT(threshold >= 0, "relu6: threshold must greater than 0!");
     return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Clamp>(data, 0.0, threshold)}, {"Out"});
 }

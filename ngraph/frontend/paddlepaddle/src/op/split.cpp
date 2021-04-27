@@ -26,14 +26,23 @@ namespace op {
         using namespace ngraph;
         using namespace opset7;
         const auto& data = node.get_ng_input("X");
-        auto dim = node.get_attribute<int32_t>("axis");
-        // todo: 'num' can be list of values, in this case we should create VariadicSplit
-        // todo: support VariadicSplit
+        auto dim = 0;
+        if (node.has_attribute<int32_t>("axis")) {
+            dim = node.get_attribute<int32_t>("axis");
+        }
         auto num_or_sections = node.get_attribute<int32_t>("num");
         auto axis = std::make_shared<Constant>(ngraph::element::i32, Shape{}, dim);
-
         NamedOutputs named_outputs;
-        auto split_outputs = std::make_shared<Split>(data, axis, num_or_sections)->outputs();
+        std::vector<Output<Node>> split_outputs;
+        if (num_or_sections == 0) {
+            PDPD_ASSERT(node.has_attribute<std::vector<int32_t>>("sections"), "split: num==0 && no sections is invalid.");
+            auto sections = node.get_attribute<std::vector<int32_t>>("sections");
+            auto sections_node = Constant::create(element::i32, {sections.size()}, sections);
+            split_outputs = std::make_shared<VariadicSplit>(data, axis, sections_node)->outputs();
+        } else {
+            split_outputs = std::make_shared<Split>(data, axis, num_or_sections)->outputs();
+        }
+
         auto out_names = node.get_output_names();
         PDPD_ASSERT(out_names.size() == 1, "Unexpected number of outputs");
 
