@@ -54,6 +54,7 @@
 #include "op/log.hpp"
 #include "op/fill_constant_batch_size_like.hpp"
 #include "op/shape.hpp"
+#include "op/conv2d_transpose.hpp"
 #include "op_table.hpp"
 
 
@@ -113,7 +114,8 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"log", op::log},
             {"fill_constant_batch_size_like", op::fill_constant_batch_size_like},
             {"sync_batch_norm", op::batch_norm},
-            {"shape", op::shape}
+            {"shape", op::shape},
+            {"conv2d_transpose", op::conv2d_transpose}
         };
 };
 

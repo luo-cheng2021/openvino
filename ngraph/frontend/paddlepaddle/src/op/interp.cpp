@@ -149,7 +149,7 @@ NamedOutputs bilinear_interp_v2 (const NodeContext& node) {
         auto hw_shape = node.get_ng_input("OutSize");
         const auto shape_of_x = std::make_shared<opset6::ShapeOf>(x);
         auto shape_begin = opset6::Constant::create(element::Type_t::i64, {1}, {0});
-        auto shape_end = opset6::Constant::create(element::Type_t::i32, Shape{1}, {2});
+        auto shape_end = opset6::Constant::create(element::Type_t::i64, Shape{1}, {2});
         auto nc_node = std::make_shared<opset6::StridedSlice>(shape_of_x, shape_begin, shape_end, std::vector<int64_t>{0}, std::vector<int64_t>{0});
         target_spatial_shape = std::make_shared<opset6::Concat>(OutputVector{nc_node, hw_shape}, 0);
         scales = calculate_scales_based_on_sizes(x, target_spatial_shape);
