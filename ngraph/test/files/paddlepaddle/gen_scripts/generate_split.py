@@ -46,6 +46,9 @@ def main():
                 split("split_test{}".format(idx), data_NCHW, pdpd_attrs)
                 idx+=1
 
+    split("split_test_list", data_NCHW, {
+            'num_or_sections': [4, 5],
+            'axis': 1})
 
 if __name__ == "__main__":
-    main()     
+    main()

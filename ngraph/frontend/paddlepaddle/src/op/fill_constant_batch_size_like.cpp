@@ -23,20 +23,66 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 
+static std::shared_ptr<Node> get_val(int32_t idx, const Output<Node>& data) {
+    auto startsNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { idx });
+    auto endsNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { idx + 1 });
+    auto stridesNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { 1 });
+    return std::make_shared<ngraph::opset6::StridedSlice>(data,
+        startsNode, 
+        endsNode, 
+        stridesNode,
+        std::vector<int64_t>(1, 0),
+        std::vector<int64_t>(1, 0));
+}
+
+static std::shared_ptr<Node> set_val(int32_t idx, std::shared_ptr<Node> val_node, std::shared_ptr<Node> array_node) {
+    NodeVector nodes;
+    if (idx > 0) {
+        // [0, idx)
+        auto startsNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { 0 });
+        auto endsNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { idx });
+        auto stridesNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { 1 });
+        auto head = std::make_shared<ngraph::opset6::StridedSlice>(array_node,
+            startsNode, 
+            endsNode, 
+            stridesNode,
+            std::vector<int64_t>(1, 0),
+            std::vector<int64_t>(1, 0));
+        nodes.push_back(head);
+    }
+    nodes.push_back(val_node);
+    // [idx + 1, max)
+    auto startsNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { idx + 1 });
+    auto endsNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { INT_MAX });
+    auto stridesNode = ngraph::opset6::Constant::create(element::i32, { 1 }, { 1 });
+    auto tail = std::make_shared<ngraph::opset6::StridedSlice>(array_node,
+        startsNode, 
+        endsNode, 
+        stridesNode,
+        std::vector<int64_t>(1, 0),
+        std::vector<int64_t>(1, 0));
+    nodes.push_back(tail);
+    
+    return std::make_shared<ngraph::opset6::Concat>(nodes, 0);
+}
+
 NamedOutputs fill_constant_batch_size_like (const NodeContext& node) {
     auto input_dim_idx = node.get_attribute<int32_t>("input_dim_idx");
     auto output_dim_idx = node.get_attribute<int32_t>("output_dim_idx");
     auto value = node.get_attribute<float>("value");
     auto shapes = node.get_attribute<std::vector<int32_t> >("shape");
     auto input = node.get_ng_input("Input");
-    auto parial_shape = input.get_partial_shape();
-    PDPD_ASSERT(parial_shape.is_static(), "fill_constant_batch_size_like: must use static shape.");
-    auto static_shape = parial_shape.get_shape();
-    PDPD_ASSERT(input_dim_idx < (int32_t)static_shape.size(), "fill_constant_batch_size_like: input_dim_idx should not exceed input dims.");
-    PDPD_ASSERT(output_dim_idx < (int32_t)shapes.size(), "fill_constant_batch_size_like: output_dim_idx should not exceed shapes dims.");
-    shapes[output_dim_idx] = static_shape[input_dim_idx];
+    auto input_shape = std::make_shared<ngraph::opset6::ShapeOf>(input, element::i32);
+    // because Gather&Scatter does not support evaluate then
+    // 1, cat the array:
+    //   shape[0, shape[output_dim_idx]) + input_shape[input_dim_idx] + shape[shape[output_dim_idx + 1], -1]
+    auto input_val_node = get_val(input_dim_idx, input_shape);
+    auto shapes_node = ngraph::opset6::Constant::create(ngraph::element::i32, { shapes.size() }, shapes);
+    auto shape_node = set_val(output_dim_idx, input_val_node, shapes_node);
+    // 2, use the shape broadcast the node
+    auto val_const = ngraph::opset6::Constant::create(ngraph::element::f32, { 1 }, { value });
     return node.default_single_output_mapping(
-        {std::make_shared<ngraph::opset6::Constant>(ngraph::element::f32, Shape(shapes.begin(), shapes.end()), value)}, 
+        {std::make_shared<ngraph::opset6::Broadcast>(val_const, shape_node)}, 
         {"Out"});
 }
 

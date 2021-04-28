@@ -25,10 +25,17 @@ namespace op {
 
 NamedOutputs hard_sigmoid (const NodeContext& node) {
     auto data = node.get_ng_input("X");
-    auto slope = node.get_attribute<float>("slope");
-    PDPD_ASSERT(slope >= 0, "hard_sigmoid: slope must greater than 0!");
+    auto slope = 0.2f;
+    if (node.has_attribute<float>("slope")) {
+        slope = node.get_attribute<float>("slope");
+        PDPD_ASSERT(slope >= 0, "hard_sigmoid: slope must greater than 0!");
+    }
+    auto offset = 0.5f;
+    if (node.has_attribute<float>("offset")) {
+        offset = node.get_attribute<float>("offset");
+    }
     auto alpha = ngraph::opset6::Constant::create(ngraph::element::f32, {}, {slope});
-    auto beta = ngraph::opset6::Constant::create(ngraph::element::f32, {}, {node.get_attribute<float>("offset")});
+    auto beta = ngraph::opset6::Constant::create(ngraph::element::f32, {}, {offset});
     return node.default_single_output_mapping({std::make_shared<ngraph::opset6::HardSigmoid>(data, alpha, beta)}, {"Out"});
 }
 

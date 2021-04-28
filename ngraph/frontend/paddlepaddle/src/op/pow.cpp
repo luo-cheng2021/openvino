@@ -26,7 +26,10 @@ namespace op {
 NamedOutputs pow (const NodeContext& node) {
     auto x = node.get_ng_input("X");
     Output<Node> factorNode;
-    auto factor = node.get_attribute<float>("factor");
+    auto factor = 1.0f;
+    if (node.has_attribute<float>("factor")) {
+        factor = node.get_attribute<float>("factor");
+    }
     factorNode = ngraph::opset6::Constant::create(ngraph::element::f32, {}, {factor});
     return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Power>(x, factorNode)}, {"Out"});
 }
