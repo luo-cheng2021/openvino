@@ -25,10 +25,10 @@ def ov_frontend_run(path_to_pdpd_model: str, user_shapes: dict):
 
     ie_network = function_to_cnn(model)
     full_model_path = os.path.abspath(path_to_pdpd_model)
-    print(full_model_path)
-    model_name = full_model_path.split('.')
-    print(model_name)
-    ie_network.serialize(model_name[0] + ".xml", model_name[0] + ".bin")
+    model_name = full_model_path.split('.')[0:-1]
+    model_name = '.'.join(model_name)
+    ie_network.serialize(model_name + ".xml", model_name + ".bin")
+
 
 
 if __name__ == "__main__":

@@ -41,14 +41,14 @@ def saveModel(name, exe, feedkeys:list, fetchlist:list, inputs:list, outputs:lis
     print("\n\n------------- %s -----------\n" % (name))
     for i, input in enumerate(inputs):
         print("INPUT %s :" % (feedkeys[i]), input.shape, input.dtype, "\n")
-        print_alike(input)
+        #print_alike(input)
         np.save(os.path.join(model_dir, "input{}".format(i)), input)
         np.save(os.path.join(model_dir, "input{}.{}.{}".format(i, feedkeys[i], input.dtype)), input)
     print("\n")
 
     for i, output in enumerate(outputs):
         print("OUTPUT %s :" % (fetchlist[i]),output.shape, output.dtype, "\n")
-        print_alike(output)
+        #print_alike(output)
         np.save(os.path.join(model_dir, "output{}".format(i)), output)     
 
     # composited model + scattered model

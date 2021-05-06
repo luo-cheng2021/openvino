@@ -31,7 +31,19 @@ NamedOutputs reshape2(const NodeContext& node) {
         auto shape_node = ngraph::opset6::Constant::create(ngraph::element::i32, {shape_attr.size()}, shape_attr);
         return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Reshape>(data, shape_node, true)}, {"Out"});
     } else {
-        NOT_IMPLEMENTED("reshape2 with shape as input");
+        auto shape_name = "ShapeTensor";
+        if (!node.has_ng_input(shape_name)) {
+            shape_name = "Shape";
+        }
+        auto nodes = node.get_ng_inputs(shape_name);
+        ngraph::NodeVector node_vec;
+        for (auto &&node : nodes) {
+            auto cast = std::make_shared<ngraph::opset6::Convert>(node, element::i64);
+            node_vec.push_back(cast);
+        }
+        
+        auto shape_node = std::make_shared<ngraph::opset6::Concat>(node_vec, 0);
+        return node.default_single_output_mapping({std::make_shared<ngraph::opset6::Reshape>(data, shape_node, true)}, {"Out"});
     }
 }
 
