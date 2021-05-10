@@ -58,6 +58,7 @@
 #include "op/conv2d_transpose.hpp"
 #include "op/equal.hpp"
 #include "op/logical_not.hpp"
+#include "op/range.hpp"
 #include "op_table.hpp"
 
 
@@ -121,7 +122,8 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"arg_max", op::argmax},
             {"conv2d_transpose", op::conv2d_transpose},
             {"equal", op::equal},
-            {"logical_not", op::logical_not}
+            {"logical_not", op::logical_not},
+            {"range", op::range}
         };
 };
 
