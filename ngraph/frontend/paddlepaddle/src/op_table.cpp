@@ -60,7 +60,7 @@
 #include "op/logical_not.hpp"
 #include "op/range.hpp"
 #include "op_table.hpp"
-
+#include "op/expand_v2.hpp"
 
 namespace ngraph {
 namespace frontend {
@@ -123,7 +123,8 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"conv2d_transpose", op::conv2d_transpose},
             {"equal", op::equal},
             {"logical_not", op::logical_not},
-            {"range", op::range}
+            {"range", op::range},
+            {"expand_v2", op::expand_v2}
         };
 };
 
