@@ -168,6 +168,11 @@ namespace fuzzyOp {
                 std::vector<int32_t> data_in;
                 load_from_npy(datafile, data_in); 
                 test_case.add_expected_output(data_in);         
+            } else if (dtype == "<i8")
+            {
+                std::vector<int64_t> data_in;
+                load_from_npy(datafile, data_in); 
+                test_case.add_expected_output(data_in);         
             } else {
                 throw std::runtime_error("not supported dtype out "+ dtype);
             }          

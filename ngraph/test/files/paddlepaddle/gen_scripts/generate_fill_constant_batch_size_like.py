@@ -15,6 +15,8 @@ def fill_constant_batch_size_like(name : str, x, shape, dtype, value, input_dim_
         out = pdpd.fluid.layers.fill_constant_batch_size_like(input=like, shape=shape, \
             value=value, dtype=dtype, \
             output_dim_idx=output_dim_idx, input_dim_idx=input_dim_idx)
+        # c++ test case only support float, make it happy
+        out = pdpd.cast(out, 'float32')
 
         cpu = pdpd.static.cpu_places(1)
         exe = pdpd.static.Executor(cpu[0])
@@ -33,6 +35,11 @@ def main():
     x = np.random.rand(4, 3, 2).astype(data_type)
     fill_constant_batch_size_like("fill_constant_batch_size_like", \
         x, [1, -1, 3], data_type, 0.03, 2, 1)
-
+    fill_constant_batch_size_like("fill_constant_batch_size_like_i32", \
+        x, [1, -1, 3], 'int32', 3, 2, 1)
+    fill_constant_batch_size_like("fill_constant_batch_size_like_i64", \
+        x, [1, -1, 3], 'int64', 3, 2, 1)
+    fill_constant_batch_size_like("fill_constant_batch_size_like_f64", \
+        x, [1, -1, 3], 'float64', 3, 2, 1)
 if __name__ == "__main__":
     main()
