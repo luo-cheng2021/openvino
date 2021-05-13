@@ -168,7 +168,54 @@ def main():
         }
         # shape of out_6: [2, 4, 3, 3] which is different from out_1
         pool2d(pooling_type+'Pool_test6', data_NHWC, pdpd_attrs)
-        #   
+
+        # example 7:
+        # pool_padding size is 1
+        pdpd_attrs = {
+                    'pool_size':[3,3],
+                    'pool_type' : pooling_type,
+                    'pool_stride' : [3,3],
+                    'pool_padding':2,
+                    'global_pooling':False,
+                    'ceil_mode':False,
+                    'exclusive':True,
+                    'data_format':"NCHW"
+        }
+        pool2d(pooling_type+'Pool_test7', data_NCHW, pdpd_attrs)
+
+        #input data for test8 and test9
+        N_data1, C_data1, H_data1, W_data1 = 2, 3, 8, 8
+        data1 = np.arange(N_data1*C_data1*H_data1*W_data1).astype(data_type)
+        data1_NCHW = data1.reshape(N_data1, C_data1, H_data1, W_data1)
+        data1_NHWC = data1.reshape(N_data1, H_data1, W_data1, C_data1)  
+        # example 8:
+        # pool_padding size is 4: [pad_height_top, pad_height_bottom, pad_width_left, pad_width_right]
+        pdpd_attrs = {
+                    'pool_size':[3,3],
+                    'pool_type' : pooling_type,
+                    'pool_stride' : [3,3],
+                    'pool_padding':[2, 1, 2, 1],
+                    'global_pooling':False,
+                    'ceil_mode':False,
+                    'exclusive':True,
+                    'data_format':"NCHW"
+        }  
+        pool2d(pooling_type+'Pool_test8', data1_NCHW, pdpd_attrs)
+
+        # example 9:
+        # input=data_NCHW and pool_padding is [[0,0], [0,0], [pad_height_top, pad_height_bottom], [pad_width_left, pad_width_right]]
+        pdpd_attrs = {
+                    'pool_size':[3,3],
+                    'pool_type' : pooling_type,
+                    'pool_stride' : [3,3],
+                    'pool_padding':[[0,0], [0,0], [2, 1], [2, 1]],
+                    'global_pooling':False,
+                    'ceil_mode':False,
+                    'exclusive':True,
+                    'data_format':"NCHW"
+        }  
+        pool2d(pooling_type+'Pool_test9', data1_NCHW, pdpd_attrs)
+
 
     # adaptive_pool2d
     for i, pooling_type in enumerate(pooling_types):

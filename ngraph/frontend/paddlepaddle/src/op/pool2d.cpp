@@ -1,17 +1,7 @@
 //*****************************************************************************
-// Copyright 2017-2021 Intel Corporation
+// Copyright (C) 2018-2021 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 //*****************************************************************************
 
 #include <ngraph/opsets/opset6.hpp>
@@ -47,30 +37,16 @@ static void get_paddings(const NodeContext& node, ngraph::Shape& pad_begin, ngra
     auto paddings = node.get_attribute<std::vector<int32_t>>("paddings");
     auto data_format = node.get_attribute<std::string>("data_format");
 
+    // TODO: need to support NHWC input
     switch (paddings.size())
     {
-    case 1:
-        pad_begin = Shape(2, paddings[0]);
-        pad_end = pad_begin;
-        break;
     case 2:
         pad_begin = Shape{static_cast<uint64_t>(paddings[0]), static_cast<uint64_t>(paddings[1])};
         pad_end = pad_begin;
         break;
     case 4:
         pad_begin = Shape{static_cast<uint64_t>(paddings[0]), static_cast<uint64_t>(paddings[2])};
-        pad_end = Shape(static_cast<uint64_t>(paddings[1]), static_cast<uint64_t>(paddings[3]));
-        break;
-    case 8:
-        if (data_format == "NCHW") {
-            pad_begin = Shape{static_cast<uint64_t>(paddings[4]), static_cast<uint64_t>(paddings[6])};
-            pad_end = Shape(static_cast<uint64_t>(paddings[5]), static_cast<uint64_t>(paddings[7]));
-        } else if (data_format == "NHWC") {
-            pad_begin = Shape{static_cast<uint64_t>(paddings[2]), static_cast<uint64_t>(paddings[4])};
-            pad_end = Shape(static_cast<uint64_t>(paddings[3]), static_cast<uint64_t>(paddings[5]));
-        } else {
-            throw std::runtime_error("Unsupported pooling data_format " + data_format);
-        }
+        pad_end = Shape{static_cast<uint64_t>(paddings[1]), static_cast<uint64_t>(paddings[3])};
         break;
     default:
         throw std::runtime_error("Unsupported pooling paddings " + paddings.size());
