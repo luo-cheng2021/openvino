@@ -21,7 +21,29 @@ def reshape(name : str, x, out_shape):
 
         outs = exe.run(
             feed={'x': x},
-            fetch_list=[out])             
+            fetch_list=[out])
+
+        saveModel(name, exe, feedkeys=['x'], fetchlist=[out], inputs=[x], outputs=[outs[0]])
+
+    return outs[0]
+
+def reshape_tensor(name : str, x, out_shape):
+    import paddle as pdpd
+    pdpd.enable_static()
+    
+    with pdpd.static.program_guard(pdpd.static.Program(), pdpd.static.Program()):
+        node_x = pdpd.static.data(name='x', shape=x.shape, dtype=data_type)
+        node_shape = pdpd.assign(out_shape)
+        out = pdpd.fluid.layers.reshape(x=node_x, shape=node_shape)
+
+        cpu = pdpd.static.cpu_places(1)
+        exe = pdpd.static.Executor(cpu[0])
+        # startup program will call initializer to initialize the parameters.
+        exe.run(pdpd.static.default_startup_program())
+
+        outs = exe.run(
+            feed={'x': x},
+            fetch_list=[out])
 
         saveModel(name, exe, feedkeys=['x'], fetchlist=[out], inputs=[x], outputs=[outs[0]])
 
@@ -36,8 +58,8 @@ def main():
     ]]], dtype=np.float32)
     out_shape = [1, 1, 2, 8]
     reshape("reshape", data, out_shape)
- 
-
+    out_shape_tensor = np.array(out_shape).astype('int32')
+    reshape_tensor("reshape_tensor", data, out_shape_tensor)
 
 if __name__ == "__main__":
-    main()     
+    main()
