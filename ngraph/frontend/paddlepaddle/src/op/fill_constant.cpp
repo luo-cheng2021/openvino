@@ -30,7 +30,7 @@ namespace ngraph {
 
                     Output<Node> value_node;
                     if(dtype == element::i32) {
-                        int32_t  value = node.get_attribute<int32_t>("value");
+                        int32_t value = (int32_t)node.get_attribute<float>("value");
                         value_node = opset6::Constant::create(dtype, {1}, {value});
                     }
                     else if(dtype == element::f32) {
