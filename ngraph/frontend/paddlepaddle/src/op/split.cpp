@@ -14,20 +14,32 @@ namespace op {
         using namespace ngraph;
         using namespace opset7;
         const auto& data = node.get_ng_input("X");
-        // TODO: dim support tensor type
-        auto dim = 0;
-        if (node.has_attribute<int32_t>("axis")) {
-            dim = node.get_attribute<int32_t>("axis");
+        Output<Node> axis;
+        if (node.has_ng_input("AxisTensor")) {
+            auto input = node.get_ng_input("AxisTensor");
+            // array[1] ==> scalar
+            auto zeroNode = Constant::create(element::i32, {1}, {0});
+            axis = std::make_shared<Reshape>(input, zeroNode, false);
+        } else {
+            auto dim = -1;
+            if (node.has_attribute<int32_t>("axis")) {
+                dim = node.get_attribute<int32_t>("axis");
+            }
+            axis = std::make_shared<Constant>(ngraph::element::i32, Shape{}, dim);
         }
         auto num_or_sections = node.get_attribute<int32_t>("num");
-        auto axis = std::make_shared<Constant>(ngraph::element::i32, Shape{}, dim);
         NamedOutputs named_outputs;
         std::vector<Output<Node>> split_outputs;
-        // TODO: support SectionsTensorList
         if (num_or_sections == 0) {
-            PDPD_ASSERT(node.has_attribute<std::vector<int32_t>>("sections"), "split: num==0 && no sections is invalid.");
-            auto sections = node.get_attribute<std::vector<int32_t>>("sections");
-            auto sections_node = Constant::create(element::i32, {sections.size()}, sections);
+            Output<Node> sections_node;
+            if (node.has_ng_input("SectionsTensorList")) {
+                auto inputs = node.get_ng_inputs("SectionsTensorList");
+                sections_node = std::make_shared<ngraph::opset6::Concat>(inputs, 0);
+            } else {
+                PDPD_ASSERT(node.has_attribute<std::vector<int32_t>>("sections"), "split: num==0 && no sections is invalid.");
+                auto sections = node.get_attribute<std::vector<int32_t>>("sections");
+                sections_node = Constant::create(element::i32, {sections.size()}, sections);
+            }
             split_outputs = std::make_shared<VariadicSplit>(data, axis, sections_node)->outputs();
         } else {
             split_outputs = std::make_shared<Split>(data, axis, num_or_sections)->outputs();
