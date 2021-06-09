@@ -164,8 +164,7 @@ namespace ngraph
     }     // namespace op
 
     NGRAPH_API
-    std::ostream& operator<<(std::ostream& s,
-                             const op::v8::MulticlassNms::BoxEncodingType& type);
+    std::ostream& operator<<(std::ostream& s, const op::v8::MulticlassNms::BoxEncodingType& type);
 
     template <>
     class NGRAPH_API AttributeAdapter<op::v8::MulticlassNms::BoxEncodingType>

@@ -36,10 +36,10 @@ namespace ngraph
                 /// boxes across batches
                 /// \param output_type Specifies the output tensor type
                 MatrixNms(const Output<Node>& boxes,
-                              const Output<Node>& scores,
-                              const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
-                              const bool sort_result_descending = true,
-                              const ngraph::element::Type& output_type = ngraph::element::i64);
+                          const Output<Node>& scores,
+                          const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
+                          const bool sort_result_descending = true,
+                          const ngraph::element::Type& output_type = ngraph::element::i64);
 
                 /// \brief Constructs a MatrixNms operation with default values in the last.
                 ///        3 inputs.
@@ -53,11 +53,11 @@ namespace ngraph
                 /// boxes across batches
                 /// \param output_type Specifies the output tensor type
                 MatrixNms(const Output<Node>& boxes,
-                              const Output<Node>& scores,
-                              const Output<Node>& max_output_boxes_per_class,
-                              const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
-                              const bool sort_result_descending = true,
-                              const ngraph::element::Type& output_type = ngraph::element::i64);
+                          const Output<Node>& scores,
+                          const Output<Node>& max_output_boxes_per_class,
+                          const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
+                          const bool sort_result_descending = true,
+                          const ngraph::element::Type& output_type = ngraph::element::i64);
 
                 /// \brief Constructs a MatrixNms operation with default values in the last.
                 ///        2 inputs.
@@ -72,12 +72,12 @@ namespace ngraph
                 /// boxes across batches
                 /// \param output_type Specifies the output tensor type
                 MatrixNms(const Output<Node>& boxes,
-                              const Output<Node>& scores,
-                              const Output<Node>& max_output_boxes_per_class,
-                              const Output<Node>& iou_threshold,
-                              const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
-                              const bool sort_result_descending = true,
-                              const ngraph::element::Type& output_type = ngraph::element::i64);
+                          const Output<Node>& scores,
+                          const Output<Node>& max_output_boxes_per_class,
+                          const Output<Node>& iou_threshold,
+                          const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
+                          const bool sort_result_descending = true,
+                          const ngraph::element::Type& output_type = ngraph::element::i64);
 
                 /// \brief Constructs a MatrixNms operation with default value in the last.
                 ///        input.
@@ -93,13 +93,13 @@ namespace ngraph
                 /// boxes across batches
                 /// \param output_type Specifies the output tensor type
                 MatrixNms(const Output<Node>& boxes,
-                              const Output<Node>& scores,
-                              const Output<Node>& max_output_boxes_per_class,
-                              const Output<Node>& iou_threshold,
-                              const Output<Node>& score_threshold,
-                              const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
-                              const bool sort_result_descending = true,
-                              const ngraph::element::Type& output_type = ngraph::element::i64);
+                          const Output<Node>& scores,
+                          const Output<Node>& max_output_boxes_per_class,
+                          const Output<Node>& iou_threshold,
+                          const Output<Node>& score_threshold,
+                          const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
+                          const bool sort_result_descending = true,
+                          const ngraph::element::Type& output_type = ngraph::element::i64);
 
                 /// \brief Constructs a MatrixNms operation.
                 ///
@@ -115,14 +115,14 @@ namespace ngraph
                 /// boxes across batches
                 /// \param output_type Specifies the output tensor type
                 MatrixNms(const Output<Node>& boxes,
-                              const Output<Node>& scores,
-                              const Output<Node>& max_output_boxes_per_class,
-                              const Output<Node>& iou_threshold,
-                              const Output<Node>& score_threshold,
-                              const Output<Node>& soft_nms_sigma,
-                              const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
-                              const bool sort_result_descending = true,
-                              const ngraph::element::Type& output_type = ngraph::element::i64);
+                          const Output<Node>& scores,
+                          const Output<Node>& max_output_boxes_per_class,
+                          const Output<Node>& iou_threshold,
+                          const Output<Node>& score_threshold,
+                          const Output<Node>& soft_nms_sigma,
+                          const BoxEncodingType box_encoding = BoxEncodingType::CORNER,
+                          const bool sort_result_descending = true,
+                          const ngraph::element::Type& output_type = ngraph::element::i64);
 
                 bool visit_attributes(AttributeVisitor& visitor) override;
                 void validate_and_infer_types() override;
@@ -164,8 +164,7 @@ namespace ngraph
     }     // namespace op
 
     NGRAPH_API
-    std::ostream& operator<<(std::ostream& s,
-                             const op::v8::MatrixNms::BoxEncodingType& type);
+    std::ostream& operator<<(std::ostream& s, const op::v8::MatrixNms::BoxEncodingType& type);
 
     template <>
     class NGRAPH_API AttributeAdapter<op::v8::MatrixNms::BoxEncodingType>

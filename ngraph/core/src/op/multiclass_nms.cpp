@@ -18,12 +18,11 @@ using namespace ngraph;
 
 NGRAPH_RTTI_DEFINITION(op::v8::MulticlassNms, "MulticlassNms", 8);
 
-op::v8::MulticlassNms::MulticlassNms(
-    const Output<Node>& boxes,
-    const Output<Node>& scores,
-    const op::v8::MulticlassNms::BoxEncodingType box_encoding,
-    const bool sort_result_descending,
-    const element::Type& output_type)
+op::v8::MulticlassNms::MulticlassNms(const Output<Node>& boxes,
+                                     const Output<Node>& scores,
+                                     const op::v8::MulticlassNms::BoxEncodingType box_encoding,
+                                     const bool sort_result_descending,
+                                     const element::Type& output_type)
     : Op({boxes, scores})
     , m_box_encoding{box_encoding}
     , m_sort_result_descending{sort_result_descending}
@@ -32,13 +31,12 @@ op::v8::MulticlassNms::MulticlassNms(
     constructor_validate_and_infer_types();
 }
 
-op::v8::MulticlassNms::MulticlassNms(
-    const Output<Node>& boxes,
-    const Output<Node>& scores,
-    const Output<Node>& max_output_boxes_per_class,
-    const op::v8::MulticlassNms::BoxEncodingType box_encoding,
-    const bool sort_result_descending,
-    const element::Type& output_type)
+op::v8::MulticlassNms::MulticlassNms(const Output<Node>& boxes,
+                                     const Output<Node>& scores,
+                                     const Output<Node>& max_output_boxes_per_class,
+                                     const op::v8::MulticlassNms::BoxEncodingType box_encoding,
+                                     const bool sort_result_descending,
+                                     const element::Type& output_type)
     : Op({boxes, scores, max_output_boxes_per_class})
     , m_box_encoding{box_encoding}
     , m_sort_result_descending{sort_result_descending}
@@ -47,14 +45,13 @@ op::v8::MulticlassNms::MulticlassNms(
     constructor_validate_and_infer_types();
 }
 
-op::v8::MulticlassNms::MulticlassNms(
-    const Output<Node>& boxes,
-    const Output<Node>& scores,
-    const Output<Node>& max_output_boxes_per_class,
-    const Output<Node>& iou_threshold,
-    const op::v8::MulticlassNms::BoxEncodingType box_encoding,
-    const bool sort_result_descending,
-    const element::Type& output_type)
+op::v8::MulticlassNms::MulticlassNms(const Output<Node>& boxes,
+                                     const Output<Node>& scores,
+                                     const Output<Node>& max_output_boxes_per_class,
+                                     const Output<Node>& iou_threshold,
+                                     const op::v8::MulticlassNms::BoxEncodingType box_encoding,
+                                     const bool sort_result_descending,
+                                     const element::Type& output_type)
     : Op({boxes, scores, max_output_boxes_per_class, iou_threshold})
     , m_box_encoding{box_encoding}
     , m_sort_result_descending{sort_result_descending}
@@ -63,15 +60,14 @@ op::v8::MulticlassNms::MulticlassNms(
     constructor_validate_and_infer_types();
 }
 
-op::v8::MulticlassNms::MulticlassNms(
-    const Output<Node>& boxes,
-    const Output<Node>& scores,
-    const Output<Node>& max_output_boxes_per_class,
-    const Output<Node>& iou_threshold,
-    const Output<Node>& score_threshold,
-    const op::v8::MulticlassNms::BoxEncodingType box_encoding,
-    const bool sort_result_descending,
-    const element::Type& output_type)
+op::v8::MulticlassNms::MulticlassNms(const Output<Node>& boxes,
+                                     const Output<Node>& scores,
+                                     const Output<Node>& max_output_boxes_per_class,
+                                     const Output<Node>& iou_threshold,
+                                     const Output<Node>& score_threshold,
+                                     const op::v8::MulticlassNms::BoxEncodingType box_encoding,
+                                     const bool sort_result_descending,
+                                     const element::Type& output_type)
     : Op({boxes, scores, max_output_boxes_per_class, iou_threshold, score_threshold})
     , m_box_encoding{box_encoding}
     , m_sort_result_descending{sort_result_descending}
@@ -80,16 +76,15 @@ op::v8::MulticlassNms::MulticlassNms(
     constructor_validate_and_infer_types();
 }
 
-op::v8::MulticlassNms::MulticlassNms(
-    const Output<Node>& boxes,
-    const Output<Node>& scores,
-    const Output<Node>& max_output_boxes_per_class,
-    const Output<Node>& iou_threshold,
-    const Output<Node>& score_threshold,
-    const Output<Node>& soft_nms_sigma,
-    const op::v8::MulticlassNms::BoxEncodingType box_encoding,
-    const bool sort_result_descending,
-    const element::Type& output_type)
+op::v8::MulticlassNms::MulticlassNms(const Output<Node>& boxes,
+                                     const Output<Node>& scores,
+                                     const Output<Node>& max_output_boxes_per_class,
+                                     const Output<Node>& iou_threshold,
+                                     const Output<Node>& score_threshold,
+                                     const Output<Node>& soft_nms_sigma,
+                                     const op::v8::MulticlassNms::BoxEncodingType box_encoding,
+                                     const bool sort_result_descending,
+                                     const element::Type& output_type)
     : Op({boxes,
           scores,
           max_output_boxes_per_class,
@@ -116,48 +111,48 @@ std::shared_ptr<Node>
     {
     case 2:
         return std::make_shared<op::v8::MulticlassNms>(new_args.at(0),
-                                                           new_args.at(1),
-                                                           m_box_encoding,
-                                                           m_sort_result_descending,
-                                                           m_output_type);
+                                                       new_args.at(1),
+                                                       m_box_encoding,
+                                                       m_sort_result_descending,
+                                                       m_output_type);
         break;
     case 3:
         return std::make_shared<op::v8::MulticlassNms>(new_args.at(0),
-                                                           new_args.at(1),
-                                                           new_args.at(2),
-                                                           m_box_encoding,
-                                                           m_sort_result_descending,
-                                                           m_output_type);
+                                                       new_args.at(1),
+                                                       new_args.at(2),
+                                                       m_box_encoding,
+                                                       m_sort_result_descending,
+                                                       m_output_type);
         break;
     case 4:
         return std::make_shared<op::v8::MulticlassNms>(new_args.at(0),
-                                                           new_args.at(1),
-                                                           new_args.at(2),
-                                                           new_args.at(3),
-                                                           m_box_encoding,
-                                                           m_sort_result_descending,
-                                                           m_output_type);
+                                                       new_args.at(1),
+                                                       new_args.at(2),
+                                                       new_args.at(3),
+                                                       m_box_encoding,
+                                                       m_sort_result_descending,
+                                                       m_output_type);
         break;
     case 5:
         return std::make_shared<op::v8::MulticlassNms>(new_args.at(0),
-                                                           new_args.at(1),
-                                                           new_args.at(2),
-                                                           new_args.at(3),
-                                                           new_args.at(4),
-                                                           m_box_encoding,
-                                                           m_sort_result_descending,
-                                                           m_output_type);
+                                                       new_args.at(1),
+                                                       new_args.at(2),
+                                                       new_args.at(3),
+                                                       new_args.at(4),
+                                                       m_box_encoding,
+                                                       m_sort_result_descending,
+                                                       m_output_type);
         break;
     default:
         return std::make_shared<op::v8::MulticlassNms>(new_args.at(0),
-                                                           new_args.at(1),
-                                                           new_args.at(2),
-                                                           new_args.at(3),
-                                                           new_args.at(4),
-                                                           new_args.at(5),
-                                                           m_box_encoding,
-                                                           m_sort_result_descending,
-                                                           m_output_type);
+                                                       new_args.at(1),
+                                                       new_args.at(2),
+                                                       new_args.at(3),
+                                                       new_args.at(4),
+                                                       new_args.at(5),
+                                                       m_box_encoding,
+                                                       m_sort_result_descending,
+                                                       m_output_type);
         break;
     }
 }
@@ -185,7 +180,7 @@ namespace
 
         return ngraph::is_scalar(shape) || (is_vector(shape) && (shape[0] == 1));
     }
-}
+} // namespace
 
 void op::v8::MulticlassNms::validate()
 {
@@ -424,11 +419,9 @@ namespace ngraph
         return enum_names;
     }
 
-    constexpr DiscreteTypeInfo
-        AttributeAdapter<op::v8::MulticlassNms::BoxEncodingType>::type_info;
+    constexpr DiscreteTypeInfo AttributeAdapter<op::v8::MulticlassNms::BoxEncodingType>::type_info;
 
-    std::ostream& operator<<(std::ostream& s,
-                             const op::v8::MulticlassNms::BoxEncodingType& type)
+    std::ostream& operator<<(std::ostream& s, const op::v8::MulticlassNms::BoxEncodingType& type)
     {
         return s << as_string(type);
     }
