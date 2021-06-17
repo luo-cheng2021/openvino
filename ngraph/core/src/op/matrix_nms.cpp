@@ -106,31 +106,31 @@ namespace
 
         switch (input->get_element_type())
         {
-            case element::Type_t::bf16:
+        case element::Type_t::bf16:
+        {
+            bfloat16* p = input->get_data_ptr<bfloat16>();
+            for (size_t i = 0; i < input_size; ++i)
             {
-                bfloat16* p = input->get_data_ptr<bfloat16>();
-                for (size_t i = 0; i < input_size; ++i)
-                {
-                    result[i] = float(p[i]);
-                }
+                result[i] = float(p[i]);
             }
-                break;
-            case element::Type_t::f16:
+        }
+        break;
+        case element::Type_t::f16:
+        {
+            float16* p = input->get_data_ptr<float16>();
+            for (size_t i = 0; i < input_size; ++i)
             {
-                float16* p = input->get_data_ptr<float16>();
-                for (size_t i = 0; i < input_size; ++i)
-                {
-                    result[i] = float(p[i]);
-                }
+                result[i] = float(p[i]);
             }
-                break;
-            case element::Type_t::f32:
-            {
-                float* p = input->get_data_ptr<float>();
-                memcpy(result.data(), p, input_size * sizeof(float));
-            }
-                break;
-            default: throw std::runtime_error("Unsupported data type."); break;
+        }
+        break;
+        case element::Type_t::f32:
+        {
+            float* p = input->get_data_ptr<float>();
+            memcpy(result.data(), p, input_size * sizeof(float));
+        }
+        break;
+        default: throw std::runtime_error("Unsupported data type."); break;
         }
 
         return result;
