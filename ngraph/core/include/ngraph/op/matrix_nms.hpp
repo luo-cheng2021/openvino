@@ -101,6 +101,10 @@ namespace ngraph
                     m_post_threshold = post_threshold;
                 }
 
+                bool evaluate(const HostTensorVector& outputs,
+                              const HostTensorVector& inputs) const override;
+                bool has_evaluate() const override;
+
             protected:
                 bool m_sort_result_across_batch;
                 float m_score_threshold;

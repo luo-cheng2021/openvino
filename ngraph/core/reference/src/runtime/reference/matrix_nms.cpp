@@ -208,8 +208,6 @@ namespace ngraph
                 std::vector<int> num_per_batch;
                 detections.reserve(6 * num_batches * num_classes * num_boxes);
 
-                int64_t background_label = 0;
-
                 bool normalized = true;
                 for (int64_t batch = 0; batch < num_batches; batch++)
                 {
@@ -221,7 +219,7 @@ namespace ngraph
 
                     for (int64_t class_idx = 0; class_idx < num_classes; class_idx++)
                     {
-                        if (class_idx == background_label)
+                        if (class_idx == background_class)
                             continue;
                         const float* scoresPtr =
                             scores_data + batch * (num_classes * num_boxes) + class_idx * num_boxes;
