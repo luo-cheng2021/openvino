@@ -161,11 +161,13 @@ set(SRC
     type_prop/lstm_sequence.cpp
     type_prop/loop.cpp
     type_prop/matmul.cpp
+    type_prop/matrix_nms.cpp    
     type_prop/maximum.cpp
     type_prop/max_pool.cpp
     type_prop/minimum.cpp
     type_prop/mish.cpp
     type_prop/mod.cpp
+    type_prop/multiclass_nms.cpp
     type_prop/mvn.cpp
     type_prop/non_max_suppression.cpp
     type_prop/non_zero.cpp
@@ -254,8 +256,10 @@ set(SRC
     visitors/op/lstm_cell.cpp
     visitors/op/lstm_sequence.cpp
     visitors/op/matmul.cpp
+    visitors/op/matrix_nms.cpp
     visitors/op/max_pool.cpp
     visitors/op/mod.cpp
+    visitors/op/multiclass_nms.cpp
     visitors/op/mvn.cpp
     visitors/op/non_max_suppression.cpp
     visitors/op/normalize_l2.cpp
@@ -304,7 +308,7 @@ set(SRC
 set_source_files_properties(includes.cpp PROPERTIES COMPILE_DEFINITIONS
     NGRAPH_INCLUDES="${PROJECT_SOURCE_DIR}/src/ngraph")
 
-if (ENABLE_MKL_DNN)
+if (ENABLE_MKL_DNN AND NGRAPH_UNIT_TEST_BACKENDS_ENABLE)
     message(STATUS "NGRAPH_TESTS: IE:CPU enabled")
     set(ACTIVE_BACKEND_LIST ${ACTIVE_BACKEND_LIST} "IE:CPU")
     if (ENABLE_STRICT_DEPENDENCIES)
@@ -314,7 +318,7 @@ if (ENABLE_MKL_DNN)
     endif()
 endif()
 
-if (ENABLE_CLDNN)
+if (ENABLE_CLDNN AND NGRAPH_UNIT_TEST_BACKENDS_ENABLE)
     message(STATUS "NGRAPH_TESTS: IE:GPU enabled")
     set(ACTIVE_BACKEND_LIST ${ACTIVE_BACKEND_LIST} "IE:GPU")
     if (ENABLE_STRICT_DEPENDENCIES)
@@ -324,7 +328,7 @@ if (ENABLE_CLDNN)
     endif()
 endif()
 
-if (NGRAPH_INTERPRETER_ENABLE)
+if (NGRAPH_INTERPRETER_ENABLE AND NGRAPH_UNIT_TEST_BACKENDS_ENABLE)
     list(APPEND SRC
         builder.cpp
         backend_api.cpp)
@@ -411,10 +415,12 @@ set(MULTI_TEST_SRC
     backend/logical_xor.in.cpp
     backend/lrn.in.cpp
     backend/matmul.in.cpp
+    backend/matrix_nms.in.cpp
     backend/maximum.in.cpp
     backend/max_pool.in.cpp
     backend/minimum.in.cpp
     backend/mod.in.cpp
+    backend/multiclass_nms.in.cpp
     backend/multiple_backends.in.cpp
     backend/multiple_result.in.cpp
     backend/multiply.in.cpp
