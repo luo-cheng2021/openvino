@@ -215,6 +215,7 @@ public:
                     const bool normalized,
                     std::vector<int64_t> *selected_indices,
                     std::vector<T> *decayed_scores) {
+        auto start = std::chrono::high_resolution_clock::now();
         std::vector<int64_t> candidate_index(boxes_num);
         std::iota(candidate_index.begin(), candidate_index.end(), 0);
         auto end = std::remove_if(candidate_index.begin(),
@@ -230,18 +231,22 @@ public:
         if (top_k > -1 && original_size > top_k) {
             original_size = top_k;
         }
-
+        auto sort_start = std::chrono::high_resolution_clock::now();
         std::partial_sort(candidate_index.begin(),
                           candidate_index.begin() + original_size,
                           end,
                           [&scores_data](int32_t a, int32_t b) {
                               return scores_data[a] > scores_data[b];
                           });
-
+        auto sort_end = std::chrono::high_resolution_clock::now();
+        std::cout << " NMSMatrix_internal sort "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(sort_end - sort_start).count() << std::endl;
         std::vector<T> iou_matrix((original_size * (original_size - 1)) >> 1);
         std::vector<T> iou_max(original_size);
 
         iou_max[0] = 0.;
+        auto nthr = parallel_get_max_threads();
+        std::cout << "Threads Num " << nthr << std::endl;
         InferenceEngine::parallel_for(original_size - 1, [&](size_t i){
             T max_iou = 0.;
             size_t actual_index = i + 1;
@@ -261,7 +266,7 @@ public:
             selected_indices->push_back(candidate_index[0]);
             decayed_scores->push_back(scores_data[candidate_index[0]]);
         }
-
+        auto decay_start = std::chrono::high_resolution_clock::now();
         decay_score<T, gaussian> decay_fn;
         for (int64_t i = 1; i < original_size; i++) {
             T min_decay = 1.;
@@ -277,6 +282,10 @@ public:
             selected_indices->push_back(candidate_index[i]);
             decayed_scores->push_back(ds);
         }
+        auto time_end = std::chrono::high_resolution_clock::now();
+        std::cout << " NMSMatrix_internal origin " << original_size << " Time "<<
+            std::chrono::duration_cast<std::chrono::milliseconds>(time_end - start).count() <<
+            " Decay " << std::chrono::duration_cast<std::chrono::milliseconds>(time_end - decay_start).count() << std::endl;
     }
 
     StatusCode execute(std::vector<Blob::Ptr> &inputs, std::vector<Blob::Ptr> &outputs,
