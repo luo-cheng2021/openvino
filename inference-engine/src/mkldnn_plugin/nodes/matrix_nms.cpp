@@ -403,15 +403,19 @@ public:
         float * selected_outputs = outputs[NMS_SELECTED_OUTPUTS]->buffer().as<float *>() +
                                 outputs[NMS_SELECTED_OUTPUTS]->getTensorDesc().getBlockingDesc().getOffsetPadding();
 
-        int64_t *selected_indices = outputs[NMS_SELECTED_INDICES]->buffer().as<int64_t *>() +
+        int *selected_indices = outputs[NMS_SELECTED_INDICES]->buffer().as<int *>() +
                                     outputs[NMS_SELECTED_INDICES]->getTensorDesc().getBlockingDesc().getOffsetPadding();
 
-        int64_t *valid_outputs = outputs[NMS_VALID_OUTPUTS]->buffer().as<int64_t *>() +
+        int *valid_outputs = outputs[NMS_VALID_OUTPUTS]->buffer().as<int *>() +
                                  outputs[NMS_VALID_OUTPUTS]->getTensorDesc().getBlockingDesc().getOffsetPadding();
 
         std::copy(num_per_batch.begin(), num_per_batch.end(), valid_outputs);
+
+        for (size_t i = 0; i < num_batches; i++) {
+            valid_outputs[i] = static_cast<int>(num_per_batch[i]);
+        }
         for (size_t i = 0; i < filtered_boxes.size(); i++) {
-            selected_indices[i] = filtered_boxes[i].index;
+            selected_indices[i] = static_cast<int>(filtered_boxes[i].index);
             auto selected_base = selected_outputs + i * 6;
             selected_base[0] = filtered_boxes[i].class_index;
             selected_base[1] = filtered_boxes[i].score;
