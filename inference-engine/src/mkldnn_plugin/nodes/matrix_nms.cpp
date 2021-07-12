@@ -61,9 +61,9 @@ MKLDNNMatrixNmsNode::MKLDNNMatrixNmsNode(const std::shared_ptr<ngraph::Node>& op
 
         checkPrecision(getOriginalInputPrecisionAtPort(NMS_BOXES), supportedFloatPrecision, "boxes", inType);
         checkPrecision(getOriginalInputPrecisionAtPort(NMS_SCORES), supportedFloatPrecision, "scores", inType);
-        checkPrecision(getOriginalInputPrecisionAtPort(NMS_SELECTED_OUTPUTS), supportedFloatPrecision, "selected_outputs", outType);
-        checkPrecision(getOriginalInputPrecisionAtPort(NMS_SELECTED_INDICES), supportedIntOutputPrecision, "selected_indices", outType);
-        checkPrecision(getOriginalInputPrecisionAtPort(NMS_VALID_OUTPUTS), supportedIntOutputPrecision, "valid_outputs", outType);
+        checkPrecision(getOriginalOutputPrecisionAtPort(NMS_SELECTED_OUTPUTS), supportedFloatPrecision, "selected_outputs", outType);
+        checkPrecision(getOriginalOutputPrecisionAtPort(NMS_SELECTED_INDICES), supportedIntOutputPrecision, "selected_indices", outType);
+        checkPrecision(getOriginalOutputPrecisionAtPort(NMS_VALID_OUTPUTS), supportedIntOutputPrecision, "valid_outputs", outType);
 
         const SizeVector &boxes_dims = op->get_input_shape(NMS_BOXES);
         num_batches = boxes_dims[0];
@@ -82,6 +82,13 @@ MKLDNNMatrixNmsNode::MKLDNNMatrixNmsNode(const std::shared_ptr<ngraph::Node>& op
             IE_THROW() << errorPrefix << " num_batches is different in 'boxes' and 'scores' inputs";
         if (num_boxes != scores_dims[2])
             IE_THROW() << errorPrefix << " num_boxes is different in 'boxes' and 'scores' inputs";
+
+        outputShape_SELECTED_OUTPUTS = op->get_output_shape(NMS_SELECTED_OUTPUTS);
+        outputShape_SELECTED_INDICES = op->get_output_shape(NMS_SELECTED_INDICES);
+        outputShape_VALID_OUTPUTS = op->get_output_shape(NMS_VALID_OUTPUTS);
+        if (outputShape_VALID_OUTPUTS.size() != 1)
+            IE_THROW() << errorPrefix << "has unsupported 'valid_outputs' output rank: " << outputShape_VALID_OUTPUTS.size();
+
         auto& attrs = matrix_nms->get_attrs();
         m_sort_result_type = attrs.sort_result_type;
         m_sort_result_across_batch = attrs.sort_result_across_batch;
@@ -104,7 +111,7 @@ void MKLDNNMatrixNmsNode::initSupportedPrimitiveDescriptors() {
 
     checkPrecision(getOriginalInputPrecisionAtPort(NMS_BOXES), supportedFloatPrecision, "boxes", inType);
     checkPrecision(getOriginalInputPrecisionAtPort(NMS_SCORES), supportedFloatPrecision, "scores", inType);
-    checkPrecision(getOriginalInputPrecisionAtPort(NMS_VALID_OUTPUTS), supportedIntOutputPrecision, "valid_outputs", outType);
+    checkPrecision(getOriginalOutputPrecisionAtPort(NMS_VALID_OUTPUTS), supportedIntOutputPrecision, "valid_outputs", outType);
 
     const std::vector<Precision> supportedPrecision = {Precision::I16, Precision::U8, Precision::I8, Precision::U16, Precision::I32,
                                                        Precision::U32, Precision::I64, Precision::U64};
@@ -491,9 +498,6 @@ void MKLDNNMatrixNmsNode::checkOutput(const SizeVector& dims, const std::vector<
 
     if (dims.size() != 2)
         IE_THROW() << errorPrefix << "has unsupported '" << name << "' output rank: " << dims.size();
-    if (dims[1] != 3)
-        IE_THROW() << errorPrefix << "has unsupported '" << name << "' output 2nd dimension size: " << dims[1];
 }
 
 REG_MKLDNN_PRIM_FOR(MKLDNNMatrixNmsNode, MatrixNms);
-
