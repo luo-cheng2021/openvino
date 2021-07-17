@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021 Intel Corporation
+// Copyright (C) 2021 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -60,10 +60,6 @@ private:
     float m_postThreshold;
     bool m_normalized;
 
-    InferenceEngine::SizeVector outputShape_SELECTED_OUTPUTS;
-    InferenceEngine::SizeVector outputShape_SELECTED_INDICES;
-    InferenceEngine::SizeVector outputShape_VALID_OUTPUTS;
-
     struct Rectangle {
         Rectangle(float x_left, float y_left, float x_right, float y_right) : x1 {x_left}, y1 {y_left}, x2 {x_right}, y2 {y_right} {}
 
@@ -77,30 +73,29 @@ private:
 
     struct BoxInfo {
         BoxInfo(const Rectangle& r, int64_t idx, float sc, int64_t batch_idx, int64_t class_idx)
-            : box {r}, index {idx}, batch_index {batch_idx}, class_index {class_idx}, score {sc} {}
+            : box {r}, index {idx}, batchIndex {batch_idx}, classIndex {class_idx}, score {sc} {}
 
         BoxInfo() = default;
 
         Rectangle box;
         int64_t index = -1;
-        int64_t batch_index = -1;
-        int64_t class_index = -1;
+        int64_t batchIndex = -1;
+        int64_t classIndex = -1;
         float score = 0.0f;
     };
     std::string errorPrefix;
     const std::string inType = "input", outType = "output";
     std::vector<int64_t> m_numPerBatch;
+    std::vector<std::vector<int64_t>> m_numPerBatchClass;
     std::vector<BoxInfo> m_filteredBoxes;
+    std::vector<int> m_classOffset;
     size_t m_realNumClasses;
     size_t m_realNumBoxes;
-    float(*m_decay_fn)(float, float, float);
+    float (*m_decay_fn)(float, float, float);
     void checkPrecision(const InferenceEngine::Precision prec, const std::vector<InferenceEngine::Precision> precList, const std::string name,
                         const std::string type);
-    void checkOutput(const InferenceEngine::SizeVector& dims, const std::vector<InferenceEngine::Precision> precList, const std::string name,
-                     const size_t port);
 
-    size_t nmsMatrix(const float* boxesData, const float* scoresData, BoxInfo* filterBoxes, const int64_t batchIdx,
-                     const int64_t classIdx);
+    size_t nmsMatrix(const float* boxesData, const float* scoresData, BoxInfo* filterBoxes, const int64_t batchIdx, const int64_t classIdx);
 };
 
 }  // namespace MKLDNNPlugin
