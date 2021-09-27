@@ -1,6 +1,16 @@
 # Copyright (C) 2018-2021 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
+function(ie_add_easyjit)
+    execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory  ${CMAKE_BINARY_DIR}/easyjit)
+    execute_process(COMMAND ${CMAKE_COMMAND} -S${CMAKE_SOURCE_DIR}/inference-engine/thirdparty/easyjit -B${CMAKE_BINARY_DIR}/easyjit -DLLVM_DIR=/usr/lib/llvm-6.0/cmake -DEASY_JIT_EXAMPLE=OFF -DEASY_JIT_BENCHMARK=OFF -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/easyjit/_install)
+    execute_process(COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/easyjit --target install)
+    execute_process(COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/easyjit/_install/lib/libEasyJitRuntime.so
+        ${CMAKE_BINARY_DIR}/../bin/intel64/${CMAKE_BUILD_TYPE}/lib/)
+    execute_process(COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/easyjit/_install/lib/libEasyJitRuntime.so
+        ${CMAKE_INSTALL_PREFIX}/deployment_tools/inference_engine/lib/intel64/)
+endfunction()
+ie_add_easyjit()
 
 if(ENABLE_MYRIAD)
     add_subdirectory(movidius)

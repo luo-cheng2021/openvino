@@ -5,6 +5,12 @@
 # [cmake:functional_tests]
 set(TARGET_NAME templateFuncTests)
 
+find_package(EasyJit REQUIRED CONFIG
+    PATHS ${CMAKE_BINARY_DIR}/easyjit/_install/lib/cmake
+    NO_DEFAULT_PATH)
+include_directories(${EasyJit_INCLUDE_DIRS})
+link_directories(${EasyJit_LIBRARY_DIRS})
+
 addIeTargetTest(
         NAME ${TARGET_NAME}
         ROOT ${CMAKE_CURRENT_SOURCE_DIR}
@@ -12,6 +18,7 @@ addIeTargetTest(
             templatePlugin
         LINK_LIBRARIES
             IE::funcSharedTests
+            EasyJitRuntime
         INCLUDES
             "${IE_MAIN_TEMPLATE_PLUGIN_SOURCE_DIR}/include"
             "${CMAKE_CURRENT_SOURCE_DIR}/op_reference"

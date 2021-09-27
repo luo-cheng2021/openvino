@@ -83,6 +83,23 @@ template void MKLDNNGraph::CreateGraph(const std::shared_ptr<const ngraph::Funct
 template void MKLDNNGraph::CreateGraph(const CNNNetwork&,
         const MKLDNNExtensionManager::Ptr&, MKLDNNWeightsSharing::Ptr&);
 
+// example
+#include <easy/jit.h>
+
+int test_k(int j) {
+    int s = 0;
+    for (int i = 0; i < 100; i++) {
+        s += j * 2;
+    }
+    printf("-----------------------------%d--------------------\n", s);
+    return s;
+}
+
+void test() {
+    easy::FunctionWrapper<int(void)> func = easy::jit(test_k, 10);
+    func();
+}
+
 void MKLDNNGraph::Replicate(const std::shared_ptr<const ngraph::Function> &subgraph, const MKLDNNExtensionManager::Ptr& extMgr) {
     this->_name = "subgraph";
     this->reuse_io_tensors = false;
@@ -174,6 +191,7 @@ void MKLDNNGraph::Replicate(const std::shared_ptr<const ngraph::Function> &subgr
 
 void MKLDNNGraph::Replicate(const CNNNetwork &network, const MKLDNNExtensionManager::Ptr& extMgr) {
     OV_ITT_SCOPE_CHAIN(FIRST_INFERENCE, taskChain, itt::domains::MKLDNN_LT, "MKLDNNGraph::Replicate", "CNNNetwork");
+    test();
 
     InputsDataMap inputsInfo = network.getInputsInfo();
     OutputsDataMap outputsInfo = network.getOutputsInfo();

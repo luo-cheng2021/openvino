@@ -4,6 +4,12 @@
 
 set(TARGET_NAME cpuUnitTests)
 
+find_package(EasyJit REQUIRED CONFIG
+    PATHS ${CMAKE_BINARY_DIR}/easyjit/_install/lib/cmake
+    NO_DEFAULT_PATH)
+include_directories(${EasyJit_INCLUDE_DIRS})
+link_directories(${EasyJit_LIBRARY_DIRS})
+
 addIeTargetTest(
         NAME ${TARGET_NAME}
         ROOT ${CMAKE_CURRENT_SOURCE_DIR}
@@ -23,6 +29,7 @@ addIeTargetTest(
             ov_shape_inference
             inference_engine_s
             unitTestUtils
+            EasyJitRuntime
         ADD_CPPLINT
         LABELS
             CPU

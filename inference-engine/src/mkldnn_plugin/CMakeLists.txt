@@ -4,6 +4,15 @@
 
 set(TARGET_NAME "MKLDNNPlugin")
 
+find_package(EasyJit REQUIRED CONFIG
+    PATHS ${CMAKE_BINARY_DIR}/easyjit/_install/lib/cmake
+    NO_DEFAULT_PATH)
+include_directories(${EasyJit_INCLUDE_DIRS})
+link_directories(${EasyJit_LIBRARY_DIRS})
+list(APPEND LINK_LIBRARIES EasyJitRuntime)
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Xclang -load -Xclang ${CMAKE_BINARY_DIR}/easyjit/_install/lib/EasyJitPass.so")
+
 if(CMAKE_COMPILER_IS_GNUCC)
     ie_add_compiler_flags(-Wno-all)
 endif()
@@ -44,7 +53,8 @@ target_link_libraries(${TARGET_NAME} PRIVATE mkldnn
                                              inference_engine
                                              inference_engine_transformations
                                              inference_engine_lp_transformations
-                                             ov_shape_inference)
+                                             ov_shape_inference
+                                             PRIVATE EasyJitRuntime)
 
 target_compile_definitions(${TARGET_NAME} PRIVATE IMPLEMENT_INFERENCE_EXTENSION_API)
 
@@ -69,7 +79,7 @@ ie_add_api_validator_post_build_step(TARGET ${TARGET_NAME})
 #  add test object library
 
 add_library(${TARGET_NAME}_obj OBJECT ${SOURCES} ${HEADERS})
-link_system_libraries(${TARGET_NAME}_obj PUBLIC mkldnn)
+link_system_libraries(${TARGET_NAME}_obj PUBLIC mkldnn PRIVATE EasyJitRuntime)
 
 target_include_directories(${TARGET_NAME}_obj PRIVATE $<TARGET_PROPERTY:inference_engine_preproc_s,INTERFACE_INCLUDE_DIRECTORIES>
                                                       $<TARGET_PROPERTY:inference_engine_transformations,INTERFACE_INCLUDE_DIRECTORIES>
