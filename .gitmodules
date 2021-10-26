@@ -62,3 +62,6 @@
 [submodule "inference-engine/thirdparty/easyjit"]
 	path = inference-engine/thirdparty/easyjit
 	url = https://github.com/luo-cheng2021/easy-just-in-time
+[submodule "inference-engine/thirdparty/xsimd"]
+	path = inference-engine/thirdparty/xsimd
+	url = https://github.com/luo-cheng2021/xsimd

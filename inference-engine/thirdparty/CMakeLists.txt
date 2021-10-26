@@ -8,9 +8,12 @@ function(ie_add_easyjit)
     execute_process(COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/easyjit/_install/lib/libEasyJitRuntime.so
         ${CMAKE_BINARY_DIR}/../bin/intel64/${CMAKE_BUILD_TYPE}/lib/)
     execute_process(COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/easyjit/_install/lib/libEasyJitRuntime.so
-        ${CMAKE_INSTALL_PREFIX}/deployment_tools/inference_engine/lib/intel64/)
+        ${CMAKE_INSTALL_PREFIX}/runtime/lib/intel64/)
 endfunction()
 ie_add_easyjit()
+# xsimd
+execute_process(COMMAND ${CMAKE_COMMAND} -S${CMAKE_SOURCE_DIR}/inference-engine/thirdparty/xsimd -B${CMAKE_BINARY_DIR}/xsimd -DCMAKE_CXX_FLAGS="-DXSIMD_ENABLE_XTL_COMPLEX=0 " -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/xsimd/_install)
+execute_process(COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/xsimd --target install)
 
 if(ENABLE_MYRIAD)
     add_subdirectory(movidius)
