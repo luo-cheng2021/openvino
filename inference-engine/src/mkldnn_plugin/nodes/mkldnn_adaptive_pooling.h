@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 #include <mkldnn_extension_utils.h>
+#include <easy/jit.h>
 
 namespace MKLDNNPlugin {
 
@@ -27,7 +28,7 @@ public:
 private:
     int spatialDimsCount;
     InferenceEngine::Precision precision = InferenceEngine::Precision::FP32;
-    inline void setBinBorders(size_t *startPtr, size_t *endPtr, size_t idx, size_t inputLength, size_t outputLength);
+    easy::FunctionWrapper<void(const float *, float *, int, int, int, size_t, const size_t inStrides[5])> _avg;
 
     std::string errorPrefix;
 };

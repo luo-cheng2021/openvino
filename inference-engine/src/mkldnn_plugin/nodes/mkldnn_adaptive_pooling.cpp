@@ -15,6 +15,8 @@
 #include <utils/bfloat16.hpp>
 #include <utils/general_utils.h>
 #include <vector>
+#include <easy/jit.h>
+#include "xsimd.h"
 
 using namespace MKLDNNPlugin;
 using namespace InferenceEngine;
@@ -50,7 +52,7 @@ bool MKLDNNAdaptivePoolingNode::isSupportedOperation(const std::shared_ptr<const
 }
 
 MKLDNNAdaptivePoolingNode::MKLDNNAdaptivePoolingNode(const std::shared_ptr<ngraph::Node>& op, const mkldnn::engine& eng,
-                                           MKLDNNWeightsSharing::Ptr &cache) : MKLDNNNode(op, eng, cache) {
+                                           MKLDNNWeightsSharing::Ptr &cache) : MKLDNNNode(op, eng, cache), _avg{nullptr} {
     std::string errorMessage;
     if (isSupportedOperation(op, errorMessage)) {
       errorPrefix = "Adaptive Pooling layer with name '" + getName() + "' ";
@@ -102,12 +104,13 @@ void MKLDNNAdaptivePoolingNode::initSupportedPrimitiveDescriptors() {
     config.inConfs.resize(2);
     config.outConfs.resize((algorithm == Algorithm::AdaptivePoolingAvg ? 1 : 2));
 
-    std::vector<LayoutType> dataFormats{ LayoutType::ncsp };
+    std::vector<LayoutType> dataFormats;
     if (getInputShapeAtPort(0).getStaticDims()[1] != 1) {
-        dataFormats.push_back(LayoutType::nspc);
         dataFormats.push_back(LayoutType::nCsp16c);
         dataFormats.push_back(LayoutType::nCsp8c);
+        //dataFormats.push_back(LayoutType::nspc);
     }
+    //dataFormats.push_back(LayoutType::ncsp);
     for (const auto &df : dataFormats) {
         if (algorithm == Algorithm::AdaptivePoolingAvg) {
             addSupportedPrimDesc({{df, precision}, {LayoutType::ncsp, Precision::I32}},
@@ -119,6 +122,54 @@ void MKLDNNAdaptivePoolingNode::initSupportedPrimitiveDescriptors() {
                                  impl_desc_type::unknown);
         }
     }
+}
+
+inline void setBinBorders(size_t *startPtr, size_t *endPtr, size_t idx, size_t inputLength, size_t outputLength) {
+    *(startPtr) = idx * inputLength / outputLength;
+    *(endPtr) = ceil(static_cast<float>((idx + 1) * inputLength) / outputLength);
+}
+
+template <class Arch>
+static void poolAvgT(Arch, const float *srcData, float *dstData, int od, int oh, int ow, size_t spatIndOff,
+    const size_t inStrides[5], size_t ID, size_t OD, size_t IH, size_t OH, size_t IW, size_t OW) {
+    using b_type = xsimd::batch<float, Arch>;
+    //std::size_t inc = b_type::size;
+
+    size_t dStart, dEnd, hStart, hEnd, wStart, wEnd;
+    setBinBorders(&dStart, &dEnd, od, ID, OD);
+    setBinBorders(&hStart, &hEnd, oh, IH, OH);
+    setBinBorders(&wStart, &wEnd, ow, IW, OW);
+    auto binSize = (dEnd - dStart) * (hEnd - hStart) * (wEnd - wStart);
+    // if (binSize == 0)
+    //     IE_THROW() << errorPrefix << "has empty bin";
+    //float sum = 0;
+    b_type sum(0);
+    for (size_t pixD = dStart; pixD < dEnd; pixD++) {
+        for (size_t pixH = hStart; pixH < hEnd; pixH++) {
+            for (size_t pixW = wStart; pixW < wEnd; pixW++) {
+                //float curr = srcData[pixD * inStrides[2] + pixH * inStrides[3] + pixW * inStrides[4]];
+                auto offset = pixD * inStrides[2] + pixH * inStrides[3] + pixW * inStrides[4];
+                b_type curr = b_type::load(&srcData[offset], xsimd::unaligned_mode());
+                //sum = sum + curr;
+                sum += curr;
+            }
+        }
+    }
+    //*dstData = sum / binSize;
+    xsimd::store(dstData, sum / binSize, xsimd::unaligned_mode());
+}
+
+static void poolAvg(const xsimd::detail::supported_arch* arch, const float *srcData, float *dstData, int od, int oh, int ow, size_t spatIndOff,
+    const size_t inStrides[5], size_t ID, size_t OD, size_t IH, size_t OH, size_t IW, size_t OW) {
+    // Note:
+    //  1, cannot use static object
+    //  2, compiler should add -mavx512 etc
+    if (arch->avx512f)
+        poolAvgT(xsimd::avx2(), srcData, dstData, od, oh, ow, spatIndOff, inStrides, ID, OD, IH, OH, IW, OW);
+    else if (arch->avx2)
+        poolAvgT(xsimd::avx2(), srcData, dstData, od, oh, ow, spatIndOff, inStrides, ID, OD, IH, OH, IW, OW);
+    else if (arch->sse4_1)
+        poolAvgT(xsimd::sse4_1(), srcData, dstData, od, oh, ow, spatIndOff, inStrides, ID, OD, IH, OH, IW, OW);
 }
 
 void MKLDNNAdaptivePoolingNode::execute(mkldnn::stream strm) {
@@ -187,6 +238,45 @@ void MKLDNNAdaptivePoolingNode::execute(mkldnn::stream strm) {
             (spatialDimsCount == 3 ? dstStrides[2 + tailDimsOffset] : 0),
             (spatialDimsCount >= 2 ? dstStrides[spatialDimsCount + tailDimsOffset] : 0),
             dstStrides[spatialDimsCount + 1 + tailDimsOffset] };
+
+    if (isBlkFmt && algorithm == Algorithm::AdaptivePoolingAvg) {
+        using namespace std::placeholders;
+        if (!_avg.isValid()) {
+            easy::RawBytes raw;
+            static xsimd::detail::supported_arch arch;
+            _avg = easy::jit_(raw, poolAvg, &arch, _1, _2, _3, _4, _5, _6, _7, ID, OD, IH, OH, IW, OW);
+        }
+
+        parallel_for5d(N, blockCount, OD, OH, OW,
+            [&](int n, int blkIdx, int od, int oh, int ow) {
+            auto srcData = src + n * inStrides[0] + blkIdx * inStrides[1];
+            auto dstData = dst + n * outStrides[0] + blkIdx * outStrides[1] +
+                        od * outStrides[2] + oh * outStrides[3] + ow * outStrides[4];
+            int cStart = 0, cEnd = C;
+            if (!isTailCFmt) {
+                cStart = blkIdx * blockSize;
+                cEnd = (blkIdx == blockCount - 1 ? C : cStart + blockSize);
+            }
+            // for (int c = cStart; c < cEnd; c++) {
+            //     if (isTailCFmt) {
+            //         inResidual = c * inStrides[1];
+            //         outResidual = c * outStrides[1];
+            //     } else if (!isPlainFmt) {
+            //         inResidual = outResidual = c % blockSize;
+            //     }
+            //     pool(srcData + inResidual, dstData + outResidual, od, oh, ow, n * C + c);
+            // }
+            //pool(srcData, dstData, od, oh, ow, n * C);
+            // if (1) {
+            //     static xsimd::detail::supported_arch arch;
+            //     poolAvg(&arch, srcData, dstData, od, oh, ow, n * C, inStrides, ID, OD, IH, OH, IW, OW);
+            // }
+            _avg(srcData, dstData, od, oh, ow, n * C, inStrides);
+            });
+
+        return;
+    }
+
 
     std::function<void(const float *, float *, int, int, int, size_t)> pool;
     auto poolMax = [&] (const float *srcData, float *dstData, int od, int oh, int ow, size_t spatIndOff) {
@@ -260,10 +350,5 @@ bool MKLDNNAdaptivePoolingNode::created() const {
 }
 
 void MKLDNNAdaptivePoolingNode::createPrimitive() {}
-
-inline void MKLDNNAdaptivePoolingNode::setBinBorders(size_t *startPtr, size_t *endPtr, size_t idx, size_t inputLength, size_t outputLength) {
-    *(startPtr) = idx * inputLength / outputLength;
-    *(endPtr) = ceil(static_cast<float>((idx + 1) * inputLength) / outputLength);
-}
 
 REG_MKLDNN_PRIM_FOR(MKLDNNAdaptivePoolingNode, AdaptivePooling)

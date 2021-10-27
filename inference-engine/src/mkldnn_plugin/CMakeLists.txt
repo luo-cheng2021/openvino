@@ -11,7 +11,7 @@ include_directories(${EasyJit_INCLUDE_DIRS})
 link_directories(${EasyJit_LIBRARY_DIRS})
 list(APPEND LINK_LIBRARIES EasyJitRuntime)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse4.2 -mavx -Xclang -load -Xclang ${CMAKE_BINARY_DIR}/easyjit/_install/lib/EasyJitPass.so")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse4.2 -mavx -mavx2 -Xclang -load -Xclang ${CMAKE_BINARY_DIR}/easyjit/_install/lib/EasyJitPass.so")
 
 find_package(xsimd REQUIRED CONFIG
     PATHS ${CMAKE_BINARY_DIR}/xsimd/_install/lib/cmake
