@@ -29,6 +29,7 @@ addIeTargetTest(
             ov_shape_inference
             inference_engine_s
             unitTestUtils
+            ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${CMAKE_STATIC_LIBRARY_PREFIX}mkldnn_opt${CMAKE_STATIC_LIBRARY_SUFFIX}
             EasyJitRuntime
         ADD_CPPLINT
         LABELS

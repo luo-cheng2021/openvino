@@ -18,6 +18,7 @@ addIeTargetTest(
             templatePlugin
         LINK_LIBRARIES
             IE::funcSharedTests
+            ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${CMAKE_STATIC_LIBRARY_PREFIX}mkldnn_opt${CMAKE_STATIC_LIBRARY_SUFFIX}
             EasyJitRuntime
         INCLUDES
             "${IE_MAIN_TEMPLATE_PLUGIN_SOURCE_DIR}/include"

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 function(ie_add_easyjit)
-    execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory  ${CMAKE_BINARY_DIR}/easyjit)
-    execute_process(COMMAND ${CMAKE_COMMAND} -S${CMAKE_SOURCE_DIR}/inference-engine/thirdparty/easyjit -B${CMAKE_BINARY_DIR}/easyjit -DLLVM_DIR=/usr/lib/llvm-6.0/cmake -DEASY_JIT_EXAMPLE=OFF -DEASY_JIT_BENCHMARK=OFF -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/easyjit/_install)
+    execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory  ${CMAKE_BINARY_DIR}/easyjit/_install)
+    execute_process(COMMAND ${CMAKE_COMMAND} -S${CMAKE_SOURCE_DIR}/inference-engine/thirdparty/easyjit -B${CMAKE_BINARY_DIR}/easyjit -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_CXX_COMPILER=/usr/bin/clang-6.0 -DCMAKE_C_COMPILER=/usr/bin/clang-6.0 -DLLVM_DIR=/usr/lib/llvm-6.0/cmake -DEASY_JIT_EXAMPLE=OFF -DEASY_JIT_BENCHMARK=OFF -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/easyjit/_install)
     execute_process(COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/easyjit --target install)
     execute_process(COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/easyjit/_install/lib/libEasyJitRuntime.so
         ${CMAKE_BINARY_DIR}/../bin/intel64/${CMAKE_BUILD_TYPE}/lib/)

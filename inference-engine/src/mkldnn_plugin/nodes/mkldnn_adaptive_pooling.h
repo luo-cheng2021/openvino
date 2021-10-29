@@ -9,7 +9,7 @@
 #include <memory>
 #include <vector>
 #include <mkldnn_extension_utils.h>
-#include <easy/jit.h>
+#include "opt/mkldnn_adaptive_pooling_opt.h"
 
 namespace MKLDNNPlugin {
 
@@ -28,7 +28,7 @@ public:
 private:
     int spatialDimsCount;
     InferenceEngine::Precision precision = InferenceEngine::Precision::FP32;
-    easy::FunctionWrapper<void(const float *, float *, int, int, int, size_t, const size_t inStrides[5])> _avg;
+    AvgFunc _avg;
 
     std::string errorPrefix;
 };
