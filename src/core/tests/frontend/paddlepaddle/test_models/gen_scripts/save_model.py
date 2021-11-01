@@ -90,6 +90,8 @@ def exportModel(name, dyn_func, input_data:list, target_dir:str):
             np.save(os.path.join(model_dir, "output{}".format(idx)), out.numpy())
     else:       
         np.save(os.path.join(model_dir, "output{}".format(0)), result.numpy())
+    
+    return result
 
 
 if __name__ == "__main__":
