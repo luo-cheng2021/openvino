@@ -198,7 +198,14 @@ void MKLDNNAdaptivePoolingNode::execute(mkldnn::stream strm) {
         using namespace std::placeholders;
         if (!_avg.isValid()) {
             easy::RawBytes raw;
-            _avg = getAvgFunc(raw, ID, OD, IH, OH, IW, OW);
+            FuseConstParams params;
+            params.num = 3;
+            params.types[0] = AlgType::Sub_C;
+            params.types[1] = AlgType::Add_C;
+            params.types[2] = AlgType::Add;
+            params.params[0].x1 = 3.0f;
+            params.params[1].x1 = 7.0f;
+            _avg = getAvgFunc(raw, ID, OD, IH, OH, IW, OW, params);
         }
 
         parallel_for5d(N, blockCount, OD, OH, OW,
@@ -222,9 +229,19 @@ void MKLDNNAdaptivePoolingNode::execute(mkldnn::stream strm) {
             // }
             //pool(srcData, dstData, od, oh, ow, n * C);
             // if (1) {
-            //     poolAvg(srcData, dstData, od, oh, ow, n * C, inStrides, ID, OD, IH, OH, IW, OW);
+            //     FuseConstParams params;
+            //     params.num = 2;
+            //     params.types[0] = AlgType::Sub_C;
+            //     params.types[1] = AlgType::Add_C;
+            //     params.params[0].x1 = 3.0f;
+            //     params.params[1].x1 = 7.0f;
+            //     poolAvg(srcData, dstData, od, oh, ow, n * C, inStrides, ID, OD, IH, OH, IW, OW, params);
             // }
-            _avg(srcData, dstData, od, oh, ow, n * C, inStrides);
+            FuseMutableParams params;
+            std::array<float, 8> test;
+            test.fill(4.0f);
+            params.params[2].addr = reinterpret_cast<uint64_t>(&test[0]);
+            _avg(srcData, dstData, od, oh, ow, n * C, inStrides, params);
             });
 
         return;

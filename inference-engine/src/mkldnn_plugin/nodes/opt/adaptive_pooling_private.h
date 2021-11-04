@@ -11,6 +11,7 @@
 #include <vector>
 #include <easy/jit.h>
 #include "xsimd.h"
+#include "fuse_private.h"
 
 static inline void setBinBorders(size_t *startPtr, size_t *endPtr, size_t idx, size_t inputLength, size_t outputLength) {
     *(startPtr) = idx * inputLength / outputLength;
@@ -18,8 +19,8 @@ static inline void setBinBorders(size_t *startPtr, size_t *endPtr, size_t idx, s
 }
 
 template <class Arch>
-void poolAvgT(Arch, const float *srcData, float *dstData, int od, int oh, int ow, size_t spatIndOff,
-    const size_t inStrides[5], size_t ID, size_t OD, size_t IH, size_t OH, size_t IW, size_t OW) {
+void poolAvgT(Arch*, const float *srcData, float *dstData, int od, int oh, int ow, size_t spatIndOff,
+    const size_t inStrides[5], size_t ID, size_t OD, size_t IH, size_t OH, size_t IW, size_t OW, const FuseConstAlgParamPrivate<float, Arch> params_c, const FuseMutableParams& params_m) {
     using b_type = xsimd::batch<float, Arch>;
     //std::size_t inc = b_type::size;
 
@@ -44,5 +45,7 @@ void poolAvgT(Arch, const float *srcData, float *dstData, int od, int oh, int ow
         }
     }
     //*dstData = sum / binSize;
-    xsimd::store(dstData, sum / binSize, xsimd::unaligned_mode());
+    auto res = sum / binSize;
+    res = seq_fuse(res, 0, 0, 0, params_m, params_c);
+    xsimd::store(dstData, res, xsimd::unaligned_mode());
 }

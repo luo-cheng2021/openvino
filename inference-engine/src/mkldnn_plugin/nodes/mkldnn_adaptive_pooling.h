@@ -9,7 +9,7 @@
 #include <memory>
 #include <vector>
 #include <mkldnn_extension_utils.h>
-#include "opt/mkldnn_adaptive_pooling_opt.h"
+#include "opt/adaptive_pooling_public.h"
 
 namespace MKLDNNPlugin {
 
