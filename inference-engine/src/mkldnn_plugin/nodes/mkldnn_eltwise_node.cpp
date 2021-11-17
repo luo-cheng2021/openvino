@@ -980,7 +980,7 @@ bool MKLDNNEltwiseNode::isSupportedOperation(const std::shared_ptr<const ngraph:
 }
 
 MKLDNNEltwiseNode::MKLDNNEltwiseNode(const std::shared_ptr<ngraph::Node>& op, const mkldnn::engine& eng, MKLDNNWeightsSharing::Ptr &cache) :
-        MKLDNNNode(op, eng, cache) {
+        MKLDNNNode(op, eng, cache), _elt{nullptr} {
     std::string errorMessage;
     if (!isSupportedOperation(op, errorMessage)) {
         IE_THROW(NotImplemented) << errorMessage;
@@ -1454,7 +1454,7 @@ void MKLDNNEltwiseNode::prepareParams() {
     std::transform(jep.oc_offsets.begin(), jep.oc_offsets.end(), jep.oc_offsets.begin(),
                    [](size_t& offset) { return offset * sizeof(float);});
 
-    if (canUseOptimizedImpl) {
+    if (0 && canUseOptimizedImpl) {
         execPtr = std::make_shared<EltwiseJitExecutor>(jep, *this, schedulerWorkAmount, batchDimIdx);
     } else {
         execPtr = std::make_shared<EltwiseRefExecutor>(jep, fullWorkAmount, batchDimIdx);
@@ -1647,8 +1647,50 @@ void MKLDNNEltwiseNode::execute(mkldnn::stream strm) {
                 IE_THROW() << "Can't set batch dims for eltwise node with rank: " << dims_out.size() << " and batch idx: " << batchDimIdx;
             dims_out[batchDimIdx] = static_cast<size_t>(batchToProcess());
         }
+        if (!_elt.isValid()) {
+            easy::RawBytes raw;
+            EltwiseConstParam params;
+            FuseConstParams fuse_params;
+            if (getAlgorithm() == EltwiseAdd) {
+                params.alg_type = AlgType::Add;
+            } else {
+                IE_THROW() << "Should add support here, new algorithm type: " << getAlgorithm();
+            }
+            for (size_t i = 2; i < jep.inputs_number; i++) {
+                fuse_params.types[i - 2] = AlgType::Add;
+            }
+            fuse_params.num = jep.inputs_number - 2;
+            //fuse_params.types[0] = AlgType::Sub_C;
+            // fuse_params.types[1] = AlgType::Add_C;
+            // fuse_params.types[2] = AlgType::Add;
+            //fuse_params.params[0].x1 = 3.0f;
+            // fuse_params.params[1].x1 = 7.0f;
+            _elt = getEltwiseFunc(raw, params, fuse_params);
+        }
+        if (1) {
+            EltwiseMutableParam params = {
+                const_cast<void*>(args_ptrs.src_ptr[0]),    // src x addr
+                {jep.src_offsets[0][3], jep.src_offsets[0][4], jep.src_offsets[0][5]}, // params.strides_x[3];
+                const_cast<void*>(args_ptrs.src_ptr[1]),    // src y addr
+                {jep.src_offsets[1][3], jep.src_offsets[1][4], jep.src_offsets[1][5]}, // params.strides_y[3];
+                args_ptrs.dst_ptr,    // dst addr
+                {jep.dst_offsets[3], jep.dst_offsets[4], jep.dst_offsets[5]},  // params.strides_d[3];
+                {dims_out[3], dims_out[4], dims_out[5]}   // dims
+            };
 
-        execPtr->exec(*this, args_ptrs, dims_out);
+            FuseMutableParams fuse_params;
+            for (size_t i = 2; i < jep.inputs_number; i++) {
+                fuse_params.params[i - 2].addr = reinterpret_cast<uint64_t>(args_ptrs.src_ptr[i]);
+                fuse_params.params[i - 2].stride_x = jep.src_offsets[i][4];
+                fuse_params.params[i - 2].stride_xy = jep.src_offsets[i][3];
+            }
+            //std::array<float, 8> test;
+            //test.fill(4.0f);
+            //fuse_params.params[2].addr = reinterpret_cast<uint64_t>(&test[0]);
+            _elt(params, fuse_params);
+        } else {
+            execPtr->exec(*this, args_ptrs, dims_out);
+        }
     } else {
         IE_THROW() << "Can't execute eltwise node. Primitive didn't created";
     }

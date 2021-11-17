@@ -35,7 +35,7 @@ struct FuseConstAlgParamPrivate {
     extern template b_t<float, xsimd::avx2> func(b_t<float, xsimd::avx2> x, const CallerContext context, const FuseMutableAlgParam param_m, const FuseConstAlgParam param_c); \
     extern template b_t<float, xsimd::avx512f> func(b_t<float, xsimd::avx512f> x, const CallerContext context, const FuseMutableAlgParam param_m, const FuseConstAlgParam param_c);
 
-#define ADDR(c, p, type) (type*)(p.addr + c.z * p.stride_xy + c.y * p.stride_x + c.x * b_t<T, A>::size)
+#define ADDR(c, p, type) (type*)(p.addr + c.z * p.stride_xy + c.y * p.stride_x + c.x * b_t<T, A>::size * sizeof(T))
 template<class T, class A>
 b_t<T, A> add(b_t<T, A> x, const CallerContext context, const FuseMutableAlgParam param_m, const FuseConstAlgParam param_c) {
     b_t<T, A> y = b_t<T, A>::load(ADDR(context, param_m, float), xsimd::unaligned_mode());

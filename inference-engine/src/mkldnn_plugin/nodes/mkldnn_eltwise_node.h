@@ -10,6 +10,7 @@
 #include <vector>
 #include <memory>
 #include <caseless.hpp>
+#include "opt/eltwise_public.h"
 
 namespace MKLDNNPlugin {
 
@@ -168,6 +169,7 @@ private:
     void offset_in_calc(VectorDims& offset, VectorDims& dims_in, VectorDims& dims_out);
 
     size_t getOpInputsNum() const;
+    EltwiseFunc _elt;
 };
 
 }  // namespace MKLDNNPlugin
