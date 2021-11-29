@@ -23,6 +23,8 @@ using PDPDFuzzyOpTest = FrontEndFuzzyOpTest;
 
 static const std::vector<std::string> models{std::string("argmax"),
                                              std::string("argmax1"),
+                                             std::string("assign_none/assign_none.pdmodel"),
+                                             std::string("assign_output/assign_output.pdmodel"),
                                              std::string("assign_value_boolean"),
                                              std::string("assign_value_fp32"),
                                              std::string("assign_value_int32"),
