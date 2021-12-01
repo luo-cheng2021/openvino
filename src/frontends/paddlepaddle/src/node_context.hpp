@@ -24,6 +24,20 @@ OPENVINO_VARIANT_DECLARATION(std::vector<float>, "Variant::float_vector");
 OPENVINO_VARIANT_DECLARATION(bool, "Variant::bool");
 OPENVINO_VARIANT_DECLARATION(ov::element::Type, "Variant::element_type");
 OPENVINO_VARIANT_DECLARATION(std::vector<int64_t>, "Variant::int64_vector");
+
+class BlockIndex {
+public:
+    BlockIndex(int32_t idx) : m_block_idx(idx) {}
+
+    const int32_t get() {
+        return m_block_idx;
+    }
+
+private:
+    int32_t m_block_idx;
+};
+OPENVINO_VARIANT_DECLARATION(BlockIndex, "Variant::block_idx");
+
 namespace frontend {
 namespace pdpd {
 using InPortName = std::string;

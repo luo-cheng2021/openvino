@@ -14,10 +14,8 @@ NamedOutputs select_input(const NodeContext& node) {
     const auto x = node.get_ng_inputs("X");
     const auto mask = node.get_ng_input("Mask");
 
-    const auto dummy_node = default_opset::Constant::create(element::i64, {1,2}, {0});
-    return node.default_single_output_mapping(
-        {dummy_node},
-        {"Out"});
+    const auto dummy_node = default_opset::Constant::create(element::i64, {1, 2}, {0});
+    return node.default_single_output_mapping({dummy_node}, {"Out"});
 }
 
 }  // namespace op

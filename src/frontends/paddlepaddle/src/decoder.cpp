@@ -60,6 +60,8 @@ std::shared_ptr<Variant> DecoderPDPDProto::get_attribute(const std::string& name
         return std::make_shared<VariantWrapper<ov::element::Type>>(TYPE_MAP[data_type]);
     } else if (type_info == VariantWrapper<bool>::get_type_info_static()) {
         return std::make_shared<VariantWrapper<bool>>(attrs[0].b());
+    } else if (type_info == VariantWrapper<ov::BlockIndex>::get_type_info_static()) {
+        return std::make_shared<VariantWrapper<ov::BlockIndex>>(attrs[0].block_idx());
     }
 
     // Type is not supported by decoder
