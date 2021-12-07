@@ -27,6 +27,7 @@ OP_CONVERTER(elementwise_add);
 OP_CONVERTER(elementwise_div);
 OP_CONVERTER(elementwise_equal);
 OP_CONVERTER(elementwise_greater_equal);
+OP_CONVERTER(elementwise_less_than);
 OP_CONVERTER(elementwise_max);
 OP_CONVERTER(elementwise_min);
 OP_CONVERTER(elementwise_mul);
@@ -118,6 +119,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"hard_swish", op::hard_swish},
             {"layer_norm", op::layer_norm},
             {"leaky_relu", op::leaky_relu},
+            {"less_than", op::elementwise_less_than},
             {"linear_interp_v2", op::linear_interp_v2},
             {"log", op::log},
             {"logical_not", op::logical_not},

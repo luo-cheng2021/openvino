@@ -80,6 +80,10 @@ NamedOutputs elementwise_greater_equal(const NodeContext& node_context) {
     return elementwise_ops<ov::opset6::GreaterEqual>(node_context);
 }
 
+NamedOutputs elementwise_less_than(const NodeContext& node_context) {
+    return elementwise_ops<ov::opset6::Less>(node_context);
+}
+
 }  // namespace op
 }  // namespace pdpd
 }  // namespace frontend
