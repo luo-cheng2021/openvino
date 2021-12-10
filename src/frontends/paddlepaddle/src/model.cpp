@@ -41,7 +41,8 @@ public:
     void setElementType(Place::Ptr place, const ov::element::Type&);
     void setTensorValue(Place::Ptr place, const void* value);
 
-    std::vector<std::shared_ptr<OpPlacePDPD>> get_op_places() const;
+    int32_t get_block_count() const;
+    std::vector<std::shared_ptr<OpPlacePDPD>> get_op_places(const int32_t blck_idx) const;
     std::map<std::string, std::shared_ptr<TensorPlacePDPD>> get_var_places() const {
         return m_var_places;
     }
@@ -55,7 +56,7 @@ private:
     void loadConsts(const std::basic_string<T>& folder_with_weights, std::istream* weight_stream);
     std::vector<std::shared_ptr<OpPlacePDPD>> determine_cut_nodes() const;
 
-    std::vector<std::shared_ptr<OpPlacePDPD>> m_op_places;
+    std::vector<std::vector<std::shared_ptr<OpPlacePDPD>>> m_op_places;
     std::map<std::string, std::shared_ptr<TensorPlacePDPD>> m_var_places;
     std::shared_ptr<ProgramDesc> m_fw_ptr;
     const InputModel& m_input_model;
@@ -67,9 +68,15 @@ private:
     bool m_graph_changed = false;
 };
 
+int32_t InputModelPDPD::InputModelPDPDImpl::get_block_count() const {
+    return m_fw_ptr->blocks_size();
+}
+
 void InputModelPDPD::InputModelPDPDImpl::loadPlaces() {
     const int cnt_of_blocks = m_fw_ptr->blocks_size();
     const auto& blocks = m_fw_ptr->blocks();
+
+    m_op_places.resize(cnt_of_blocks);
 
     for (int block_idx = 0; block_idx < cnt_of_blocks; block_idx++) {
         const auto& block = blocks[block_idx];
@@ -80,7 +87,7 @@ void InputModelPDPD::InputModelPDPDImpl::loadPlaces() {
 
         for (const auto& op : block.ops()) {
             auto op_place = std::make_shared<OpPlacePDPD>(m_input_model, op);
-            m_op_places.push_back(op_place);
+            m_op_places[block_idx].push_back(op_place);
 
             for (const auto& output : op.outputs()) {
                 for (const auto& var_name : output.arguments()) {
@@ -195,18 +202,19 @@ std::basic_string<wchar_t> get_model_path(const std::basic_string<wchar_t>& path
 #endif
 }  // namespace
 
-std::vector<std::shared_ptr<OpPlacePDPD>> InputModelPDPD::InputModelPDPDImpl::get_op_places() const {
+std::vector<std::shared_ptr<OpPlacePDPD>> InputModelPDPD::InputModelPDPDImpl::get_op_places(
+    const int32_t blck_idx) const {
     if (m_graph_changed) {
         return determine_cut_nodes();
     }
-    return m_op_places;
+    return m_op_places[blck_idx];
 }
 
 std::vector<std::shared_ptr<OpPlacePDPD>> InputModelPDPD::InputModelPDPDImpl::determine_cut_nodes() const {
     std::queue<OpPlacePDPD*> q;
     std::unordered_set<OpPlacePDPD*> visited;
     std::vector<std::shared_ptr<OpPlacePDPD>> new_op_places;
-    new_op_places.reserve(m_op_places.size());
+    new_op_places.reserve(m_op_places[0].size());
     // Marking nodes from outputs to inputs/constants
     for (const auto& output : getOutputs()) {
         if (!output->is_input()) {
@@ -411,8 +419,12 @@ InputModelPDPD::InputModelPDPD(const std::wstring& path) : _impl{std::make_share
 InputModelPDPD::InputModelPDPD(const std::vector<std::istream*>& streams)
     : _impl{std::make_shared<InputModelPDPDImpl>(streams, *this)} {}
 
-std::vector<std::shared_ptr<OpPlacePDPD>> InputModelPDPD::get_op_places() const {
-    return _impl->get_op_places();
+int32_t InputModelPDPD::get_block_count() const {
+    return _impl->get_block_count();
+}
+
+std::vector<std::shared_ptr<OpPlacePDPD>> InputModelPDPD::get_op_places(const int32_t blck_idx) const {
+    return _impl->get_op_places(blck_idx);
 }
 
 std::map<std::string, std::shared_ptr<TensorPlacePDPD>> InputModelPDPD::get_var_places() const {

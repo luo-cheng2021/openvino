@@ -27,6 +27,7 @@ using namespace ov::frontend;
 
 namespace ov {
 namespace frontend {
+
 namespace pdpd {
 namespace {
 NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
@@ -135,13 +136,101 @@ std::istream* variant_to_stream_ptr(const std::shared_ptr<Variant>& variant, std
 }  // namespace
 }  // namespace pdpd
 
+std::shared_ptr<Function> FrontEndPDPD::convert_subblock(
+    const std::shared_ptr<InputModelPDPD>& model,
+    const int32_t block_idx,
+    const std::vector<std::shared_ptr<TensorPlacePDPD>>& input_tensors,
+    const std::vector<std::shared_ptr<TensorPlacePDPD>>& output_tensors) {
+    std::cout << "convert_block block_idx " << block_idx << std::endl;
+
+    auto nodes_dict(model->get_tensor_values());
+    ParameterVector parameter_nodes;
+    ResultVector result_nodes;
+    OutputVector output_nodes;
+
+    std::map<std::string, pdpd::CreatorFunction> CREATORS_MAP = pdpd::get_supported_ops();
+
+    for (const auto& _inp_place : input_tensors) {
+        const auto& inp_place = std::dynamic_pointer_cast<TensorPlacePDPD>(_inp_place);
+        const auto& var = inp_place->get_desc();
+        const auto& shape = inp_place->get_partial_shape();
+        const auto& type = inp_place->get_element_type();
+        auto param = std::make_shared<Parameter>(type, shape);
+        param->set_friendly_name(var.name());
+        param->output(0).get_tensor().add_names({var.name()});
+        nodes_dict[var.name()] = param;
+        parameter_nodes.push_back(param);
+    }
+
+    const auto& op_places = model->get_op_places(block_idx);
+    for (const auto& op_place : op_places) {
+        const auto& op_desc = op_place->get_desc();
+        if (op_desc.type() == "feed" || op_desc.type() == "fetch") {
+            // inputs and outputs are stored in the model already
+            continue;
+        } else {
+            pdpd::NamedOutputs named_outputs = pdpd::make_ng_node(nodes_dict, op_place, CREATORS_MAP);
+
+            if (!named_outputs.empty()) {
+                if (op_desc.outputs().begin()->arguments().size() > 0) {
+                    const auto& tensor_name = op_desc.outputs().begin()->arguments()[0];
+                    auto node = named_outputs.begin()->second[0].get_node_shared_ptr();
+                    node->set_friendly_name(tensor_name);
+                }
+
+                const auto& out_ports = op_desc.outputs();
+                for (const auto& port : out_ports) {
+                    // TODO: figure a way to safely handle unused outputs
+                    if (named_outputs.count(port.parameter())) {
+                        const auto& ng_outputs = named_outputs.at(port.parameter());
+                        FRONT_END_OP_CONVERSION_CHECK(ng_outputs.size() == port.arguments_size(),
+                                                      "The number of output tensors must be equal to "
+                                                      "the number of outputs of the OV node.");
+                        for (size_t idx = 0; idx < ng_outputs.size(); ++idx) {
+                            const auto& var_name = port.arguments()[idx];
+                            ng_outputs[idx].get_tensor().set_names({var_name});
+                            // if nodes_dict already has node mapped to this tensor name it
+                            // usually means that it was overwritten using setTensorValue
+                            if (!nodes_dict.count(var_name))
+                                nodes_dict[var_name] = ng_outputs[idx];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (const auto& _outp_place : output_tensors) {
+        const auto& outp_place = std::dynamic_pointer_cast<TensorPlacePDPD>(_outp_place);
+        auto var = outp_place->get_desc();
+        auto input_var_name = var.name();
+        auto result = std::make_shared<Result>(nodes_dict.at(input_var_name));
+        result->set_friendly_name(input_var_name + "/Result");
+        result_nodes.push_back(result);
+        output_nodes.push_back(nodes_dict.at(input_var_name));
+    }
+
+    if (parameter_nodes.size() > 0) {
+        return std::make_shared<ov::Function>(result_nodes, parameter_nodes);
+    }
+
+    return std::make_shared<ov::Function>(output_nodes);
+}
+
 std::shared_ptr<Function> FrontEndPDPD::convert_each_node(
     const std::shared_ptr<InputModelPDPD>& model,
     std::function<std::map<std::string, OutputVector>(const std::map<std::string, Output<Node>>&,
                                                       const std::shared_ptr<OpPlacePDPD>&)> func) {
-    auto nodes_dict(model->get_tensor_values());
+    auto nodes_dict(model->get_tensor_values());  // std::map<pdpd::TensorName, Output<Node>>
     ParameterVector parameter_nodes;
     ResultVector result_nodes;
+
+    using PaddleOpType = std::string;
+    std::vector<std::tuple<PaddleOpType,
+                           std::vector<std::shared_ptr<TensorPlacePDPD>>,
+                           std::vector<std::shared_ptr<TensorPlacePDPD>>>>
+        subblock_inputs_outputs;  // keep info of controlflow ops
+    subblock_inputs_outputs.reserve(model->get_block_count());
 
     for (const auto& _inp_place : model->get_inputs()) {
         const auto& inp_place = std::dynamic_pointer_cast<TensorPlacePDPD>(_inp_place);
@@ -155,7 +244,7 @@ std::shared_ptr<Function> FrontEndPDPD::convert_each_node(
         parameter_nodes.push_back(param);
     }
 
-    const auto& op_places = model->get_op_places();
+    const auto& op_places = model->get_op_places(0);
     for (const auto& op_place : op_places) {
         const auto& op_desc = op_place->get_desc();
         if (op_desc.type() == "feed" || op_desc.type() == "fetch") {
@@ -163,6 +252,31 @@ std::shared_ptr<Function> FrontEndPDPD::convert_each_node(
             continue;
         } else {
             pdpd::NamedOutputs named_outputs = func(nodes_dict, op_place);
+
+            if (op_desc.type() == "conditional_block") {
+                std::vector<std::shared_ptr<TensorPlacePDPD>> outp_tensors;
+                std::vector<std::shared_ptr<TensorPlacePDPD>> inp_tensors;
+
+                auto outp_ports = op_place->get_output_ports();
+                for (auto outp_port : outp_ports["Out"]) {
+                    auto outp_tensor = outp_port->get_target_tensor_pdpd();  // get_target_tensor();
+                    outp_tensors.push_back(outp_tensor);
+                }
+                FRONT_END_GENERAL_CHECK(outp_tensors.size() > 0, "Port has no tensors connected.");
+
+                auto inp_ports = op_place->get_input_ports();
+                for (auto inp_port : inp_ports["Input"]) {
+                    auto inp_tensor = inp_port->get_source_tensor_pdpd();
+                    inp_tensors.push_back(inp_tensor);
+                }
+                FRONT_END_GENERAL_CHECK(inp_tensors.size() > 0, "Port has no tensors connected.");
+
+                auto tmp_node = pdpd::NodeContext(DecoderPDPDProto(op_place), pdpd::NamedInputs());
+                auto sub_block = tmp_node.get_attribute<ov::BlockIndex>("sub_block");
+                int32_t block_idx = sub_block.get();  // op_desc.attrs("sub_block").block_idx();
+
+                subblock_inputs_outputs[block_idx] = std::make_tuple(op_desc.type(), inp_tensors, outp_tensors);
+            }
 
             if (!named_outputs.empty()) {
                 if (op_desc.outputs().begin()->arguments().size() > 0) {
@@ -202,7 +316,21 @@ std::shared_ptr<Function> FrontEndPDPD::convert_each_node(
         result_nodes.push_back(result);
     }
 
-    return std::make_shared<ov::Function>(result_nodes, parameter_nodes);
+    auto main_block_func = std::make_shared<ov::Function>(result_nodes, parameter_nodes);
+
+    /* convert each sub block */
+    std::vector<std::shared_ptr<Function>> block_funcs;
+    block_funcs.push_back(main_block_func);
+
+    for (int32_t block_idx = 1; block_idx < model->get_block_count(); block_idx++) {
+        auto ctl_op_info = subblock_inputs_outputs[block_idx];
+        auto sub_block_func = convert_subblock(model, block_idx, std::get<1>(ctl_op_info), std::get<2>(ctl_op_info));
+        block_funcs.push_back(sub_block_func);
+    }
+
+    /* normalize inputmodel: convert each internal nG ops to officials */
+
+    return main_block_func;
 }
 
 bool FrontEndPDPD::supported_impl(const std::vector<std::shared_ptr<Variant>>& variants) const {
