@@ -76,6 +76,11 @@ std::vector<pdpd::OutPortName> DecoderPDPDProto::get_output_names() const {
     return output_names;
 }
 
+size_t DecoderPDPDProto::get_output_size(const std::string& port_name) const {
+    const auto out_port = op_place->get_output_ports().at(port_name);
+    return out_port.size();
+}
+
 size_t DecoderPDPDProto::get_output_size() const {
     size_t res = 0;
     for (const auto& output : op_place->get_desc().outputs()) {

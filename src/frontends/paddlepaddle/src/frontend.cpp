@@ -21,6 +21,9 @@
 #include "pdpd_fw_node.hpp"
 #include "pdpd_utils.hpp"
 
+#include "openvino/pass/manager.hpp"
+#include "internal/pass/transform_if.hpp"
+
 using namespace ov::opset7;
 using namespace ov;
 using namespace ov::frontend;
@@ -217,7 +220,7 @@ std::shared_ptr<Function> FrontEndPDPD::convert_subblock(
     return std::make_shared<ov::Function>(output_nodes);
 }
 
-std::shared_ptr<Function> FrontEndPDPD::convert_each_node(
+std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
     const std::shared_ptr<InputModelPDPD>& model,
     std::function<std::map<std::string, OutputVector>(const std::map<std::string, Output<Node>>&,
                                                       const std::shared_ptr<OpPlacePDPD>&)> func) {
@@ -269,7 +272,7 @@ std::shared_ptr<Function> FrontEndPDPD::convert_each_node(
                     auto inp_tensor = inp_port->get_source_tensor_pdpd();
                     inp_tensors.push_back(inp_tensor);
                 }
-                FRONT_END_GENERAL_CHECK(inp_tensors.size() > 0, "Port has no tensors connected.");
+                // FRONT_END_GENERAL_CHECK(inp_tensors.size() > 0, "Port has no tensors connected.");
 
                 auto tmp_node = pdpd::NodeContext(DecoderPDPDProto(op_place), pdpd::NamedInputs());
                 auto sub_block = tmp_node.get_attribute<ov::BlockIndex>("sub_block");
@@ -328,9 +331,22 @@ std::shared_ptr<Function> FrontEndPDPD::convert_each_node(
         block_funcs.push_back(sub_block_func);
     }
 
-    /* normalize inputmodel: convert each internal nG ops to officials */
+    return block_funcs;
+}
 
-    return main_block_func;
+void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) const {
+    ov::pass::Manager manager;
+    manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+    manager.run_passes(functions[0]); // TODO: what if subblock has controlflow ops?
+}
+
+void FrontEndPDPD::normalize(std::shared_ptr<Function> function) const {
+    std::vector<std::shared_ptr<Function>> functions;
+    functions.push_back(function);
+
+    ov::pass::Manager manager;
+    manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+    manager.run_passes(functions[0]); // TODO: what if subblock has controlflow ops?
 }
 
 bool FrontEndPDPD::supported_impl(const std::vector<std::shared_ptr<Variant>>& variants) const {
@@ -412,7 +428,9 @@ std::shared_ptr<ov::Function> FrontEndPDPD::convert(InputModel::Ptr model) const
         [&](const std::map<std::string, Output<Node>>& nodes_dict, const std::shared_ptr<OpPlacePDPD>& op_place) {
             return pdpd::make_ng_node(nodes_dict, op_place, CREATORS_MAP);
         });
-    return f;
+    
+    normalize(f);
+    return ngraph::clone_function(*f[0]);
 }
 
 void FrontEndPDPD::convert(std::shared_ptr<ov::Function> partiallyConverted) const {
@@ -425,6 +443,8 @@ void FrontEndPDPD::convert(std::shared_ptr<ov::Function> partiallyConverted) con
     for (auto result : partiallyConverted->get_results()) {
         result->validate_and_infer_types();
     }
+
+    normalize(partiallyConverted);
 }
 
 std::shared_ptr<ov::Function> FrontEndPDPD::convert_partially(InputModel::Ptr model) const {
@@ -441,14 +461,17 @@ std::shared_ptr<ov::Function> FrontEndPDPD::convert_partially(InputModel::Ptr mo
             }
             return named_outputs;
         });
-    return f;
+    
+    normalize(f);
+
+    return ngraph::clone_function(*f[0]);
 }
 
 std::shared_ptr<ov::Function> FrontEndPDPD::decode(InputModel::Ptr model) const {
     auto pdpd_model = std::dynamic_pointer_cast<InputModelPDPD>(model);
     std::map<std::string, pdpd::CreatorFunction> CREATORS_MAP = pdpd::get_supported_ops();
     auto f = convert_each_node(pdpd_model, pdpd::make_framework_node);
-    return f;
+    return f[0];
 }
 
 std::string FrontEndPDPD::get_name() const {

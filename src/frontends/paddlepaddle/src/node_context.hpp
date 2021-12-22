@@ -58,6 +58,7 @@ public:
     virtual std::vector<OutPortName> get_output_names() const = 0;
 
     virtual size_t get_output_size() const = 0;
+    virtual size_t get_output_size(const std::string& port_name) const = 0;
 
     /// \brief Get output port type
     ///
@@ -168,7 +169,7 @@ public:
     /// Returns all inputs with a given name
     OutputVector get_ng_inputs(const std::string& name) const {
         return name_map.at(name);
-    }
+    } 
 
     /// Returns all inputs in order they appear in map. This is used for FrameworkNode
     /// creation
@@ -190,6 +191,10 @@ public:
 
     std::string get_op_type() const {
         return decoder.get_op_type();
+    }
+
+    size_t get_output_size(const std::string& port_name) const {
+        return decoder.get_output_size(port_name);
     }
 
     NamedOutputs default_single_output_mapping(const std::shared_ptr<Node>& node,

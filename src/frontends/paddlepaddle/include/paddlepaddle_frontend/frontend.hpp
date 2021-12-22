@@ -47,6 +47,10 @@ public:
     /// \return Paddle frontend name.
     std::string get_name() const override;
 
+    ///
+    void normalize(std::shared_ptr<Function> function) const override;
+    void normalize(std::vector<std::shared_ptr<Function>> functions) const;
+
 protected:
     /// \brief Check if FrontEndPDPD can recognize model from given parts
     /// \param params Can be path to folder which contains __model__ file or path to
@@ -68,7 +72,7 @@ private:
         const std::vector<std::shared_ptr<TensorPlacePDPD>>& input_tensors,
         const std::vector<std::shared_ptr<TensorPlacePDPD>>& output_tensors);
 
-    static std::shared_ptr<Function> convert_each_node(
+    static std::vector<std::shared_ptr<Function>> convert_each_node(
         const std::shared_ptr<InputModelPDPD>& model,
         std::function<std::map<std::string, OutputVector>(const std::map<std::string, Output<Node>>&,
                                                           const std::shared_ptr<OpPlacePDPD>&)> func);

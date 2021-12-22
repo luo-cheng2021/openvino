@@ -31,6 +31,7 @@ public:
     std::vector<pdpd::OutPortName> get_output_names() const override;
 
     size_t get_output_size() const override;
+    size_t get_output_size(const std::string& port_name) const override;
 
     ov::element::Type get_out_port_type(const std::string& port_name) const override;
 

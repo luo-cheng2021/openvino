@@ -1,0 +1,62 @@
+// Copyright (C) 2018-2021 Intel Corporation
+// SPDX-License-Identifier: Apache-2.0
+//
+
+#include "internal/op/conditional_block.hpp"
+
+#include <algorithm>
+#include <ngraph/validation_util.hpp>
+
+#include "ngraph/op/constant.hpp"
+#include "openvino/op/util/precision_sensitive_attribute.hpp"
+
+using namespace std;
+using namespace ov;
+
+BWDCMP_RTTI_DEFINITION(op::internal::ConditionalBlock);
+
+op::internal::ConditionalBlock::ConditionalBlock(const Output<Node>& cond, bool is_scalar_condition, int32_t sub_block_index, int32_t num_outputs)
+    : Op({cond}),
+      m_is_scalar_condition(is_scalar_condition),
+      m_sub_block_index(sub_block_index),
+      m_num_outputs(num_outputs) {
+    constructor_validate_and_infer_types();
+}
+
+op::internal::ConditionalBlock::ConditionalBlock(const OutputVector& inputs, const Output<Node>& cond, bool is_scalar_condition, int32_t sub_block_index, int32_t num_outputs)
+    : Op({cond}), // TODO
+      m_is_scalar_condition(is_scalar_condition),
+      m_sub_block_index(sub_block_index),
+      m_num_outputs(num_outputs) {
+    constructor_validate_and_infer_types();
+}
+
+std::shared_ptr<Node> op::internal::ConditionalBlock::clone_with_new_inputs(
+    const OutputVector& new_args) const {
+    check_new_args_count(this, new_args); // FIXME: have to?
+
+    if (new_args.size() == 1) { // w/o inputs
+        return make_shared<ConditionalBlock>(new_args.at(0), m_is_scalar_condition, m_sub_block_index, m_num_outputs);
+    } else {
+        OutputVector inputs_args;
+        for (auto i = 0; i < new_args.size()-1; i++) {
+            inputs_args.push_back(new_args[i]);
+        }        
+        return make_shared<ConditionalBlock>(inputs_args, new_args.back(), m_is_scalar_condition, m_sub_block_index, m_num_outputs);
+    }
+}
+
+bool op::internal::ConditionalBlock::visit_attributes(AttributeVisitor& visitor) {
+    visitor.on_attribute("is_scalar_condition", m_is_scalar_condition);
+    visitor.on_attribute("sub_block_index", m_sub_block_index);
+    visitor.on_attribute("num_outputs", m_num_outputs);
+    return true;
+}
+
+void op::internal::ConditionalBlock::validate_and_infer_types() {
+    const auto x_ps = get_input_partial_shape(0);
+
+    for (size_t i = 0; i < m_num_outputs; ++i) {
+        set_output_type(i, element::dynamic, {Dimension::dynamic()});
+    }
+}

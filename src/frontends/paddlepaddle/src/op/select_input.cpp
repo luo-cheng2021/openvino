@@ -5,6 +5,7 @@
 #include <node_context.hpp>
 
 #include "default_opset.hpp"
+#include "internal/op/select_input.hpp"
 
 namespace ov {
 namespace frontend {
@@ -13,9 +14,11 @@ namespace op {
 NamedOutputs select_input(const NodeContext& node) {
     const auto x = node.get_ng_inputs("X");
     const auto mask = node.get_ng_input("Mask");
+    
+    const element::Type output_type = node.get_out_port_type("Out");
+    auto placehodler = std::make_shared<ov::op::internal::SelectInput>(x[0], x[1], mask, output_type);
 
-    const auto dummy_node = default_opset::Constant::create(element::i64, {1, 2}, {0});
-    return node.default_single_output_mapping({dummy_node}, {"Out"});
+    return node.default_single_output_mapping({placehodler}, {"Out"});
 }
 
 }  // namespace op
