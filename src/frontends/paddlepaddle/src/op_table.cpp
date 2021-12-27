@@ -76,6 +76,7 @@ OP_CONVERTER(tanh);
 OP_CONVERTER(transpose2);
 OP_CONVERTER(trilinear_interp_v2);
 OP_CONVERTER(unsqueeze);
+OP_CONVERTER(while_);
 OP_CONVERTER(yolo_box);
 }  // namespace op
 std::map<std::string, CreatorFunction> get_supported_ops() {
@@ -155,6 +156,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"transpose2", op::transpose2},
             {"trilinear_interp_v2", op::trilinear_interp_v2},
             {"unsqueeze2", op::unsqueeze},
+            {"while", op::while_},
             {"yolo_box", op::yolo_box}};
 };
 

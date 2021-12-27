@@ -76,6 +76,18 @@ std::vector<pdpd::OutPortName> DecoderPDPDProto::get_output_names() const {
     return output_names;
 }
 
+std::vector<pdpd::TensorName> DecoderPDPDProto::get_output_var_names(const std::string& var_name) const {
+    std::vector<std::string> output_names;
+    for (const auto& output : op_place->get_desc().outputs()) {
+        if (output.parameter() == var_name) {
+            for (size_t idx = 0; idx < output.arguments_size(); ++idx) {
+                output_names.push_back(output.arguments()[idx]);
+            }
+        }
+    }
+    return output_names;
+}
+
 size_t DecoderPDPDProto::get_output_size(const std::string& port_name) const {
     const auto out_port = op_place->get_output_ports().at(port_name);
     return out_port.size();

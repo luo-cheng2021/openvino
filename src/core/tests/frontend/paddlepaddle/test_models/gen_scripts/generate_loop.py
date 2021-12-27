@@ -31,7 +31,7 @@ def loop():
         exe = paddle.static.Executor(place=paddle.CPUPlace())
         res = exe.run(paddle.static.default_main_program(), feed={'x':x}, fetch_list=out)
 
-        saveModel('loop', exe, feedkeys=['x'], fetchlist=[out], inputs=[x], outputs=[res], target_dir=sys.argv[1])
+        saveModel('loop', exe, feedkeys=['x'], fetchlist=[out], inputs=[x], outputs=[res[0]], target_dir=sys.argv[1])
 
     return res
 
@@ -57,7 +57,7 @@ def loop_x():
         exe = paddle.static.Executor(place=paddle.CPUPlace())
         res = exe.run(paddle.static.default_main_program(), feed={'x':x}, fetch_list=out)
 
-        saveModel('loop_x', exe, feedkeys=['x'], fetchlist=[out], inputs=[x], outputs=[res], target_dir=sys.argv[1])
+        saveModel('loop_x', exe, feedkeys=['x'], fetchlist=[out], inputs=[x], outputs=[res[0]], target_dir=sys.argv[1])
 
     return res
 
@@ -84,7 +84,7 @@ def loop_t():
         exe = paddle.static.Executor(place=paddle.CPUPlace())
         res = exe.run(paddle.static.default_main_program(), feed={'x':x}, fetch_list=[out_i,out_t])
 
-        saveModel('loop_t', exe, feedkeys=['x'], fetchlist=[out_i,out_t], inputs=[x], outputs=[res], target_dir=sys.argv[1])
+        saveModel('loop_t', exe, feedkeys=['x'], fetchlist=[out_i,out_t], inputs=[x], outputs=res, target_dir=sys.argv[1])
 
     return res
 
@@ -97,11 +97,12 @@ def loop_dyn():
         
         i = i + x
         t = paddle.full(shape=[1], fill_value=10, dtype='int64')
+        j = i + 1
 
         while t >= i:
             i = i + 1
 
-        return i
+        return i, j
 
     x = np.full(shape=[1], fill_value=0, dtype='int64')
     return exportModel('loop_dyn', test_model, [x], target_dir=sys.argv[1])
@@ -128,7 +129,7 @@ def loop_dyn_x():
 
 if __name__ == "__main__":
     print(loop())
-    print(loop_dyn().numpy())
+    print(loop_dyn())
 
     print(loop_t())
     print(loop_x())

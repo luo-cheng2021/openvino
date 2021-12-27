@@ -29,6 +29,7 @@ public:
     std::shared_ptr<Variant> get_attribute(const std::string& name, const VariantTypeInfo& type_info) const override;
 
     std::vector<pdpd::OutPortName> get_output_names() const override;
+    std::vector<pdpd::TensorName> get_output_var_names(const std::string& var_name) const override;
 
     size_t get_output_size() const override;
     size_t get_output_size(const std::string& port_name) const override;

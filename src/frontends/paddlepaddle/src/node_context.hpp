@@ -56,6 +56,7 @@ public:
     virtual std::shared_ptr<Variant> get_attribute(const std::string& name, const VariantTypeInfo& type_info) const = 0;
 
     virtual std::vector<OutPortName> get_output_names() const = 0;
+    virtual std::vector<TensorName> get_output_var_names(const std::string& var_name) const = 0;
 
     virtual size_t get_output_size() const = 0;
     virtual size_t get_output_size(const std::string& port_name) const = 0;
@@ -183,6 +184,10 @@ public:
 
     std::vector<OutPortName> get_output_names() const {
         return decoder.get_output_names();
+    }
+
+    std::vector<TensorName> get_output_var_names(const std::string& var_name) const {
+        return decoder.get_output_var_names(var_name);
     }
 
     ov::element::Type get_out_port_type(const std::string& port_name) const {

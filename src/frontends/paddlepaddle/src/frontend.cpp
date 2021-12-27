@@ -23,6 +23,9 @@
 
 #include "openvino/pass/manager.hpp"
 #include "internal/pass/transform_if.hpp"
+#include "internal/pass/transform_while.hpp"
+
+#include <ngraph/pass/visualize_tree.hpp>
 
 using namespace ov::opset7;
 using namespace ov;
@@ -196,6 +199,10 @@ std::shared_ptr<Function> FrontEndPDPD::convert_subblock(
                             // usually means that it was overwritten using setTensorValue
                             if (!nodes_dict.count(var_name))
                                 nodes_dict[var_name] = ng_outputs[idx];
+                            else {
+                                //std::cout << "subblock duplicated name " << var_name << std::endl;
+                                nodes_dict[var_name] = ng_outputs[idx];
+                            }
                         }
                     }
                 }
@@ -233,7 +240,7 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
                            std::vector<std::shared_ptr<TensorPlacePDPD>>,
                            std::vector<std::shared_ptr<TensorPlacePDPD>>>>
         subblock_inputs_outputs;  // keep info of controlflow ops
-    subblock_inputs_outputs.reserve(model->get_block_count());
+    subblock_inputs_outputs.resize(model->get_block_count());
 
     for (const auto& _inp_place : model->get_inputs()) {
         const auto& inp_place = std::dynamic_pointer_cast<TensorPlacePDPD>(_inp_place);
@@ -279,8 +286,30 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
                 int32_t block_idx = sub_block.get();  // op_desc.attrs("sub_block").block_idx();
 
                 subblock_inputs_outputs[block_idx] = std::make_tuple(op_desc.type(), inp_tensors, outp_tensors);
-            }
+            } else if (op_desc.type() == "while") {
+                std::vector<std::shared_ptr<TensorPlacePDPD>> outp_tensors;
+                std::vector<std::shared_ptr<TensorPlacePDPD>> inp_tensors;
 
+                auto outp_ports = op_place->get_output_ports();
+                for (auto outp_port : outp_ports["Out"]) {
+                    auto outp_tensor = outp_port->get_target_tensor_pdpd();
+                    outp_tensors.push_back(outp_tensor);
+                }
+                FRONT_END_GENERAL_CHECK(outp_tensors.size() > 0, "Port has no tensors connected.");
+
+                auto inp_ports = op_place->get_input_ports();
+                for (auto inp_port : inp_ports["X"]) {
+                    auto inp_tensor = inp_port->get_source_tensor_pdpd();
+                    inp_tensors.push_back(inp_tensor);
+                }
+                FRONT_END_GENERAL_CHECK(inp_tensors.size() > 0, "Port has no tensors connected.");
+
+                auto tmp_node = pdpd::NodeContext(DecoderPDPDProto(op_place), pdpd::NamedInputs());
+                auto sub_block = tmp_node.get_attribute<ov::BlockIndex>("sub_block");
+                int32_t block_idx = sub_block.get();
+
+                subblock_inputs_outputs[block_idx] = std::make_tuple(op_desc.type(), inp_tensors, outp_tensors);
+            }
             if (!named_outputs.empty()) {
                 if (op_desc.outputs().begin()->arguments().size() > 0) {
                     const auto& tensor_name = op_desc.outputs().begin()->arguments()[0];
@@ -303,6 +332,10 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
                             // usually means that it was overwritten using setTensorValue
                             if (!nodes_dict.count(var_name))
                                 nodes_dict[var_name] = ng_outputs[idx];
+                            else {
+                                //std::cout << "mainblock duplicated name " << var_name << std::endl;
+                                nodes_dict[var_name] = ng_outputs[idx];
+                            }
                         }
                     }
                 }
@@ -337,6 +370,7 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
 void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) const {
     ov::pass::Manager manager;
     manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+    manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
     manager.run_passes(functions[0]); // TODO: what if subblock has controlflow ops?
 }
 
@@ -346,6 +380,7 @@ void FrontEndPDPD::normalize(std::shared_ptr<Function> function) const {
 
     ov::pass::Manager manager;
     manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+    manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
     manager.run_passes(functions[0]); // TODO: what if subblock has controlflow ops?
 }
 
