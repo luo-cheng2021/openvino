@@ -2,16 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include "internal/op/conditional_block.hpp"
+
 #include <node_context.hpp>
 
 #include "default_opset.hpp"
-#include "internal/op/conditional_block.hpp"
 
 namespace ov {
 namespace frontend {
 namespace pdpd {
 namespace op {
-NamedOutputs conditional_block(const NodeContext& node) {   
+NamedOutputs conditional_block(const NodeContext& node) {
     const auto cond = node.get_ng_input("Cond");
     auto sub_block = node.get_attribute<ov::BlockIndex>("sub_block");
     const auto is_scalar_condition = node.get_attribute<bool>("is_scalar_condition", true);
@@ -23,11 +24,17 @@ NamedOutputs conditional_block(const NodeContext& node) {
     std::shared_ptr<Node> placehodler;
     if (node.has_ng_input("Input")) {
         const auto inputs = node.get_ng_inputs("Input");
-        placehodler = std::make_shared<ov::op::internal::ConditionalBlock>(inputs, cond, is_scalar_condition, sub_block.get(), num_outputs);
+        placehodler = std::make_shared<ov::op::internal::ConditionalBlock>(inputs,
+                                                                           cond,
+                                                                           is_scalar_condition,
+                                                                           sub_block.get(),
+                                                                           num_outputs);
+    } else {
+        placehodler = std::make_shared<ov::op::internal::ConditionalBlock>(cond,
+                                                                           is_scalar_condition,
+                                                                           sub_block.get(),
+                                                                           num_outputs);
     }
-    else {
-        placehodler = std::make_shared<ov::op::internal::ConditionalBlock>(cond, is_scalar_condition, sub_block.get(), num_outputs);
-    }     
     const auto split_outputs = placehodler->outputs();
 
     auto out_names = node.get_output_names();

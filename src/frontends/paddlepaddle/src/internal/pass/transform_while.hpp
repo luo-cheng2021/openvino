@@ -10,12 +10,13 @@
 namespace ov {
 namespace frontend {
 namespace pdpd {
-namespace pass {  
+namespace pass {
 
 class TransformWhile : public ov::pass::MatcherPass {
 public:
     OPENVINO_RTTI("ov::frontend::pass::TransformWhile");
     TransformWhile(std::vector<std::shared_ptr<Function>> functions);
+
 private:
     std::vector<std::shared_ptr<Function>> m_functions;
 };

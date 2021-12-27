@@ -6,26 +6,24 @@
 
 #include <fstream>
 #include <map>
+#include <ngraph/pass/visualize_tree.hpp>
 #include <string>
 #include <vector>
 
 #include "decoder.hpp"
 #include "framework.pb.h"
+#include "internal/pass/transform_if.hpp"
+#include "internal/pass/transform_while.hpp"
 #include "node_context.hpp"
 #include "op_table.hpp"
 #include "openvino/core/variant.hpp"
 #include "openvino/opsets/opset7.hpp"
+#include "openvino/pass/manager.hpp"
 #include "paddlepaddle_frontend/exceptions.hpp"
 #include "paddlepaddle_frontend/model.hpp"
 #include "paddlepaddle_frontend/place.hpp"
 #include "pdpd_fw_node.hpp"
 #include "pdpd_utils.hpp"
-
-#include "openvino/pass/manager.hpp"
-#include "internal/pass/transform_if.hpp"
-#include "internal/pass/transform_while.hpp"
-
-#include <ngraph/pass/visualize_tree.hpp>
 
 using namespace ov::opset7;
 using namespace ov;
@@ -200,7 +198,7 @@ std::shared_ptr<Function> FrontEndPDPD::convert_subblock(
                             if (!nodes_dict.count(var_name))
                                 nodes_dict[var_name] = ng_outputs[idx];
                             else {
-                                //std::cout << "subblock duplicated name " << var_name << std::endl;
+                                // std::cout << "subblock duplicated name " << var_name << std::endl;
                                 nodes_dict[var_name] = ng_outputs[idx];
                             }
                         }
@@ -333,7 +331,7 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
                             if (!nodes_dict.count(var_name))
                                 nodes_dict[var_name] = ng_outputs[idx];
                             else {
-                                //std::cout << "mainblock duplicated name " << var_name << std::endl;
+                                // std::cout << "mainblock duplicated name " << var_name << std::endl;
                                 nodes_dict[var_name] = ng_outputs[idx];
                             }
                         }
@@ -371,7 +369,7 @@ void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) c
     ov::pass::Manager manager;
     manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
     manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
-    manager.run_passes(functions[0]); // TODO: what if subblock has controlflow ops?
+    manager.run_passes(functions[0]);  // TODO: what if subblock has controlflow ops?
 }
 
 void FrontEndPDPD::normalize(std::shared_ptr<Function> function) const {
@@ -381,7 +379,7 @@ void FrontEndPDPD::normalize(std::shared_ptr<Function> function) const {
     ov::pass::Manager manager;
     manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
     manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
-    manager.run_passes(functions[0]); // TODO: what if subblock has controlflow ops?
+    manager.run_passes(functions[0]);  // TODO: what if subblock has controlflow ops?
 }
 
 bool FrontEndPDPD::supported_impl(const std::vector<std::shared_ptr<Variant>>& variants) const {
@@ -463,7 +461,7 @@ std::shared_ptr<ov::Function> FrontEndPDPD::convert(InputModel::Ptr model) const
         [&](const std::map<std::string, Output<Node>>& nodes_dict, const std::shared_ptr<OpPlacePDPD>& op_place) {
             return pdpd::make_ng_node(nodes_dict, op_place, CREATORS_MAP);
         });
-    
+
     normalize(f);
     return ngraph::clone_function(*f[0]);
 }
@@ -496,7 +494,7 @@ std::shared_ptr<ov::Function> FrontEndPDPD::convert_partially(InputModel::Ptr mo
             }
             return named_outputs;
         });
-    
+
     normalize(f);
 
     return ngraph::clone_function(*f[0]);

@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include "internal/op/while.hpp"
+
 #include <node_context.hpp>
 
 #include "default_opset.hpp"
-
-#include "internal/op/while.hpp"
 
 namespace ov {
 namespace frontend {

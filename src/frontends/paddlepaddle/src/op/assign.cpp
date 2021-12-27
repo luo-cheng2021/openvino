@@ -26,8 +26,8 @@ NamedOutputs assign(const NodeContext& node) {
     auto read_value = std::make_shared<default_opset::ReadValue>(x, variable);
     auto assign = std::make_shared<default_opset::Assign>(read_value, variable);
 #else
-    //auto read_value = std::make_shared<ov::opset3::ReadValue>(x, "variable_id");
-    //auto assign = std::make_shared<ov::opset3::Assign>(read_value, "variable_id");
+    // auto read_value = std::make_shared<ov::opset3::ReadValue>(x, "variable_id");
+    // auto assign = std::make_shared<ov::opset3::Assign>(read_value, "variable_id");
     auto assign = std::make_shared<ov::opset3::Convert>(x, x.get_element_type());
 #endif
 

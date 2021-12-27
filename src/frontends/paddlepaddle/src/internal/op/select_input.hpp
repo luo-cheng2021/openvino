@@ -16,7 +16,10 @@ public:
 
     SelectInput() = default;
 
-    SelectInput(const Output<Node>& args0, const Output<Node>& args1, const Output<Node>& mask, const element::Type output_type);
+    SelectInput(const Output<Node>& args0,
+                const Output<Node>& args1,
+                const Output<Node>& mask,
+                const element::Type output_type);
 
     void validate_and_infer_types() override;
 
@@ -25,7 +28,7 @@ public:
     std::shared_ptr<Node> clone_with_new_inputs(const OutputVector& new_args) const override;
 
 private:
-    element::Type m_output_type;    
+    element::Type m_output_type;
 };
 
 }  // namespace internal

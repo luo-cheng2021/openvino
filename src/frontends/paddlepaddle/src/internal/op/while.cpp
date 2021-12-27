@@ -17,18 +17,17 @@ BWDCMP_RTTI_DEFINITION(op::internal::While);
 
 op::internal::While::While(const OutputVector& inputs, int32_t sub_block, const std::vector<std::string>& output_names)
     : Op(inputs),
-    m_sub_block(sub_block),
-    m_output_names(output_names) {
+      m_sub_block(sub_block),
+      m_output_names(output_names) {
     constructor_validate_and_infer_types();
 }
 
-std::shared_ptr<Node> op::internal::While::clone_with_new_inputs(
-    const OutputVector& new_args) const {
+std::shared_ptr<Node> op::internal::While::clone_with_new_inputs(const OutputVector& new_args) const {
     return make_shared<While>(new_args, m_sub_block, m_output_names);
 }
 
 bool op::internal::While::visit_attributes(AttributeVisitor& visitor) {
-    visitor.on_attribute("sub_block", m_sub_block);    
+    visitor.on_attribute("sub_block", m_sub_block);
     return true;
 }
 

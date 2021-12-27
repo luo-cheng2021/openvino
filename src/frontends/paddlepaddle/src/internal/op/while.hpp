@@ -27,6 +27,7 @@ public:
     int32_t m_sub_block = 0;
 
     std::vector<std::string> m_output_names;
+
 private:
 };
 

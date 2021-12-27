@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include "internal/pass/transform_while.hpp"
+
 #include <ngraph/ngraph.hpp>
 #include <ngraph/pattern/matcher.hpp>
 #include <ngraph/pattern/op/or.hpp>
@@ -9,18 +11,14 @@
 #include <ngraph/rt_info.hpp>
 #include <ngraph/variant.hpp>
 
-#include "openvino/op/util/op_types.hpp"
-#include "openvino/opsets/opset8.hpp"
-#include "openvino/pass/pattern/op/label.hpp"
-#include "paddlepaddle_frontend/exceptions.hpp"
-
+#include "../../default_opset.hpp"
 #include "internal/op/conditional_block.hpp"
 #include "internal/op/while.hpp"
-
-#include "internal/pass/transform_while.hpp"
-
-#include "../../default_opset.hpp"
+#include "openvino/op/util/op_types.hpp"
+#include "openvino/opsets/opset8.hpp"
 #include "openvino/pass/constant_folding.hpp"
+#include "openvino/pass/pattern/op/label.hpp"
+#include "paddlepaddle_frontend/exceptions.hpp"
 
 using namespace std;
 using namespace ov;

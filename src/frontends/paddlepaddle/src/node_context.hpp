@@ -170,7 +170,7 @@ public:
     /// Returns all inputs with a given name
     OutputVector get_ng_inputs(const std::string& name) const {
         return name_map.at(name);
-    } 
+    }
 
     /// Returns all inputs in order they appear in map. This is used for FrameworkNode
     /// creation
