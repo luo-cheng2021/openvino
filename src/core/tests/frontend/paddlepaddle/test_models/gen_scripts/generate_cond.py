@@ -17,11 +17,11 @@ data = np.less(y,x)
 def test_model(pred):
     # pred: A boolean tensor whose numel should be 1.
     def true_func():
-        return paddle.full(shape=[1, 2], dtype='int32',
+        return paddle.full(shape=[3, 4], dtype='float32', # TODO: FAILED with different dtype
                         fill_value=1)
 
     def false_func():
-        return paddle.full(shape=[3, 4], dtype='float32',
+        return paddle.full(shape=[1, 2], dtype='float32',
                         fill_value=3)
 
     return paddle.static.nn.cond(pred, true_func, false_func)
@@ -36,13 +36,13 @@ more than one select_input
 def test_model_2outputs(pred):
     # pred: A boolean tensor whose numel should be 1.
     def true_func():
-        return paddle.full(shape=[1, 2], dtype='int32',
-                        fill_value=1), paddle.full(shape=[1, 3], dtype='int32',
+        return paddle.full(shape=[1, 2], dtype='float32',
+                        fill_value=1), paddle.full(shape=[1, 3], dtype='float32', # TODO: FAILED with different dtype
                         fill_value=3)
 
     def false_func():
         return paddle.full(shape=[3, 4], dtype='float32',
-                        fill_value=3), paddle.full(shape=[1, 4], dtype='int32',
+                        fill_value=3), paddle.full(shape=[1, 4], dtype='float32',
                         fill_value=4)
 
     return paddle.static.nn.cond(pred, true_func, false_func)

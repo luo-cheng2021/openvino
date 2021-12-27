@@ -10,12 +10,13 @@
 namespace ov {
 namespace frontend {
 namespace pdpd {
-namespace pass {  
+namespace pass {
 
 class TransformIf : public ov::pass::MatcherPass {
 public:
     OPENVINO_RTTI("ov::frontend::pass::TransformIf");
     TransformIf(std::vector<std::shared_ptr<Function>> functions);
+
 private:
     std::vector<std::shared_ptr<Function>> m_functions;
 };

@@ -15,7 +15,10 @@ using namespace ov;
 
 BWDCMP_RTTI_DEFINITION(op::internal::ConditionalBlock);
 
-op::internal::ConditionalBlock::ConditionalBlock(const Output<Node>& cond, bool is_scalar_condition, int32_t sub_block_index, int32_t num_outputs)
+op::internal::ConditionalBlock::ConditionalBlock(const Output<Node>& cond,
+                                                 bool is_scalar_condition,
+                                                 int32_t sub_block_index,
+                                                 int32_t num_outputs)
     : Op({cond}),
       m_is_scalar_condition(is_scalar_condition),
       m_sub_block_index(sub_block_index),
@@ -23,26 +26,36 @@ op::internal::ConditionalBlock::ConditionalBlock(const Output<Node>& cond, bool 
     constructor_validate_and_infer_types();
 }
 
-op::internal::ConditionalBlock::ConditionalBlock(const OutputVector& inputs, const Output<Node>& cond, bool is_scalar_condition, int32_t sub_block_index, int32_t num_outputs)
-    : Op({cond}), // TODO
-      m_is_scalar_condition(is_scalar_condition),
+op::internal::ConditionalBlock::ConditionalBlock(const OutputVector& inputs,
+                                                 const Output<Node>& cond,
+                                                 bool is_scalar_condition,
+                                                 int32_t sub_block_index,
+                                                 int32_t num_outputs)
+    : m_is_scalar_condition(is_scalar_condition),
       m_sub_block_index(sub_block_index),
       m_num_outputs(num_outputs) {
+    OutputVector new_args;
+    std::move(inputs.begin(), inputs.end(), std::back_inserter(new_args));
+    new_args.emplace_back(cond);
+    set_arguments(new_args);
     constructor_validate_and_infer_types();
 }
 
-std::shared_ptr<Node> op::internal::ConditionalBlock::clone_with_new_inputs(
-    const OutputVector& new_args) const {
-    check_new_args_count(this, new_args); // FIXME: have to?
+std::shared_ptr<Node> op::internal::ConditionalBlock::clone_with_new_inputs(const OutputVector& new_args) const {
+    check_new_args_count(this, new_args);  // FIXME: have to?
 
-    if (new_args.size() == 1) { // w/o inputs
+    if (new_args.size() == 1) {  // w/o inputs
         return make_shared<ConditionalBlock>(new_args.at(0), m_is_scalar_condition, m_sub_block_index, m_num_outputs);
     } else {
         OutputVector inputs_args;
-        for (auto i = 0; i < new_args.size()-1; i++) {
+        for (auto i = 0; i < new_args.size() - 1; i++) {
             inputs_args.push_back(new_args[i]);
-        }        
-        return make_shared<ConditionalBlock>(inputs_args, new_args.back(), m_is_scalar_condition, m_sub_block_index, m_num_outputs);
+        }
+        return make_shared<ConditionalBlock>(inputs_args,
+                                             new_args.back(),
+                                             m_is_scalar_condition,
+                                             m_sub_block_index,
+                                             m_num_outputs);
     }
 }
 
@@ -59,4 +72,13 @@ void op::internal::ConditionalBlock::validate_and_infer_types() {
     for (size_t i = 0; i < m_num_outputs; ++i) {
         set_output_type(i, element::dynamic, {Dimension::dynamic()});
     }
+}
+
+const OutputVector op::internal::ConditionalBlock::get_inputs_from_parent() const {
+    OutputVector result;
+    const auto& inputs = this->input_values();
+    for (size_t i = 0; i < inputs.size() - 1; i++) {  // execpt the one at last, which is "cond".
+        result.push_back(inputs[i]);
+    }
+    return result;
 }
