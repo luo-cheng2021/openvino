@@ -14,6 +14,7 @@
 #include "../../default_opset.hpp"
 #include "internal/op/conditional_block.hpp"
 #include "internal/op/select_input.hpp"
+#include "ngraph/op/util/op_types.hpp"
 #include "openvino/op/util/op_types.hpp"
 #include "openvino/opsets/opset8.hpp"
 #include "openvino/pass/pattern/op/label.hpp"
@@ -24,67 +25,14 @@ using namespace ov;
 using namespace ov::pass;
 using namespace opset8;
 
-static std::shared_ptr<opset8::If> build_if_node(
-    const std::shared_ptr<ov::op::internal::ConditionalBlock> cond0 /*False branch*/,
-    const std::shared_ptr<ov::op::internal::ConditionalBlock> cond1 /*True branch*/,
-    const std::shared_ptr<ov::op::internal::SelectInput> mask,
-    const std::shared_ptr<opset8::Convert> cast,
-    const std::shared_ptr<opset8::LogicalNot> logicalnot,
-    std::vector<std::shared_ptr<Function>> functions) {
-    // then <-> cond0, else <-> cond1 as we switched the condition.
-    const int32_t then_idx = cond0->get_subblock_index();
-    const auto& then_branch = functions[then_idx];
-
-    const int32_t else_idx = cond1->get_subblock_index();
-    const auto& else_branch = functions[else_idx];
-
-    const auto& then_params = then_branch->get_parameters();
-    const auto& else_params = else_branch->get_parameters();
-
-    auto if_node = std::make_shared<opset8::If>(logicalnot);
-    if_node->set_then_body(then_branch);
-    if_node->set_else_body(else_branch);
-
-    const auto then_branch_inputs_from_parent = cond0->get_inputs_from_parent();
-    NGRAPH_CHECK(then_branch_inputs_from_parent.size() == then_params.size(),
-                 "Number of inputs to 'then_branch' is invalid. Expected " +
-                     std::to_string(then_branch_inputs_from_parent.size()) + ", actual " +
-                     std::to_string(then_params.size()));
-    auto then_param = then_params.cbegin();
-    for (const auto& from_parent : then_branch_inputs_from_parent) {
-        if_node->set_input(from_parent, *then_param, nullptr);
-        then_param++;
-    }
-
-    const auto else_branch_inputs_from_parent = cond1->get_inputs_from_parent();
-    NGRAPH_CHECK(else_branch_inputs_from_parent.size() == else_params.size(),
-                 "Number of inputs to 'else_branch' is invalid. Expected " +
-                     std::to_string(else_branch_inputs_from_parent.size()) + ", actual " +
-                     std::to_string(else_params.size()));
-    auto else_param = else_params.cbegin();
-    for (const auto& from_parent : else_branch_inputs_from_parent) {
-        if_node->set_input(from_parent, nullptr, *else_param);
-        else_param++;
-    }
-    NGRAPH_CHECK(then_branch->get_results().size() == else_branch->get_results().size(),
-                 "'then' and 'else' branches have to have the same number of outputs");
-    auto else_result = else_branch->get_results().cbegin();
-    for (const auto& then_result : then_branch->get_results()) {
-        if_node->set_output(then_result, *else_result);
-        else_result++;
-    }
-    if_node->validate_and_infer_types();
-
-    return if_node;
-}
-
 ov::frontend::pdpd::pass::TransformIf::TransformIf(std::vector<std::shared_ptr<Function>> functions) {
-    // auto false_label = ngraph::pattern::wrap_type<opset8::LogicalNot>(); // TODO: false_label, cond1_label,
-    // cast_label has the same producer. auto cond0_label =
-    // ngraph::pattern::wrap_type<ov::op::internal::ConditionalBlock>(); auto cond1_label =
+    // auto false_label = ngraph::pattern::wrap_type<opset8::LogicalNot>(); // TODO: false_label,
+    // conditional_block1_label, cast_label has the same producer. auto conditional_block0_label =
+    // ngraph::pattern::wrap_type<ov::op::internal::ConditionalBlock>(); auto conditional_block1_label =
     // ngraph::pattern::wrap_type<ov::op::internal::ConditionalBlock>({false_label}); auto cast_label =
     // ngraph::pattern::wrap_type<opset8::Convert>(); auto select_label =
-    //     ngraph::pattern::wrap_type<ov::op::internal::SelectInput>({cond0_label, cond1_label, cast_label});
+    //     ngraph::pattern::wrap_type<ov::op::internal::SelectInput>({conditional_block0_label,
+    //     conditional_block1_label, cast_label});
     auto select_label = ngraph::pattern::wrap_type<ov::op::internal::SelectInput>();
 
     matcher_pass_callback callback = [functions](pattern::Matcher& m) -> bool {
@@ -104,11 +52,84 @@ ov::frontend::pdpd::pass::TransformIf::TransformIf(std::vector<std::shared_ptr<F
             return false;
         }
 
-        auto if_node = build_if_node(conditional_block0, conditional_block1, select_input, cast, logicalnot, functions);
+        /* build_if_node */
 
-        replace_node(select_input, if_node);
+        // then <-> conditional_block0, else <-> conditional_block1 as we switched the condition.
+        const int32_t then_idx = conditional_block0->get_subblock_index();
+        const auto& then_branch = functions[then_idx];
+
+        const int32_t else_idx = conditional_block1->get_subblock_index();
+        const auto& else_branch = functions[else_idx];
+
+        const auto& then_params = then_branch->get_parameters();
+        const auto& else_params = else_branch->get_parameters();
+
+        auto if_node = std::make_shared<opset8::If>(logicalnot);
+        if_node->set_then_body(then_branch);
+        if_node->set_else_body(else_branch);
+
+        const auto then_branch_inputs_from_parent = conditional_block0->get_inputs_from_parent();
+        NGRAPH_CHECK(then_branch_inputs_from_parent.size() == then_params.size(),
+                     "Number of inputs to 'then_branch' is invalid. Expected " +
+                         std::to_string(then_branch_inputs_from_parent.size()) + ", actual " +
+                         std::to_string(then_params.size()));
+        auto then_param = then_params.cbegin();
+        for (const auto& from_parent : then_branch_inputs_from_parent) {
+            if_node->set_input(from_parent, *then_param, nullptr);
+            then_param++;
+        }
+
+        const auto else_branch_inputs_from_parent = conditional_block1->get_inputs_from_parent();
+        NGRAPH_CHECK(else_branch_inputs_from_parent.size() == else_params.size(),
+                     "Number of inputs to 'else_branch' is invalid. Expected " +
+                         std::to_string(else_branch_inputs_from_parent.size()) + ", actual " +
+                         std::to_string(else_params.size()));
+        auto else_param = else_params.cbegin();
+        for (const auto& from_parent : else_branch_inputs_from_parent) {
+            if_node->set_input(from_parent, nullptr, *else_param);
+            else_param++;
+        }
+        NGRAPH_CHECK(then_branch->get_results().size() == else_branch->get_results().size(),
+                     "'then' and 'else' branches have to have the same number of outputs");
+        auto else_result = else_branch->get_results().cbegin();
+        for (const auto& then_result : then_branch->get_results()) {
+            if_node->set_output(then_result, *else_result);
+            else_result++;
+        }
+        if_node->validate_and_infer_types();
+
+        /* replace conditional_block and select_input nodes. */
+
+        NodeVector select_nodes;
+        for (auto i = 0; i < conditional_block0->outputs().size(); i++) {
+            for (auto& cond0_consumer : conditional_block0->outputs()[i].get_target_inputs()) {
+                if (is_type<ov::op::internal::SelectInput>(cond0_consumer.get_node())) {
+                    const auto select_node =
+                        dynamic_cast<ov::op::internal::SelectInput*>(cond0_consumer.get_node())->shared_from_this();
+                    std::cout << "HERE GOT select_input !!" << std::endl;
+
+                    // replace each output of the select_input node
+                    for (auto& output : select_node->outputs()) {
+                        for (auto& consumer : output.get_target_inputs()) {
+                            std::cout << "HERE GOT a consumer !!" << std::endl;
+                            consumer.replace_source_output(if_node->outputs()[i]);
+                        }
+                    }
+
+                    if_node->add_node_control_dependents(select_node);
+                    if_node->add_node_control_dependencies(select_node);
+                    select_node->clear_control_dependents();
+
+                    select_nodes.emplace_back(select_node);
+                } else {
+                    FRONT_END_GENERAL_CHECK(
+                        "Only select_input allowed to be consumer of conditional_block in this pattern.");
+                }
+            }
+        }
+
+        copy_runtime_info(select_nodes, if_node);
         if_node->set_friendly_name(if_node->get_friendly_name());
-        copy_runtime_info(select_input, if_node);
 
         return true;
     };
