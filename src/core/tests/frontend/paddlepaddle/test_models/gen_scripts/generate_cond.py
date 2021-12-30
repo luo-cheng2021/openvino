@@ -26,7 +26,7 @@ def test_model(pred):
 
     return paddle.static.nn.cond(pred, true_func, false_func)
 
-exportModel('conditional_block', test_model, [data], target_dir=sys.argv[1])
+exportModel('conditional_block_const', test_model, [data], target_dir=sys.argv[1])
 
 
 '''
@@ -47,9 +47,19 @@ def test_model_2outputs(pred):
 
     return paddle.static.nn.cond(pred, true_func, false_func)
 
-exportModel('conditional_block_2outputs', test_model_2outputs, [data], target_dir=sys.argv[1])
+exportModel('conditional_block_const_2outputs', test_model_2outputs, [data], target_dir=sys.argv[1])
 
 
+'''
+more than one select_input with 2 inputs
+'''
+@paddle.jit.to_static
+def test_model_2inputs_2outputs(a, b):
+    return paddle.static.nn.cond(a < b, lambda: (a, a * b), lambda: (b, a * b) )
+
+a = np.full(shape=[1], dtype='float32', fill_value=0.1)
+b = np.full(shape=[1], dtype='float32', fill_value=0.23)
+exportModel('conditional_block_2inputs_2outputs', test_model_2inputs_2outputs, [a, b], target_dir=sys.argv[1])
 
 '''
 '''
@@ -60,7 +70,7 @@ def test_model2(a, b):
 
 a = np.full(shape=[1], dtype='float32', fill_value=0.1)
 b = np.full(shape=[1], dtype='float32', fill_value=0.23)
-exportModel('conditional_block2', test_model2, [a, b], target_dir=sys.argv[1])
+exportModel('conditional_block_2inputs', test_model2, [a, b], target_dir=sys.argv[1])
 
 
 '''
@@ -72,7 +82,7 @@ def test_model_dyn(a, b):
 
 a = np.full(shape=[1], dtype='float32', fill_value=0.1)
 b = np.full(shape=[1], dtype='float32', fill_value=0.23)
-exportModel('conditional_block_dyn', test_model_dyn, [a, b], target_dir=sys.argv[1])
+exportModel('conditional_block_2inputs_dyn', test_model_dyn, [a, b], target_dir=sys.argv[1])
 
 
 '''
@@ -86,4 +96,4 @@ def test_model_dyn_2outputs(a, b):
 
 a = np.full(shape=[1], dtype='float32', fill_value=0.1)
 b = np.full(shape=[1], dtype='float32', fill_value=0.23)
-exportModel('conditional_block_dyn_2outputs', test_model_dyn_2outputs, [a, b], target_dir=sys.argv[1])
+exportModel('conditional_block_2inputs_dyn_2outputs', test_model_dyn_2outputs, [a, b], target_dir=sys.argv[1])
