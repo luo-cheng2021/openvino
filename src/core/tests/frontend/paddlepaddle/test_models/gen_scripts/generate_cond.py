@@ -103,6 +103,19 @@ exportModel('conditional_block_2inputs_dyn_2outputs', test_model_dyn_2outputs, [
 """question: how to make test case for only one 
 conditional_block ??   """
 """"""""""""""""""""""""""""""""""""""""""""""""""""""
+@paddle.jit.to_static
+def test_model_dyn_conditionalblock_only(a):
+    rpn_rois_list = []
+
+    if a.shape[0] >= 1:
+        rpn_rois_list.append(a)
+
+    return rpn_rois_list[0]
+
+a = paddle.to_tensor([[1.0, 2.0, 3.0],
+                      [4.0, 5.0, 6.0]])
+exportModel('conditional_block_dyn_conditionalblock_only', test_model_dyn_conditionalblock_only, [a], target_dir=sys.argv[1])
+
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""
 """return type: tensor, tuple(tensor), list(tensor) 
