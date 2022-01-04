@@ -126,6 +126,26 @@ def loop_dyn_x():
     x = np.full(shape=[1], fill_value=1, dtype='int64')
     return exportModel('loop_dyn_x', test_model, [x], target_dir=sys.argv[1])
 
+def loop_if():
+    paddle.disable_static()
+
+    @paddle.jit.to_static
+    def test_model(x):
+        i = paddle.full(shape=[1], fill_value=0, dtype='int64')
+        
+        i = i + x
+        t = paddle.full(shape=[1], fill_value=10, dtype='int64')
+
+        while t >= i:
+            if i < 5:
+                i = i + x
+            else:
+                i = i + 2 * x
+
+        return i
+
+    x = np.full(shape=[1], fill_value=1, dtype='int64')
+    return exportModel('loop_if', test_model, [x], target_dir=sys.argv[1])
 
 if __name__ == "__main__":
     print(loop())
@@ -135,5 +155,6 @@ if __name__ == "__main__":
     print(loop_x())
 
     print(loop_dyn_x().numpy())
+    print(loop_if().numpy())
 
 

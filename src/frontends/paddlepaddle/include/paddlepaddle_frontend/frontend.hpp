@@ -66,7 +66,7 @@ protected:
     InputModel::Ptr load_impl(const std::vector<std::shared_ptr<Variant>>& params) const override;
 
 private:
-    static std::shared_ptr<Function> convert_subblock(
+    static std::vector<std::shared_ptr<Function>> convert_subblock(
         const std::shared_ptr<InputModelPDPD>& model,
         const int32_t block_idx,
         const std::vector<std::shared_ptr<TensorPlacePDPD>>& input_tensors,

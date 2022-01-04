@@ -127,5 +127,5 @@ TEST_P(FrontEndFuzzyOpTest, testOpFuzzy) {
     ASSERT_NE(function, nullptr);
 
     // run
-    runConvertedModel<test::INTERPRETER_Engine, TestCaseType::DYNAMIC>(function, m_modelFile);
+    runConvertedModel<test::IE_CPU_Engine, TestCaseType::DYNAMIC>(function, m_modelFile);
 }

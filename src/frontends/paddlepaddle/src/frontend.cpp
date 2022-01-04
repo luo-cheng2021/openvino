@@ -140,7 +140,7 @@ std::istream* variant_to_stream_ptr(const std::shared_ptr<Variant>& variant, std
 }  // namespace
 }  // namespace pdpd
 
-std::shared_ptr<Function> FrontEndPDPD::convert_subblock(
+std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_subblock(
     const std::shared_ptr<InputModelPDPD>& model,
     const int32_t block_idx,
     const std::vector<std::shared_ptr<TensorPlacePDPD>>& input_tensors,
@@ -152,6 +152,12 @@ std::shared_ptr<Function> FrontEndPDPD::convert_subblock(
     ResultVector result_nodes;
     OutputVector output_nodes;
 
+    using PaddleOpType = std::string;
+    std::vector<std::tuple<PaddleOpType,
+                           std::vector<std::shared_ptr<TensorPlacePDPD>>,
+                           std::vector<std::shared_ptr<TensorPlacePDPD>>>>
+        subblock_inputs_outputs;  // keep info of controlflow ops
+    subblock_inputs_outputs.resize(model->get_block_count());
     std::map<std::string, pdpd::CreatorFunction> CREATORS_MAP = pdpd::get_supported_ops();
 
     for (const auto& _inp_place : input_tensors) {
@@ -174,7 +180,53 @@ std::shared_ptr<Function> FrontEndPDPD::convert_subblock(
             continue;
         } else {
             pdpd::NamedOutputs named_outputs = pdpd::make_ng_node(nodes_dict, op_place, CREATORS_MAP);
+            if (op_desc.type() == "conditional_block") {
+                std::vector<std::shared_ptr<TensorPlacePDPD>> outp_tensors;
+                std::vector<std::shared_ptr<TensorPlacePDPD>> inp_tensors;
 
+                auto outp_ports = op_place->get_output_ports();
+                for (auto outp_port : outp_ports["Out"]) {
+                    auto outp_tensor = outp_port->get_target_tensor_pdpd();  // get_target_tensor();
+                    outp_tensors.push_back(outp_tensor);
+                }
+                FRONT_END_GENERAL_CHECK(outp_tensors.size() > 0, "Port has no tensors connected.");
+
+                auto inp_ports = op_place->get_input_ports();
+                for (auto inp_port : inp_ports["Input"]) {
+                    auto inp_tensor = inp_port->get_source_tensor_pdpd();
+                    inp_tensors.push_back(inp_tensor);
+                }
+                // FRONT_END_GENERAL_CHECK(inp_tensors.size() > 0, "Port has no tensors connected.");
+
+                auto tmp_node = pdpd::NodeContext(DecoderPDPDProto(op_place), pdpd::NamedInputs());
+                auto sub_block = tmp_node.get_attribute<ov::BlockIndex>("sub_block");
+                int32_t block_idx = sub_block.get();  // op_desc.attrs("sub_block").block_idx();
+
+                subblock_inputs_outputs[block_idx] = std::make_tuple(op_desc.type(), inp_tensors, outp_tensors);
+            } else if (op_desc.type() == "while") {
+                std::vector<std::shared_ptr<TensorPlacePDPD>> outp_tensors;
+                std::vector<std::shared_ptr<TensorPlacePDPD>> inp_tensors;
+
+                auto outp_ports = op_place->get_output_ports();
+                for (auto outp_port : outp_ports["Out"]) {
+                    auto outp_tensor = outp_port->get_target_tensor_pdpd();
+                    outp_tensors.push_back(outp_tensor);
+                }
+                FRONT_END_GENERAL_CHECK(outp_tensors.size() > 0, "Port has no tensors connected.");
+
+                auto inp_ports = op_place->get_input_ports();
+                for (auto inp_port : inp_ports["X"]) {
+                    auto inp_tensor = inp_port->get_source_tensor_pdpd();
+                    inp_tensors.push_back(inp_tensor);
+                }
+                FRONT_END_GENERAL_CHECK(inp_tensors.size() > 0, "Port has no tensors connected.");
+
+                auto tmp_node = pdpd::NodeContext(DecoderPDPDProto(op_place), pdpd::NamedInputs());
+                auto sub_block = tmp_node.get_attribute<ov::BlockIndex>("sub_block");
+                int32_t block_idx = sub_block.get();
+
+                subblock_inputs_outputs[block_idx] = std::make_tuple(op_desc.type(), inp_tensors, outp_tensors);
+            }
             if (!named_outputs.empty()) {
                 if (op_desc.outputs().begin()->arguments().size() > 0) {
                     const auto& tensor_name = op_desc.outputs().begin()->arguments()[0];
@@ -218,11 +270,26 @@ std::shared_ptr<Function> FrontEndPDPD::convert_subblock(
         output_nodes.push_back(nodes_dict.at(input_var_name));
     }
 
+    std::shared_ptr<ov::Function> main_block_func;
     if (parameter_nodes.size() > 0) {
-        return std::make_shared<ov::Function>(result_nodes, parameter_nodes);
+        main_block_func = std::make_shared<ov::Function>(result_nodes, parameter_nodes);
+    } else {
+        main_block_func = std::make_shared<ov::Function>(output_nodes);
     }
 
-    return std::make_shared<ov::Function>(output_nodes);
+    /* convert each sub block */
+    std::vector<std::shared_ptr<Function>> block_funcs;
+    block_funcs.push_back(main_block_func);
+
+    for (int32_t block_idx = 1; block_idx < model->get_block_count(); block_idx++) {
+        auto ctl_op_info = subblock_inputs_outputs[block_idx];
+        if (std::get<0>(ctl_op_info).size() <= 0)
+            continue;
+        auto sub_block_func = convert_subblock(model, block_idx, std::get<1>(ctl_op_info), std::get<2>(ctl_op_info));
+        block_funcs.insert(block_funcs.end(), sub_block_func.begin(), sub_block_func.end());
+    }
+
+    return block_funcs;
 }
 
 std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
@@ -358,28 +425,28 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
 
     for (int32_t block_idx = 1; block_idx < model->get_block_count(); block_idx++) {
         auto ctl_op_info = subblock_inputs_outputs[block_idx];
+        if (std::get<0>(ctl_op_info).size() <= 0)
+            continue;        
         auto sub_block_func = convert_subblock(model, block_idx, std::get<1>(ctl_op_info), std::get<2>(ctl_op_info));
-        block_funcs.push_back(sub_block_func);
+        block_funcs.insert(block_funcs.end(), sub_block_func.begin(), sub_block_func.end());
     }
 
     return block_funcs;
 }
 
 void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) const {
-    ov::pass::Manager manager;
-    manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
-    manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
-    manager.run_passes(functions[0]);  // TODO: what if subblock has controlflow ops?
+    for (auto &function : functions) {
+        ov::pass::Manager manager;
+        manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+        manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
+        manager.run_passes(function);
+    }    
 }
 
 void FrontEndPDPD::normalize(std::shared_ptr<Function> function) const {
     std::vector<std::shared_ptr<Function>> functions;
     functions.push_back(function);
-
-    ov::pass::Manager manager;
-    manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
-    manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
-    manager.run_passes(functions[0]);  // TODO: what if subblock has controlflow ops?
+    normalize(functions);
 }
 
 bool FrontEndPDPD::supported_impl(const std::vector<std::shared_ptr<Variant>>& variants) const {
