@@ -296,18 +296,44 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
     const std::shared_ptr<InputModelPDPD>& model,
     std::function<std::map<std::string, OutputVector>(const std::map<std::string, Output<Node>>&,
                                                       const std::shared_ptr<OpPlacePDPD>&)> func) {
+    std::vector<std::shared_ptr<TensorPlacePDPD>> input_tensors;
+    std::vector<std::shared_ptr<TensorPlacePDPD>> output_tensors;
+    for (const auto& _inp_place : model->get_inputs()) {
+        const auto& inp_place = std::dynamic_pointer_cast<TensorPlacePDPD>(_inp_place);
+        input_tensors.emplace_back(inp_place);
+    }
+    for (const auto& _outp_place : model->get_outputs()) {
+        const auto& outp_place = std::dynamic_pointer_cast<TensorPlacePDPD>(_outp_place);
+        output_tensors.emplace_back(outp_place);
+    }
+    auto funcs = convert_each_node_recursive(model, 0, input_tensors, output_tensors, func);
+    std::vector<std::shared_ptr<Function>> funcs_vec;
+    for (auto &&item : funcs) {
+        funcs_vec.emplace_back(item.second);
+    }
+    
+    return funcs_vec;
+}
+
+std::map<int32_t, std::shared_ptr<Function>> FrontEndPDPD::convert_each_node_recursive(
+    const std::shared_ptr<InputModelPDPD>& model,
+    const int32_t block_idx,
+    const std::vector<std::shared_ptr<TensorPlacePDPD>>& input_tensors,
+    const std::vector<std::shared_ptr<TensorPlacePDPD>>& output_tensors,
+    std::function<std::map<std::string, OutputVector>(const std::map<std::string, Output<Node>>&,
+                                                      const std::shared_ptr<OpPlacePDPD>&)> func) {
     auto nodes_dict(model->get_tensor_values());  // std::map<pdpd::TensorName, Output<Node>>
     ParameterVector parameter_nodes;
     ResultVector result_nodes;
+    OutputVector output_nodes;
 
     using PaddleOpType = std::string;
-    std::vector<std::tuple<PaddleOpType,
+    std::map<int32_t, std::tuple<PaddleOpType,
                            std::vector<std::shared_ptr<TensorPlacePDPD>>,
                            std::vector<std::shared_ptr<TensorPlacePDPD>>>>
         subblock_inputs_outputs;  // keep info of controlflow ops
-    subblock_inputs_outputs.resize(model->get_block_count());
 
-    for (const auto& _inp_place : model->get_inputs()) {
+    for (const auto& _inp_place : input_tensors) {
         const auto& inp_place = std::dynamic_pointer_cast<TensorPlacePDPD>(_inp_place);
         const auto& var = inp_place->get_desc();
         const auto& shape = inp_place->get_partial_shape();
@@ -319,7 +345,7 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
         parameter_nodes.push_back(param);
     }
 
-    const auto& op_places = model->get_op_places(0);
+    const auto& op_places = model->get_op_places(block_idx);
     for (const auto& op_place : op_places) {
         const auto& op_desc = op_place->get_desc();
         if (op_desc.type() == "feed" || op_desc.type() == "fetch") {
@@ -408,27 +434,31 @@ std::vector<std::shared_ptr<Function>> FrontEndPDPD::convert_each_node(
         }
     }
 
-    for (const auto& _outp_place : model->get_outputs()) {
+    for (const auto& _outp_place : output_tensors) {
         const auto& outp_place = std::dynamic_pointer_cast<TensorPlacePDPD>(_outp_place);
         auto var = outp_place->get_desc();
         auto input_var_name = var.name();
         auto result = std::make_shared<Result>(nodes_dict.at(input_var_name));
         result->set_friendly_name(input_var_name + "/Result");
         result_nodes.push_back(result);
+        output_nodes.push_back(nodes_dict.at(input_var_name));
     }
 
-    auto main_block_func = std::make_shared<ov::Function>(result_nodes, parameter_nodes);
+    std::shared_ptr<ov::Function> main_block_func;
+    if (parameter_nodes.size() > 0) {
+        main_block_func = std::make_shared<ov::Function>(result_nodes, parameter_nodes);
+    } else {
+        main_block_func = std::make_shared<ov::Function>(output_nodes);
+    }
 
     /* convert each sub block */
-    std::vector<std::shared_ptr<Function>> block_funcs;
-    block_funcs.push_back(main_block_func);
+    std::map<int32_t, std::shared_ptr<Function>> block_funcs;
+    block_funcs.insert({block_idx, main_block_func});
 
-    for (int32_t block_idx = 1; block_idx < model->get_block_count(); block_idx++) {
-        auto ctl_op_info = subblock_inputs_outputs[block_idx];
-        if (std::get<0>(ctl_op_info).size() <= 0)
-            continue;        
-        auto sub_block_func = convert_subblock(model, block_idx, std::get<1>(ctl_op_info), std::get<2>(ctl_op_info));
-        block_funcs.insert(block_funcs.end(), sub_block_func.begin(), sub_block_func.end());
+    for (auto& item: subblock_inputs_outputs) {
+        auto ctl_op_info = item.second;
+        auto sub_block_func = convert_each_node_recursive(model, item.first, std::get<1>(ctl_op_info), std::get<2>(ctl_op_info), func);
+        block_funcs.insert(sub_block_func.begin(), sub_block_func.end());
     }
 
     return block_funcs;

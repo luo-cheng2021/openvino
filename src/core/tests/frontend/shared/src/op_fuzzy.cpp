@@ -128,4 +128,5 @@ TEST_P(FrontEndFuzzyOpTest, testOpFuzzy) {
 
     // run
     runConvertedModel<test::IE_CPU_Engine, TestCaseType::DYNAMIC>(function, m_modelFile);
+    //runConvertedModel<test::INTERPRETER_Engine, TestCaseType::DYNAMIC>(function, m_modelFile);
 }
