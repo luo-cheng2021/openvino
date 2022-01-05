@@ -75,7 +75,18 @@ ov::frontend::pdpd::pass::TransformIf::TransformIf(std::vector<std::shared_ptr<F
                          std::to_string(then_params.size()));
         auto then_param = then_params.cbegin();
         for (const auto& from_parent : then_branch_inputs_from_parent) {
-            if_node->set_input(from_parent, *then_param, nullptr);
+            auto node = from_parent;
+            if (node.get_node_shared_ptr() == conditional_block1) {
+                const auto& inputs = conditional_block1->input_values();
+                for (auto &&input : inputs) {
+                    if (input.get_node_shared_ptr()->get_friendly_name() == (*then_param)->get_friendly_name()) {
+                        node = input;
+                        break;
+                    }
+                }
+            }
+
+            if_node->set_input(node, *then_param, nullptr);
             then_param++;
         }
 
@@ -86,35 +97,47 @@ ov::frontend::pdpd::pass::TransformIf::TransformIf(std::vector<std::shared_ptr<F
                          std::to_string(else_params.size()));
         auto else_param = else_params.cbegin();
         for (const auto& from_parent : else_branch_inputs_from_parent) {
-            if_node->set_input(from_parent, nullptr, *else_param);
+            auto node = from_parent;
+            if (node.get_node_shared_ptr() == conditional_block0) {
+                const auto& inputs = conditional_block0->input_values();
+                for (auto &&input : inputs) {
+                    if (input.get_node_shared_ptr()->get_friendly_name() == (*else_param)->get_friendly_name()) {
+                        node = input;
+                        break;
+                    }
+                }
+            }
+
+            if_node->set_input(node, nullptr, *else_param);
             else_param++;
         }
-        NGRAPH_CHECK(then_branch->get_results().size() == else_branch->get_results().size(),
-                     "'then' and 'else' branches have to have the same number of outputs");
-        auto else_result = else_branch->get_results().cbegin();
-        for (const auto& then_result : then_branch->get_results()) {
-            if_node->set_output(then_result, *else_result);
-            else_result++;
-        }
-        if_node->validate_and_infer_types();
-
+        // NGRAPH_CHECK(then_branch->get_results().size() == else_branch->get_results().size(),
+        //              "'then' and 'else' branches have to have the same number of outputs");
+        auto else_results = else_branch->get_results();
+        auto then_results = then_branch->get_results();
         /* replace conditional_block and select_input nodes. */
 
         NodeVector select_nodes;
+        int if_outputs_idx = 0;
         for (auto i = 0; i < conditional_block0->outputs().size(); i++) {
             for (auto& cond0_consumer : conditional_block0->outputs()[i].get_target_inputs()) {
                 if (is_type<ov::op::internal::SelectInput>(cond0_consumer.get_node())) {
                     const auto select_node =
                         dynamic_cast<ov::op::internal::SelectInput*>(cond0_consumer.get_node())->shared_from_this();
                     std::cout << "HERE GOT select_input !!" << std::endl;
+                    auto then_out_idx = select_node->get_input_source_output(0).get_index();
+                    auto else_out_idx = select_node->get_input_source_output(1).get_index();
+                    if_node->set_output(then_results[then_out_idx], else_results[else_out_idx]);
+                    if_node->validate_and_infer_types();
 
                     // replace each output of the select_input node
                     for (auto& output : select_node->outputs()) {
                         for (auto& consumer : output.get_target_inputs()) {
                             std::cout << "HERE GOT a consumer !!" << std::endl;
-                            consumer.replace_source_output(if_node->outputs()[i]);
+                            consumer.replace_source_output(if_node->outputs()[if_outputs_idx]);
                         }
                     }
+                    if_outputs_idx++;
 
                     if_node->add_node_control_dependents(select_node);
                     if_node->add_node_control_dependencies(select_node);

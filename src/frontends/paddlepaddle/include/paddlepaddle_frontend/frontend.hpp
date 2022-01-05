@@ -66,12 +66,6 @@ protected:
     InputModel::Ptr load_impl(const std::vector<std::shared_ptr<Variant>>& params) const override;
 
 private:
-    static std::vector<std::shared_ptr<Function>> convert_subblock(
-        const std::shared_ptr<InputModelPDPD>& model,
-        const int32_t block_idx,
-        const std::vector<std::shared_ptr<TensorPlacePDPD>>& input_tensors,
-        const std::vector<std::shared_ptr<TensorPlacePDPD>>& output_tensors);
-
     static std::map<int32_t, std::shared_ptr<Function>> convert_each_node_recursive(
         const std::shared_ptr<InputModelPDPD>& model,
         const int32_t block_idx,

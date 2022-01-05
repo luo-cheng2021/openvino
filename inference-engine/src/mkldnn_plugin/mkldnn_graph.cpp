@@ -160,7 +160,7 @@ void MKLDNNGraph::Replicate(const std::shared_ptr<const ngraph::Function> &subgr
     for (auto unusedOutput : unusedOutputs) {
         auto portInfo = op2node[unusedOutput.get_node_shared_ptr()];
         auto parentNode = portInfo.first;
-        auto port = portInfo.second;
+        auto port = unusedOutput.get_index();
         const auto nodeName = std::string("stub_") + std::to_string(unusedOutput.get_index()) + "_" + parentNode->getName();
         const MKLDNNNodePtr outNode = std::make_shared<MKLDNNInputNode>(parentNode->outputShapes[port],
                                                                         parentNode->getOriginalOutputPrecisionAtPort(port),

@@ -37,9 +37,9 @@ void FrontEndFuzzyOpTest::doLoadFromFile() {
     std::tie(m_frontEnd, m_inputModel) = FrontEndTestUtils::load_from_file(m_fem, m_feName, m_modelFile);
 }
 
-template <typename T1, typename T2>
+template <typename T1, typename T2, TestCaseType tct = TestCaseType::STATIC>
 inline void addInputOutput(cnpy::NpyArray& npy_array,
-                           test::TestCase<T2, TestCaseType::DYNAMIC>& test_case,
+                           test::TestCase<T2, tct>& test_case,
                            bool is_input = true) {
     T1* npy_begin = npy_array.data<T1>();
     std::vector<T1> data(npy_begin, npy_begin + npy_array.num_vals);
@@ -127,6 +127,6 @@ TEST_P(FrontEndFuzzyOpTest, testOpFuzzy) {
     ASSERT_NE(function, nullptr);
 
     // run
-    runConvertedModel<test::IE_CPU_Engine, TestCaseType::DYNAMIC>(function, m_modelFile);
+    runConvertedModel<test::IE_CPU_Engine, TestCaseType::STATIC>(function, m_modelFile);
     //runConvertedModel<test::INTERPRETER_Engine, TestCaseType::DYNAMIC>(function, m_modelFile);
 }
