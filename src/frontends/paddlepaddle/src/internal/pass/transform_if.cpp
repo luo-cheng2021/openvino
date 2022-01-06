@@ -150,6 +150,17 @@ ov::frontend::pdpd::pass::TransformIf::TransformIf(std::vector<std::shared_ptr<F
                 }
             }
         }
+        for (auto i = 0; i < conditional_block1->outputs().size(); i++) {
+            for (auto& cond0_consumer : conditional_block1->outputs()[i].get_target_inputs()) {
+                if (is_type<opset8::Result>(cond0_consumer.get_node())) {
+                    std::cout << "HERE GOT result !!" << std::endl;
+                    auto result_node =
+                        std::dynamic_pointer_cast<opset8::Result>(cond0_consumer.get_node()->shared_from_this());
+
+                    result_node->input(0).replace_source_output(Constant::create(element::f32, {1}, {0})->get_default_output());
+                }
+            }
+        }
 
         copy_runtime_info(select_nodes, if_node);
         if_node->set_friendly_name(if_node->get_friendly_name());

@@ -159,7 +159,7 @@ def loop_if_loop():
 
         if x < 5:
             while t >= i:
-                i = i + x
+                i = i + x * 2
         else:
             while t >= i:
                 i = i + x
@@ -168,6 +168,63 @@ def loop_if_loop():
 
     x = np.full(shape=[1], fill_value=1, dtype='int64')
     return exportModel('loop_if_loop', test_model, [x], target_dir=sys.argv[1])
+
+def loop_if_loop_if():
+    paddle.disable_static()
+
+    @paddle.jit.to_static
+    def test_model(x):
+        i = paddle.full(shape=[1], fill_value=0, dtype='int64')
+        
+        i = i + x
+        t = paddle.full(shape=[1], fill_value=10, dtype='int64')
+
+        if x < 5:
+            while t >= i:
+                if x == 0:
+                    i = i + x * 2
+                else:
+                    i = i + x * 3
+        else:
+            while t >= i:
+                i = i + x
+
+        return i
+
+    x = np.full(shape=[1], fill_value=1, dtype='int64')
+    return exportModel('loop_if_loop_if', test_model, [x], target_dir=sys.argv[1])
+
+def loop_if_loop_complex():
+    paddle.disable_static()
+
+    @paddle.jit.to_static
+    def test_model(x, y):
+        i = paddle.full(shape=[1], fill_value=0, dtype='int64')
+        j = paddle.full(shape=[1], fill_value=0, dtype='int64')
+        
+        i = i + x
+        j = j + y
+        t = paddle.full(shape=[1], fill_value=10, dtype='int64')
+
+        if x < 5:
+            if y < 44:
+                while t >= i:
+                    while t >= i:
+                        if x == 0:
+                            i = i + x * 2
+                            j = j + y * 2
+                        else:
+                            i = i + x * 3
+                            j = j + y * 3
+        else:
+            while t >= i:
+                i = i + x
+
+        return i, j
+
+    x = np.full(shape=[1], fill_value=1, dtype='int64')
+    y = np.full(shape=[1], fill_value=1, dtype='int64')
+    return exportModel('loop_if_loop_complex', test_model, [x, y], target_dir=sys.argv[1])
 
 if __name__ == "__main__":
     print(loop())
@@ -179,4 +236,6 @@ if __name__ == "__main__":
     print(loop_dyn_x().numpy())
     print(loop_if().numpy())
     print(loop_if_loop().numpy())
+    print(loop_if_loop_if().numpy())
+    print(loop_if_loop_complex())
 

@@ -159,6 +159,8 @@ static const std::vector<std::string> models{
     std::string("loop_dyn_x/loop_dyn_x.pdmodel"),
     std::string("loop_if/loop_if.pdmodel"),
     std::string("loop_if_loop/loop_if_loop.pdmodel"),
+    std::string("loop_if_loop_if/loop_if_loop_if.pdmodel"),
+    std::string("loop_if_loop_complex/loop_if_loop_complex.pdmodel"),
     std::string("loop_t/loop_t.pdmodel"),
     std::string("loop_x/loop_x.pdmodel"),
     std::string("conditional_block_const/conditional_block_const.pdmodel"),

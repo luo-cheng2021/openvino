@@ -313,14 +313,11 @@ std::map<int32_t, std::shared_ptr<Function>> FrontEndPDPD::convert_each_node_rec
 }
 
 void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) const {
-    // TODO: remove
-    int x = 0;
     for (auto &function : functions) {
         ov::pass::Manager manager;
         manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
         manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
         manager.run_passes(function);
-        ov::pass::VisualizeTree(std::to_string(x++) + ".png").run_on_function(function);
     }    
 }
 
