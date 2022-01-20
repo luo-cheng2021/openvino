@@ -57,6 +57,9 @@ public:
 
     virtual std::vector<OutPortName> get_output_names() const = 0;
     virtual std::vector<TensorName> get_output_var_names(const std::string& var_name) const = 0;
+    virtual std::vector<TensorName> get_input_var_names(const std::string& var_name) const = 0;
+
+    virtual bool is_tensorarray(const pdpd::TensorName& tensor_name, bool inport) const = 0;
 
     virtual size_t get_output_size() const = 0;
     virtual size_t get_output_size(const std::string& port_name) const = 0;
@@ -188,6 +191,14 @@ public:
 
     std::vector<TensorName> get_output_var_names(const std::string& var_name) const {
         return decoder.get_output_var_names(var_name);
+    }
+
+    std::vector<TensorName> get_input_var_names(const std::string& var_name) const {
+        return decoder.get_input_var_names(var_name);
+    }
+
+    bool is_tensorarray(const pdpd::TensorName& tensor, bool inport=1) const {
+        return decoder.is_tensorarray(tensor, inport);
     }
 
     ov::element::Type get_out_port_type(const std::string& port_name) const {

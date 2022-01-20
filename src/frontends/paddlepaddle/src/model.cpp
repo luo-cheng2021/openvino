@@ -43,7 +43,7 @@ public:
 
     int32_t get_block_count() const;
     std::vector<std::shared_ptr<OpPlacePDPD>> get_op_places(const int32_t blck_idx) const;
-    std::map<std::string, std::shared_ptr<TensorPlacePDPD>> get_var_places() const {
+    std::map<pdpd::TensorName, std::shared_ptr<TensorPlacePDPD>> get_var_places() const {
         return m_var_places;
     }
     std::map<pdpd::TensorName, Output<Node>> get_tensor_values() const {
@@ -82,7 +82,22 @@ void InputModelPDPD::InputModelPDPDImpl::loadPlaces() {
         const auto& block = blocks[block_idx];
 
         for (const auto& var : block.vars()) {
+            const auto& var_type = var.type();
+            const auto& var_typename = var_type.GetTypeName();
+            
             m_var_places[var.name()] = std::make_shared<TensorPlacePDPD>(m_input_model, var);
+
+            if (var_type.has_tensor_array()) {
+                std::cout << "GOT TensorArray " << var_typename << ", " << var.name() << std::endl;
+
+                auto& var_place = m_var_places[var.name()];
+
+                const auto& tensor_desc = var_place->get_desc().type().tensor_array().tensor();
+                const auto& dims = tensor_desc.dims();
+
+                var_place->set_element_type(TYPE_MAP[tensor_desc.data_type()]);
+                var_place->set_partial_shape(PartialShape(std::vector<Dimension>(dims.begin(), dims.end())));
+            }            
         }
 
         for (const auto& op : block.ops()) {

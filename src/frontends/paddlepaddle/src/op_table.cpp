@@ -46,6 +46,7 @@ OP_CONVERTER(hard_swish);
 OP_CONVERTER(layer_norm);
 OP_CONVERTER(leaky_relu);
 OP_CONVERTER(linear_interp_v2);
+OP_CONVERTER(lod_array_length);
 OP_CONVERTER(log);
 OP_CONVERTER(logical_not);
 OP_CONVERTER(matmul);
@@ -77,6 +78,7 @@ OP_CONVERTER(transpose2);
 OP_CONVERTER(trilinear_interp_v2);
 OP_CONVERTER(unsqueeze);
 OP_CONVERTER(while_);
+OP_CONVERTER(write_to_array);
 OP_CONVERTER(yolo_box);
 }  // namespace op
 std::map<std::string, CreatorFunction> get_supported_ops() {
@@ -122,6 +124,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"leaky_relu", op::leaky_relu},
             {"less_than", op::elementwise_less_than},
             {"linear_interp_v2", op::linear_interp_v2},
+            {"lod_array_length", op::lod_array_length},
             {"log", op::log},
             {"logical_not", op::logical_not},
             {"lookup_table_v2", op::embedding},
@@ -157,6 +160,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"trilinear_interp_v2", op::trilinear_interp_v2},
             {"unsqueeze2", op::unsqueeze},
             {"while", op::while_},
+            {"write_to_array", op::write_to_array},
             {"yolo_box", op::yolo_box}};
 };
 

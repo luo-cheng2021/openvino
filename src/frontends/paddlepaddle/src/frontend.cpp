@@ -36,7 +36,8 @@ namespace pdpd {
 namespace {
 NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
                           const std::shared_ptr<OpPlacePDPD>& op_place,
-                          const std::map<std::string, CreatorFunction>& CREATORS_MAP) {
+                          const std::map<std::string, CreatorFunction>& CREATORS_MAP,
+                          const std::shared_ptr<InputModelPDPD>& model) {
     const auto& op_desc = op_place->get_desc();
 
     auto creator_it = CREATORS_MAP.find(op_desc.type());
@@ -45,6 +46,25 @@ NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
     for (const auto& input_port : op_desc.inputs()) {
         for (const auto& in_tensor_name : input_port.arguments()) {
             auto node_it = nodes.find(in_tensor_name);
+
+            // TensorArray may create from scratch.
+            if (node_it == nodes.end()) {
+                const auto& in_tensor = std::dynamic_pointer_cast<TensorPlacePDPD>(model->get_place_by_tensor_name(in_tensor_name));
+                const auto& var_desc = in_tensor->get_desc();
+                if (var_desc.type().has_tensor_array()) {
+                    // const auto& shape = in_tensor->get_partial_shape();
+                    const auto& type = in_tensor->get_element_type();
+
+                    // auto fakenode = std::make_shared<Squeeze>(type);
+                    auto fakenode = ov::opset6::Constant::create(type, {2}, {0, 3}); // FIXME
+                    // auto fakenode = std::make_shared<Constant>(type, {0, 3});
+                    fakenode->set_friendly_name(in_tensor_name);
+                    fakenode->output(0).get_tensor().add_names({in_tensor_name}); // ??
+                    named_inputs[input_port.parameter()].push_back(fakenode);
+                    continue; // ignore, handle it in its write_to_array
+                }
+            }
+
             // general check, because in case of error partial conversion should fail
             FRONT_END_GENERAL_CHECK(node_it != nodes.end(),
                                     "Input ",
@@ -313,11 +333,16 @@ std::map<int32_t, std::shared_ptr<Function>> FrontEndPDPD::convert_each_node_rec
 }
 
 void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) const {
+    auto block_idx = 0;
     for (auto &function : functions) {
         ov::pass::Manager manager;
-        manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
-        manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
+        manager.register_pass<ov::pass::VisualizeTree>("pre_normalize"+std::to_string(block_idx)+".png");
+        // manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+        // manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
+        manager.register_pass<ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice>(functions);
+        manager.register_pass<ov::pass::VisualizeTree>("post_normalize"+std::to_string(block_idx)+".png");        
         manager.run_passes(function);
+        block_idx++;
     }    
 }
 
@@ -404,7 +429,7 @@ std::shared_ptr<ov::Function> FrontEndPDPD::convert(InputModel::Ptr model) const
     auto f = convert_each_node(
         pdpd_model,
         [&](const std::map<std::string, Output<Node>>& nodes_dict, const std::shared_ptr<OpPlacePDPD>& op_place) {
-            return pdpd::make_ng_node(nodes_dict, op_place, CREATORS_MAP);
+            return pdpd::make_ng_node(nodes_dict, op_place, CREATORS_MAP, pdpd_model);
         });
 
     normalize(f);
@@ -433,7 +458,7 @@ std::shared_ptr<ov::Function> FrontEndPDPD::convert_partially(InputModel::Ptr mo
         [&](const std::map<std::string, Output<Node>>& nodes_dict, const std::shared_ptr<OpPlacePDPD>& op_place) {
             pdpd::NamedOutputs named_outputs;
             try {
-                named_outputs = pdpd::make_ng_node(nodes_dict, op_place, CREATORS_MAP);
+                named_outputs = pdpd::make_ng_node(nodes_dict, op_place, CREATORS_MAP, pdpd_model);
             } catch (const OpConversionFailure&) {
                 named_outputs = pdpd::make_framework_node(nodes_dict, op_place);
             }

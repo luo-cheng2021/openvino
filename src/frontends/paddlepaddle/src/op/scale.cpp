@@ -17,6 +17,12 @@ NamedOutputs scale(const NodeContext& node) {
     Output<Node> scale;
     Output<Node> bias;
 
+    //
+    if (dtype == element::dynamic) {
+        const element::Type output_type = node.get_out_port_type("Out");
+        dtype = output_type;
+    }
+
     if (node.has_ng_input("ScaleTensor")) {
         auto scale_tensor_node = node.get_ng_input("ScaleTensor");
         if (scale_tensor_node.get_element_type() == dtype)

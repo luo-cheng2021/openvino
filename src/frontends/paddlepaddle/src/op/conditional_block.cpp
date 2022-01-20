@@ -21,6 +21,15 @@ NamedOutputs conditional_block(const NodeContext& node) {
 
     int32_t num_outputs = node.get_output_size("Out");
 
+    // check if there are any TensorArray inputs.
+    const auto inputs_names = node.get_input_var_names("Input");
+    std::vector<TensorName> tensorarray_inputs;
+    for (const auto& inputname : inputs_names) {
+        if (node.is_tensorarray(inputname, 1)) {
+            tensorarray_inputs.push_back(inputname);
+        }
+    }
+
     std::shared_ptr<Node> placehodler;
     if (node.has_ng_input("Input")) {
         const auto inputs = node.get_ng_inputs("Input");

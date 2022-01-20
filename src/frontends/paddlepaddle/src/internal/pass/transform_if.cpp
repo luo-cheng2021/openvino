@@ -14,6 +14,8 @@
 #include "../../default_opset.hpp"
 #include "internal/op/conditional_block.hpp"
 #include "internal/op/select_input.hpp"
+#include "internal/op/tensorarray_length.hpp"
+#include "internal/op/tensorarray_write.hpp"
 #include "ngraph/op/util/op_types.hpp"
 #include "openvino/op/util/op_types.hpp"
 #include "openvino/opsets/opset8.hpp"
@@ -169,5 +171,141 @@ ov::frontend::pdpd::pass::TransformIf::TransformIf(std::vector<std::shared_ptr<F
     };
 
     auto m = std::make_shared<ngraph::pattern::Matcher>(select_label, "condtionalblock_select_to_If");
+    this->register_matcher(m, callback);
+}
+
+/*
+The transformation handles inputs slicing in While loop created by TensorFlow 2 Map Function primitive
+(see tf.map_fn). It avoids TensorListReserve, TensorListStack, and TensorListSetItem operations and replaces
+the original sub-graph by adding axis attribute in Loop node for concatenation of intermediate output results.
+The transformation is also applicable to TensorFlow 2 Keras Simple RNN, GRU, and LSTM layers.
+*/
+ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice::ConditionalBlockTensorArrayOutputSlice(std::vector<std::shared_ptr<Function>> functions) {
+    // pattern: slice -> conditional_block -> const    
+    auto conditionalblock_label = ngraph::pattern::wrap_type<ov::op::internal::ConditionalBlock>();
+    auto slice_label = ngraph::pattern::wrap_type<opset8::Slice>({conditionalblock_label, ngraph::pattern::any_input(), ngraph::pattern::any_input(), ngraph::pattern::any_input(), ngraph::pattern::any_input()});
+
+    // auto slice_label = ngraph::pattern::wrap_type<opset8::Slice>();
+
+    matcher_pass_callback callback = [functions](pattern::Matcher& m) -> bool {
+        std::cout << "HERE! I CALL YOU!!!" << std::endl;
+        const auto& slice_node = std::dynamic_pointer_cast<opset8::Slice>(m.get_match_root());
+        auto conditionalblock_node = std::dynamic_pointer_cast<ov::op::internal::ConditionalBlock>(slice_node->get_input_node_shared_ptr(0));
+      
+        if (!conditionalblock_node || !slice_node) {
+            std::cout << "Sorry! I EXIT HERE!!!" << std::endl;
+            return false;
+        }
+
+        const auto& inputs = conditionalblock_node->input_values();
+        const auto trip_count = Constant::create(element::i64, {1}, {1}); //FIXME?
+        const auto& cond = inputs.back();
+        const auto cond_name = cond.get_node_shared_ptr()->get_friendly_name();
+        auto loop = std::make_shared<Loop>(trip_count, cond);
+        const int32_t subblock_idx = conditionalblock_node->get_subblock_index();
+        const auto& body_graph = functions[subblock_idx];
+        loop->set_function(body_graph);
+
+        // find_subgraph_match_to_pattern
+        // pattern: TensorArrayWrite->TensorArrayLength, and the corresponding tensorarray is one of the output of body_graph.
+        {
+            ov::pass::Manager manager;
+            manager.register_pass<ov::frontend::pdpd::pass::TensorArrayWriteConcatenation>();      
+            manager.run_passes(body_graph);
+        }  
+
+        const auto& parameters = body_graph->get_parameters();
+        for (size_t i = 0; i < parameters.size(); i++) {
+            bool marker = false;
+            for (const auto& input : inputs) {
+                if (input.get_node()->get_friendly_name() == parameters[i]->get_friendly_name()) {
+                    loop->set_invariant_input(parameters[i], input);
+                    marker=true;
+                    break;
+                }
+            }
+            FRONT_END_GENERAL_CHECK(marker, "could not find matching external input for internal parameter ", parameters[i]->get_friendly_name());            
+        }
+        
+        // replace output
+        const auto& results = body_graph->get_results();
+        OutputVector outputs(results.size());
+        for (size_t i = 0; i < results.size(); i++) {
+            auto out = loop->get_iter_value(results[i], -1);
+            // auto out = loop->get_concatenated_slices(results[i], 0/*start*/, 1 /*stride*/, 1/*part_size*/, -1/*end*/, 0/*axis*/);
+            conditionalblock_node->output(i).replace(out);
+        }
+
+        loop->add_node_control_dependents(conditionalblock_node);
+        loop->add_node_control_dependencies(conditionalblock_node);
+        conditionalblock_node->clear_control_dependents();
+
+        loop->set_friendly_name(loop->get_friendly_name());
+        copy_runtime_info(conditionalblock_node, loop);
+
+        // bypass slice (FIXME: only works when slice[0], and tensorarray length is one.)
+        for (auto& output : slice_node->outputs()) {
+            for (auto& consumer : output.get_target_inputs()) {
+                std::cout << "HERE GOT a consumer !!" << std::endl;
+                consumer.replace_source_output(slice_node->input_values()[0]);
+            }
+        }
+
+        return true;
+    };
+
+    auto m = std::make_shared<ngraph::pattern::Matcher>(slice_label, "condtionalblock_tensorarray_slice");
+    this->register_matcher(m, callback);
+}
+
+/*
+The transformation handles inputs slicing in While loop created by TensorFlow 2 Map Function primitive
+(see tf.map_fn). It avoids TensorListReserve, TensorListStack, and TensorListSetItem operations and replaces
+the original sub-graph by adding axis attribute in Loop node for concatenation of intermediate output results.
+The transformation is also applicable to TensorFlow 2 Keras Simple RNN, GRU, and LSTM layers.
+*/
+ov::frontend::pdpd::pass::TensorArrayWriteConcatenation::TensorArrayWriteConcatenation() {
+    // pattern: tensorarraywrite -> tensorarraylength   
+    // auto ta_length_label = ngraph::pattern::wrap_type<ov::op::internal::TensorArrayLength>();
+    // auto ta_write_label = ngraph::pattern::wrap_type<ov::op::internal::TensorArrayWrite>({ta_length_label, ngraph::pattern::any_input(), ngraph::pattern::any_input()});
+
+    auto ta_write_label = ngraph::pattern::wrap_type<ov::op::internal::TensorArrayWrite>();
+
+    std::cout << "HERE! I ENTER (TensorArrayWriteConcatenation)!!!" << std::endl;
+
+    matcher_pass_callback callback = [](pattern::Matcher& m) -> bool {
+        std::cout << "HERE! I CALL YOU (TensorArrayWriteConcatenation)!!!" << std::endl;
+        const auto& ta_write_node = std::dynamic_pointer_cast<ov::op::internal::TensorArrayWrite>(m.get_match_root());
+        auto ta_length_node = std::dynamic_pointer_cast<ov::op::internal::TensorArrayLength>(ta_write_node->get_input_node_shared_ptr(1));
+      
+        if (!ta_write_node || !ta_length_node) {
+            std::cout << "Sorry! I EXIT HERE (TensorArrayWriteConcatenation)!!!" << std::endl;
+            return false;
+        }
+
+        // // replace TensorListSetItem with Unsqueeze and use axis attribute for corresponding Result node
+        // // to concatenate results from different iterations.
+        // // unsqueeze_list_element = create_op_with_const_inputs(body_graph, Unsqueeze, {1: int64_array(0)},
+        // //                                                      {'name': 'TensorListSetItemUnsqueeze'})
+        // // tensor_list_set_item_node.in_port(2).get_connection().set_destination(unsqueeze_list_element.in_port(0))
+        // // tensor_list_set_item_node.out_port(0).get_connection().set_source(unsqueeze_list_element.out_port(0))
+        // // rename_nodes([(tensor_list_set_item_node, tensor_list_set_item_node_name + '/AbandonedName'),
+        // //               (unsqueeze_list_element, tensor_list_set_item_node_name)])
+
+        // const auto& unsqueeze_ta = std::make_shared<opset8::Unsqueeze>();
+
+        // const auto& ta_input = ta_write_node->input_values().front();
+
+        // consumer.replace_source_output(if_node->outputs()[if_outputs_idx]);
+        // ta_write_node->input(0).replace(unsqueeze_ta);
+        // ta_write_node->output(0).replace(unsqueeze_ta->get_default_output());
+
+        // const auto& axes_node = opset8::Constant::create(ov::element::i64, {1}, {0});
+        // auto unsqueeze_ta_node = unsqueeze_ta->clone_with_new_inputs({ta_input, axes_node});
+
+        return true;
+    };
+
+    auto m = std::make_shared<ngraph::pattern::Matcher>(ta_write_label, "tensorarray_write_concatenation");
     this->register_matcher(m, callback);
 }
