@@ -72,8 +72,9 @@ public:
         const auto& function_output = m_function->get_results()[m_allocated_expected_outputs];
         std::string network_out_name = get_output_name(function_output);
         InferenceEngine::DataPtr network_output = m_network_outputs[network_out_name];
-
-        auto blob = std::make_shared<InferenceEngine::TBlob<T>>(network_output->getTensorDesc());
+        auto tensor_desc = network_output->getTensorDesc();
+        tensor_desc.setDims(expected_shape);
+        auto blob = std::make_shared<InferenceEngine::TBlob<T>>(tensor_desc);
         blob->allocate();
 
         NGRAPH_CHECK(blob->size() == values.size(),

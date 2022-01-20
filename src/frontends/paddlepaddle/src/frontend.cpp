@@ -220,8 +220,6 @@ std::map<int32_t, std::shared_ptr<Function>> FrontEndPDPD::convert_each_node_rec
             // inputs and outputs are stored in the model already
             continue;
         } else {
-            pdpd::NamedOutputs named_outputs = func(nodes_dict, op_place);
-
             if (op_desc.type() == "conditional_block") {
                 std::vector<std::shared_ptr<TensorPlacePDPD>> outp_tensors;
                 std::vector<std::shared_ptr<TensorPlacePDPD>> inp_tensors;
@@ -269,6 +267,8 @@ std::map<int32_t, std::shared_ptr<Function>> FrontEndPDPD::convert_each_node_rec
 
                 subblock_inputs_outputs[block_idx] = std::make_tuple(op_desc.type(), inp_tensors, outp_tensors);
             }
+            
+            pdpd::NamedOutputs named_outputs = func(nodes_dict, op_place);
             if (!named_outputs.empty()) {
                 if (op_desc.outputs().begin()->arguments().size() > 0) {
                     const auto& tensor_name = op_desc.outputs().begin()->arguments()[0];
@@ -337,8 +337,8 @@ void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) c
     for (auto &function : functions) {
         ov::pass::Manager manager;
         manager.register_pass<ov::pass::VisualizeTree>("pre_normalize"+std::to_string(block_idx)+".png");
-        // manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
-        // manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
+        manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+        manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
         manager.register_pass<ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice>(functions);
         manager.register_pass<ov::pass::VisualizeTree>("post_normalize"+std::to_string(block_idx)+".png");        
         manager.run_passes(function);
