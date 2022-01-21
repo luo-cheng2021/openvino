@@ -171,6 +171,8 @@ void loop(const std::shared_ptr<Function>& func,
 
         for (const auto& desc : out_descs) {
             if (const auto& body_desc = std::dynamic_pointer_cast<opset5::Loop::BodyOutputDescription>(desc)) {
+                out[body_desc->m_output_index]->set_shape(body_outputs[body_desc->m_body_value_index]->get_shape());
+                out[body_desc->m_output_index]->set_element_type(body_outputs[body_desc->m_body_value_index]->get_element_type());
                 out[body_desc->m_output_index]->write(body_outputs[body_desc->m_body_value_index]->get_data_ptr(),
                                                       body_outputs[body_desc->m_body_value_index]->get_size_in_bytes());
             }
