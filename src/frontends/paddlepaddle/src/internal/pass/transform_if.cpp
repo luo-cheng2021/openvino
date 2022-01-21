@@ -174,12 +174,6 @@ ov::frontend::pdpd::pass::TransformIf::TransformIf(std::vector<std::shared_ptr<F
     this->register_matcher(m, callback);
 }
 
-/*
-The transformation handles inputs slicing in While loop created by TensorFlow 2 Map Function primitive
-(see tf.map_fn). It avoids TensorListReserve, TensorListStack, and TensorListSetItem operations and replaces
-the original sub-graph by adding axis attribute in Loop node for concatenation of intermediate output results.
-The transformation is also applicable to TensorFlow 2 Keras Simple RNN, GRU, and LSTM layers.
-*/
 ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice::ConditionalBlockTensorArrayOutputSlice(std::vector<std::shared_ptr<Function>> functions) {
     // pattern: slice -> conditional_block -> const    
     auto conditionalblock_label = ngraph::pattern::wrap_type<ov::op::internal::ConditionalBlock>();
@@ -210,7 +204,7 @@ ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice::ConditionalBlo
         // pattern: TensorArrayWrite->TensorArrayLength, and the corresponding tensorarray is one of the output of body_graph.
         {
             ov::pass::Manager manager;
-            manager.register_pass<ov::frontend::pdpd::pass::TensorArrayWriteConcatenation>();      
+            manager.register_pass<ov::frontend::pdpd::pass::TensorArrayWriteConcatenation>(body_graph);      
             manager.run_passes(body_graph);
         }  
 
@@ -226,6 +220,8 @@ ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice::ConditionalBlo
             }
             FRONT_END_GENERAL_CHECK(marker, "could not find matching external input for internal parameter ", parameters[i]->get_friendly_name());            
         }
+
+        loop->set_special_body_ports(Loop::SpecialBodyPorts{-1, -1});
         
         // replace output
         const auto& results = body_graph->get_results();
@@ -258,13 +254,7 @@ ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice::ConditionalBlo
     this->register_matcher(m, callback);
 }
 
-/*
-The transformation handles inputs slicing in While loop created by TensorFlow 2 Map Function primitive
-(see tf.map_fn). It avoids TensorListReserve, TensorListStack, and TensorListSetItem operations and replaces
-the original sub-graph by adding axis attribute in Loop node for concatenation of intermediate output results.
-The transformation is also applicable to TensorFlow 2 Keras Simple RNN, GRU, and LSTM layers.
-*/
-ov::frontend::pdpd::pass::TensorArrayWriteConcatenation::TensorArrayWriteConcatenation() {
+ov::frontend::pdpd::pass::TensorArrayWriteConcatenation::TensorArrayWriteConcatenation(std::shared_ptr<Function> func) {
     // pattern: tensorarraywrite -> tensorarraylength   
     // auto ta_length_label = ngraph::pattern::wrap_type<ov::op::internal::TensorArrayLength>();
     // auto ta_write_label = ngraph::pattern::wrap_type<ov::op::internal::TensorArrayWrite>({ta_length_label, ngraph::pattern::any_input(), ngraph::pattern::any_input()});
@@ -273,7 +263,7 @@ ov::frontend::pdpd::pass::TensorArrayWriteConcatenation::TensorArrayWriteConcate
 
     std::cout << "HERE! I ENTER (TensorArrayWriteConcatenation)!!!" << std::endl;
 
-    matcher_pass_callback callback = [](pattern::Matcher& m) -> bool {
+    matcher_pass_callback callback = [func](pattern::Matcher& m) -> bool {
         std::cout << "HERE! I CALL YOU (TensorArrayWriteConcatenation)!!!" << std::endl;
         const auto& ta_write_node = std::dynamic_pointer_cast<ov::op::internal::TensorArrayWrite>(m.get_match_root());
         auto ta_length_node = std::dynamic_pointer_cast<ov::op::internal::TensorArrayLength>(ta_write_node->get_input_node_shared_ptr(1));
@@ -283,25 +273,16 @@ ov::frontend::pdpd::pass::TensorArrayWriteConcatenation::TensorArrayWriteConcate
             return false;
         }
 
-        // // replace TensorListSetItem with Unsqueeze and use axis attribute for corresponding Result node
-        // // to concatenate results from different iterations.
-        // // unsqueeze_list_element = create_op_with_const_inputs(body_graph, Unsqueeze, {1: int64_array(0)},
-        // //                                                      {'name': 'TensorListSetItemUnsqueeze'})
-        // // tensor_list_set_item_node.in_port(2).get_connection().set_destination(unsqueeze_list_element.in_port(0))
-        // // tensor_list_set_item_node.out_port(0).get_connection().set_source(unsqueeze_list_element.out_port(0))
-        // // rename_nodes([(tensor_list_set_item_node, tensor_list_set_item_node_name + '/AbandonedName'),
-        // //               (unsqueeze_list_element, tensor_list_set_item_node_name)])
+        // bypass tensorarray_write as well as its tensortensor_length.
+        const auto& ta_input = ta_write_node->get_input_source_output(0);
+        ta_write_node->output(0).replace(ta_input);
 
-        // const auto& unsqueeze_ta = std::make_shared<opset8::Unsqueeze>();
+        // remove tensorarray parameter
+        const auto& ta_param = std::dynamic_pointer_cast<ngraph::op::Parameter>(ta_length_node->get_input_node_shared_ptr(0));
+        func->remove_parameter(ta_param);
+        func->validate_nodes_and_infer_types();
 
-        // const auto& ta_input = ta_write_node->input_values().front();
-
-        // consumer.replace_source_output(if_node->outputs()[if_outputs_idx]);
-        // ta_write_node->input(0).replace(unsqueeze_ta);
-        // ta_write_node->output(0).replace(unsqueeze_ta->get_default_output());
-
-        // const auto& axes_node = opset8::Constant::create(ov::element::i64, {1}, {0});
-        // auto unsqueeze_ta_node = unsqueeze_ta->clone_with_new_inputs({ta_input, axes_node});
+        ta_write_node->clear_control_dependents();
 
         return true;
     };

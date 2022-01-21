@@ -56,7 +56,7 @@ NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
                     const auto& type = in_tensor->get_element_type();
 
                     // auto fakenode = std::make_shared<Squeeze>(type);
-                    auto fakenode = ov::opset6::Constant::create(type, {2}, {0, 3}); // FIXME
+                    auto fakenode = ov::opset6::Constant::create(type, {0, 3}, {0}); // FIXME
                     // auto fakenode = std::make_shared<Constant>(type, {0, 3});
                     fakenode->set_friendly_name(in_tensor_name);
                     fakenode->output(0).get_tensor().add_names({in_tensor_name}); // ??

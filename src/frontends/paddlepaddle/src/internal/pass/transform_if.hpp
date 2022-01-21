@@ -24,7 +24,7 @@ private:
 class TensorArrayWriteConcatenation : public ov::pass::MatcherPass {
 public:
     OPENVINO_RTTI("ov::frontend::pass::TensorArrayWriteConcatenation");
-    TensorArrayWriteConcatenation();
+    TensorArrayWriteConcatenation(std::shared_ptr<Function> func);
 };
 
 class ConditionalBlockTensorArrayOutputSlice : public ov::pass::MatcherPass {
