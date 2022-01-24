@@ -176,6 +176,12 @@ static const std::vector<std::string> models{
     std::string("conditional_block_dyn_multiple_blocks2/conditional_block_dyn_multiple_blocks2.pdmodel"),
     std::string("conditional_block_slice0/conditional_block_slice0.pdmodel"),  // TensorArray case
     std::string("conditional_block_slice0_dyn/conditional_block_slice0_dyn.pdmodel"),
+    std::string("conditional_block_concat/conditional_block_concat.pdmodel"),
+    std::string("conditional_block_concat_dyn/conditional_block_concat_dyn.pdmodel"),
+    std::string("conditional_block_slice0_scaler/conditional_block_slice0_scaler.pdmodel"),
+    std::string("conditional_block_slice0_scaler_dyn/conditional_block_slice0_scaler_dyn.pdmodel"),
+    std::string("conditional_block_conditional_block_concat/conditional_block_conditional_block_concat.pdmodel"),
+    std::string("conditional_block_conditional_block_concat_dyn/conditional_block_conditional_block_concat_dyn.pdmodel"),
     std::string("matmul_xt"),
     std::string("matmul_xt_yt"),
     std::string("matmul_yt"),
