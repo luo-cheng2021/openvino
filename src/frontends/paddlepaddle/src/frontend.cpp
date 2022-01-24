@@ -56,11 +56,12 @@ NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
                 if (var_desc.type().has_tensor_array()) {
                     const auto& tensor_ps = in_tensor->get_partial_shape();
                     const auto& type = in_tensor->get_element_type();
-                    Shape shape(tensor_ps.size());
+                    Shape shape(tensor_ps.size() + 1);
+                    shape[0] = 1;                   // unsqueeze
                     for (auto i = 0; i < tensor_ps.size(); i++) {
                         const auto &dim = tensor_ps[i];
                         if (dim.is_static()) {
-                            shape[i] = dim.get_length();
+                            shape[i + 1] = dim.get_length();
                         }
                     }
 
