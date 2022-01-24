@@ -78,6 +78,11 @@ void FrontEndFuzzyOpTest::runConvertedModel(const std::shared_ptr<ngraph::Functi
         cnpy::NpyArray input = cnpy::npy_load(dataFile);
         auto input_dtype = parameters[i]->get_element_type();
 
+        // for models with dynamic input shape
+        if (parameters[i]->get_partial_shape().is_dynamic()) {
+            parameters[i]->set_partial_shape(Shape(input.shape));
+        }
+
         if (input_dtype == element::f32) {
             addInputOutput<float>(input, testCase, true);
         } else if (input_dtype == element::i32) {
