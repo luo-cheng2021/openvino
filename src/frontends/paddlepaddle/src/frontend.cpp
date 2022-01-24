@@ -24,6 +24,7 @@
 #include "paddlepaddle_frontend/place.hpp"
 #include "pdpd_fw_node.hpp"
 #include "pdpd_utils.hpp"
+#include "internal/op/unary_dyn.hpp"
 
 using namespace ov::opset7;
 using namespace ov;
@@ -52,12 +53,18 @@ NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
                 const auto& in_tensor = std::dynamic_pointer_cast<TensorPlacePDPD>(model->get_place_by_tensor_name(in_tensor_name));
                 const auto& var_desc = in_tensor->get_desc();
                 if (var_desc.type().has_tensor_array()) {
-                    // const auto& shape = in_tensor->get_partial_shape();
+                    const auto& tensor_ps = in_tensor->get_partial_shape();
                     const auto& type = in_tensor->get_element_type();
+                    Shape shape(tensor_ps.size());
+                    for (auto i = 0; i < tensor_ps.size(); i++) {
+                        const auto &dim = tensor_ps[i];
+                        if (dim.is_static()) {
+                            shape[i] = dim.get_length();
+                        }
+                    }
 
-                    // auto fakenode = std::make_shared<Squeeze>(type);
-                    auto fakenode = ov::opset6::Constant::create(type, {0, 3}, {0}); // FIXME
-                    // auto fakenode = std::make_shared<Constant>(type, {0, 3});
+                    auto init = ov::opset6::Constant::create(type, shape, {0}); // FIXME
+                    auto fakenode = std::make_shared<ov::op::internal::UnaryDyn>(init);
                     fakenode->set_friendly_name(in_tensor_name);
                     fakenode->output(0).get_tensor().add_names({in_tensor_name}); // ??
                     named_inputs[input_port.parameter()].push_back(fakenode);

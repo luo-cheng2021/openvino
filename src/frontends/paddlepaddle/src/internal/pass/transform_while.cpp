@@ -17,6 +17,7 @@
 #include "internal/op/while.hpp"
 #include "internal/op/tensorarray_to_tensor.hpp"
 #include "internal/op/tensorarray_write.hpp"
+#include "internal/op/unary_dyn.hpp"
 #include "openvino/op/util/op_types.hpp"
 #include "openvino/opsets/opset8.hpp"
 #include "openvino/pass/constant_folding.hpp"
@@ -32,16 +33,19 @@ std::set<std::shared_ptr<Node>> try_trans_append_pattern(std::shared_ptr<ov::op:
     std::set<std::shared_ptr<Node>> new_results;
     // pattern: TensorArrayLength->TensorArrayWrite->Result, here we will ignore the parameter
     std::shared_ptr<Result> result;
-    std::shared_ptr<Node> result_parent;
+    std::shared_ptr<Node> result_parent_new, result_parent_old, tensor_write;
     for (const auto &node : child_model->get_results()) {
-        const auto& tensor_write = node->get_input_node_shared_ptr(0);
-        if (std::dynamic_pointer_cast<ov::op::internal::TensorArrayWrite>(tensor_write)) {
-            if (std::dynamic_pointer_cast<ov::op::internal::TensorArrayLength>(tensor_write->get_input_node_shared_ptr(0))) {
-                result_parent = tensor_write->get_input_node_shared_ptr(1);
+        const auto& node_parent = node->get_input_node_shared_ptr(0);
+        if (std::dynamic_pointer_cast<ov::op::internal::TensorArrayWrite>(node_parent)) {
+            tensor_write = node_parent;
+            if (std::dynamic_pointer_cast<ov::op::internal::TensorArrayLength>(node_parent->get_input_node_shared_ptr(0))) {
+                result_parent_new = node_parent->get_input_node_shared_ptr(1);
+                result_parent_old = node_parent->get_input_node_shared_ptr(0)->get_input_node_shared_ptr(0);
                 result = node;
             }
-            if (std::dynamic_pointer_cast<ov::op::internal::TensorArrayLength>(tensor_write->get_input_node_shared_ptr(1))) {
-                result_parent = tensor_write->get_input_node_shared_ptr(0);
+            if (std::dynamic_pointer_cast<ov::op::internal::TensorArrayLength>(node_parent->get_input_node_shared_ptr(1))) {
+                result_parent_new = node_parent->get_input_node_shared_ptr(0);
+                result_parent_old = node_parent->get_input_node_shared_ptr(1)->get_input_node_shared_ptr(0);
                 result = node;
             }
         }
@@ -61,23 +65,13 @@ std::set<std::shared_ptr<Node>> try_trans_append_pattern(std::shared_ptr<ov::op:
 
     if (concat_node) {
         // remove TensorArrayLength->TensorArrayWrite
-        auto results = child_model->get_results();
-        auto idx = child_model->get_result_index(result);
-        for (const auto& result : results) {
-            child_model->remove_result(result);
-        }
-        // special case: Parameter->TensorArrayLength->TensorArrayWrite
-        if (std::dynamic_pointer_cast<Parameter>(result_parent)) {
-            result_parent = std::make_shared<Convert>(result_parent->output(0), result_parent->get_output_element_type(0));
-        }
-        const auto new_result = result->clone_with_new_inputs(result_parent->outputs());
-        new_result->set_friendly_name(result->get_friendly_name());
-        new_result->output(0).set_names(result->output(0).get_names());
-        results[idx] = std::dynamic_pointer_cast<Result>(new_result);
-        child_model->add_results(results);
-        new_results.insert(new_result);
+        const auto concat = std::make_shared<Concat>(OutputVector{result_parent_old->output(0), result_parent_new->output(0)}, 0);
+        const auto concat_dyn = std::make_shared<ov::op::internal::UnaryDyn>(concat);
+        replace_node(tensor_write, concat_dyn);
+        concat_dyn->set_friendly_name(tensor_write->get_friendly_name());
+        new_results.insert(result);
         // remove TensorArrayToTensor
-        const auto new_convert = std::make_shared<Convert>(concat_node->input_value(0), concat_node->get_input_element_type(0));
+        const auto new_convert = std::make_shared<Convert>(concat_node->input_value(0), concat_dyn->get_input_element_type(0));
         new_convert->set_friendly_name(concat_node->get_friendly_name());
         replace_node(concat_node, new_convert);
     }
@@ -106,12 +100,7 @@ ov::frontend::pdpd::pass::TransformWhile::TransformWhile(std::vector<std::shared
         for (size_t i = 0; i < parameters.size(); i++) {
             const auto& param_name = inputs[i].get_node()->get_friendly_name();
             auto out_node = sub_model->output(param_name);
-            if (new_results.find(out_node.get_node_shared_ptr()) == new_results.end()) {
-                loop->set_merged_input(parameters[i], inputs[i], out_node);
-            } else {
-                // we will ignore the tensorarray initialize value
-                loop->set_invariant_input(parameters[i], inputs[i]);
-            }
+            loop->set_merged_input(parameters[i], inputs[i], out_node);
         }
         int64_t idx = -1;
         for (size_t i = 0; i < sub_model->get_results().size(); i++) {
@@ -126,14 +115,8 @@ ov::frontend::pdpd::pass::TransformWhile::TransformWhile(std::vector<std::shared
         const auto& results = sub_model->get_results();
         OutputVector outputs(results.size());
         for (size_t i = 0; i < results.size(); i++) {
-            if (new_results.find(results[i]) != new_results.end()) {
-                // tensorarray value will be concat
-                auto out = loop->get_concatenated_slices(results[i], 0, 1, 1, -1, 0);
-                while_node->output(i).replace(out);
-            } else {
-                auto out = loop->get_iter_value(results[i], -1);
-                while_node->output(i).replace(out);
-            }
+            auto out = loop->get_iter_value(results[i], -1);
+            while_node->output(i).replace(out);
         }
 
         loop->add_node_control_dependents(while_node);

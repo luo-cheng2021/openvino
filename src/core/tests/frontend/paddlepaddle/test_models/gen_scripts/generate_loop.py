@@ -231,18 +231,19 @@ def loop_tensor_array():
 
     @paddle.jit.to_static
     def test_model(x):
-        i = paddle.full(shape=[1], fill_value=0, dtype='float32')
+        i = paddle.full(shape=[1], fill_value=0, dtype='int32')
         
-        t = paddle.full(shape=[1], fill_value=10, dtype='float32')
+        t = paddle.full(shape=[1], fill_value=10, dtype='int32')
+        y = paddle.full(shape=[30,3], fill_value=2, dtype='float32')
 
         result = []
         while t >= i:
             i = i + 1
-            result.append(x)
+            result.append(x[0:i,:])
 
         return paddle.concat(result)
 
-    x = np.full(shape=[2, 3], fill_value=1, dtype='float32')
+    x = np.full(shape=[30,3], fill_value=1, dtype='float32')
     return exportModel('loop_tensor_array', test_model, [x], target_dir=sys.argv[1])
 
 if __name__ == "__main__":
