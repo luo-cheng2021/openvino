@@ -89,25 +89,25 @@ void function(const std::shared_ptr<ngraph::Function>& function,
                  inputsNumber,
                  " input blobs");
 
-    for (const auto& parameter : parameters) {
-        const auto& parameterIndex = function->get_parameter_index(parameter);
-        const auto& parameterShape = parameter->get_shape();
-        const auto& parameterType = parameter->get_element_type();
-        const auto& parameterSize = shape_size(parameterShape) * parameterType.size();
+    // for (const auto& parameter : parameters) {
+    //     const auto& parameterIndex = function->get_parameter_index(parameter);
+    //     const auto& parameterShape = parameter->get_shape();
+    //     const auto& parameterType = parameter->get_element_type();
+    //     const auto& parameterSize = shape_size(parameterShape) * parameterType.size();
 
-        const auto& input = inputs[parameterIndex];
-        const auto& inputSize = input->get_size_in_bytes();
-        NGRAPH_CHECK(parameterSize == inputSize,
-                     "Got parameter (",
-                     parameter->get_friendly_name(),
-                     ") of size ",
-                     parameterSize,
-                     " bytes, but corresponding input with index ",
-                     parameterIndex,
-                     " has ",
-                     inputSize,
-                     " bytes");
-    }
+    //     const auto& input = inputs[parameterIndex];
+    //     const auto& inputSize = input->get_size_in_bytes();
+    //     NGRAPH_CHECK(parameterSize == inputSize,
+    //                  "Got parameter (",
+    //                  parameter->get_friendly_name(),
+    //                  ") of size ",
+    //                  parameterSize,
+    //                  " bytes, but corresponding input with index ",
+    //                  parameterIndex,
+    //                  " has ",
+    //                  inputSize,
+    //                  " bytes");
+    // }
 
     const auto& results = function->get_results();
     outputs.reserve(results.size());

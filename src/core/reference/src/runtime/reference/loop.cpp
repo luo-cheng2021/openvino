@@ -214,7 +214,7 @@ void loop(const std::shared_ptr<Function>& func,
                               out[concat_desc->m_output_index]->get_element_type().size());
         }
     } else {
-        NGRAPH_CHECK(false, "ExecutionCondition is false. Zero count of iteration not supported.");
+        //NGRAPH_CHECK(false, "ExecutionCondition is false. Zero count of iteration not supported.");
     }
 }
 }  // namespace reference

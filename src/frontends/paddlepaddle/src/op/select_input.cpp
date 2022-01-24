@@ -17,6 +17,16 @@ NamedOutputs select_input(const NodeContext& node) {
     const auto mask = node.get_ng_input("Mask");
 
     const element::Type output_type = node.get_out_port_type("Out");
+    auto placehodler = std::make_shared<default_opset::Select>(std::make_shared<default_opset::Convert>(mask, element::boolean), x[1], x[0]);
+
+    return node.default_single_output_mapping({placehodler}, {"Out"});
+}
+
+NamedOutputs select_input_(const NodeContext& node) {
+    const auto x = node.get_ng_inputs("X");
+    const auto mask = node.get_ng_input("Mask");
+
+    const element::Type output_type = node.get_out_port_type("Out");
     auto placehodler = std::make_shared<ov::op::internal::SelectInput>(x[0], x[1], mask, output_type);
 
     return node.default_single_output_mapping({placehodler}, {"Out"});

@@ -16,7 +16,7 @@ using namespace ov;
 BWDCMP_RTTI_DEFINITION(op::internal::UnaryDyn);
 
 op::internal::UnaryDyn::UnaryDyn(const Output<Node>& args0) : Op({args0}){
-
+    constructor_validate_and_infer_types();
 }
 
 std::shared_ptr<Node> op::internal::UnaryDyn::clone_with_new_inputs(const OutputVector& new_args) const {

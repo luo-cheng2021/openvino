@@ -3,6 +3,7 @@
 //
 
 #include "internal/op/conditional_block.hpp"
+#include "internal/op/while.hpp"
 
 #include <node_context.hpp>
 
@@ -13,6 +14,19 @@ namespace frontend {
 namespace pdpd {
 namespace op {
 NamedOutputs conditional_block(const NodeContext& node) {
+    const auto data = node.get_ng_inputs("Input");
+    const auto cond = node.get_ng_input("Cond");
+    const auto sub_block = node.get_attribute<ov::BlockIndex>("sub_block").get();
+    const auto output_names = node.get_output_var_names("Out");
+
+    ov::OutputVector inputs = data;
+    inputs.push_back(cond);
+    NamedOutputs named_outputs;
+    named_outputs["Out"] = std::make_shared<ov::op::internal::While>(inputs, sub_block, output_names, 1)->outputs();
+    return named_outputs;
+}
+
+NamedOutputs conditional_block_(const NodeContext& node) {
     const auto cond = node.get_ng_input("Cond");
     auto sub_block = node.get_attribute<ov::BlockIndex>("sub_block");
     const auto is_scalar_condition = node.get_attribute<bool>("is_scalar_condition", true);

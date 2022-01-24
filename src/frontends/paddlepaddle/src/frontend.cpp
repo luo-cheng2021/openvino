@@ -14,6 +14,7 @@
 #include "framework.pb.h"
 #include "internal/pass/transform_if.hpp"
 #include "internal/pass/transform_while.hpp"
+#include "internal/pass/transform_tensorarray.hpp"
 #include "node_context.hpp"
 #include "op_table.hpp"
 #include "openvino/core/variant.hpp"
@@ -344,6 +345,7 @@ void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) c
     for (auto &function : functions) {
         ov::pass::Manager manager;
         manager.register_pass<ov::pass::VisualizeTree>("pre_normalize"+std::to_string(block_idx)+".png");
+        manager.register_pass<ov::frontend::pdpd::pass::TransformTensorArray>(functions);
         manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
         manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
         manager.register_pass<ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice>(functions);

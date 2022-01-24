@@ -16,7 +16,7 @@ public:
 
     While() = default;
 
-    While(const OutputVector& inputs, int32_t sub_block, const std::vector<std::string>& output_names);
+    While(const OutputVector& inputs, int32_t sub_block, const std::vector<std::string>& output_names, int trip_count = -1);
 
     void validate_and_infer_types() override;
 
@@ -25,6 +25,7 @@ public:
     std::shared_ptr<Node> clone_with_new_inputs(const OutputVector& new_args) const override;
 
     int32_t m_sub_block = 0;
+    int32_t m_trip_count = -1;
 
     std::vector<std::string> m_output_names;
 

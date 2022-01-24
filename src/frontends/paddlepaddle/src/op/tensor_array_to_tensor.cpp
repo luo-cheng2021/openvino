@@ -15,7 +15,7 @@ namespace op {
 NamedOutputs tensor_array_to_tensor(const NodeContext& node) {
     const auto x = node.get_ng_input("X");
 
-    auto placehodler = std::make_shared<ov::op::internal::TensorArrayToTensor>(x);
+    auto placehodler = std::make_shared<default_opset::Convert>(x, x.get_tensor().get_element_type());
 
     return node.default_single_output_mapping({placehodler}, {"Out"});
 }
