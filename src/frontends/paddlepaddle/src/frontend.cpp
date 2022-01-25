@@ -50,6 +50,13 @@ NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
             auto node_it = nodes.find(in_tensor_name);
 
             // TensorArray may create from scratch.
+            // The node with tensorarray as its input may be created before the node with this tensorarray
+            // as its output. e.g. the tensorarray is both the input and output of the same node.
+            // So we have to create a fake empty node here.
+            // Problem is, we have no idea which axis should be 0.
+            // Since the models (faster/mask rcnn) are either concating tensors in tensorarray along the dynamic dimension,
+            // or concating static shape tensors.
+            // So we make the dynamic dimension to be 0. In case of static shape, we simply the the first dimension be 0.
             if (node_it == nodes.end()) {
                 const auto& in_tensor = std::dynamic_pointer_cast<TensorPlacePDPD>(model->get_place_by_tensor_name(in_tensor_name));
                 const auto& var_desc = in_tensor->get_desc();
@@ -64,6 +71,11 @@ NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
                             shape[i + 1] = dim.get_length();
                         }
                     }
+                    if (tensor_ps.is_static()) {
+                        shape[1] = 0;
+                    }
+
+                    std::cout << "tensorarray ps " << tensor_ps << "fakenode " << shape << std::endl;
 
                     auto init = ov::opset6::Constant::create(type, shape, {0}); // FIXME
                     auto fakenode = std::make_shared<ov::op::internal::UnaryDyn>(init);
