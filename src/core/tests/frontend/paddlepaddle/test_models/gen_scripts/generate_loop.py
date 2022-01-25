@@ -256,13 +256,18 @@ def loop_if_tensor_array():
         t = paddle.full(shape=[1], fill_value=10, dtype='int32')
         y = paddle.full(shape=[30,3], fill_value=2, dtype='float32')
 
-        result = []
+        result1 = []
+        result2 = []
         while t >= i:
             i = i + 1
             if i >= 0:
-                result.append(x[0:i,:])
-
-        return paddle.concat(result)
+                v = i + 1
+                result1.append(x[0:i,:])
+                result2.append(x[0:v,:] + 2)
+            else:
+                result1.append(x[0:i,:])
+                #result2.append(x[0:i,:])
+        return paddle.concat(result1), paddle.concat(result2)
 
     x = np.full(shape=[30,3], fill_value=1, dtype='float32')
     return exportModel('loop_if_tensor_array', test_model, [x], target_dir=sys.argv[1])
@@ -281,5 +286,4 @@ if __name__ == "__main__":
     print(loop_if_loop_complex())
     x = loop_tensor_array().numpy()
     print(x, x.shape)
-    x = loop_if_tensor_array().numpy()
-    print(x, x.shape)
+    x, y = loop_if_tensor_array()

@@ -44,9 +44,8 @@ ov::frontend::pdpd::pass::TransformTensorArray::TransformTensorArray(std::vector
         const auto& new_item_unsqueeze = std::make_shared<Unsqueeze>(new_item->output(0), Constant::create(element::i32, {1}, {0}));
         // remove TensorArrayLength->TensorArrayWrite
         const auto concat = std::make_shared<Concat>(OutputVector{list->output(0), new_item_unsqueeze->output(0)}, 1);
-        const auto concat_dyn = std::make_shared<ov::op::internal::UnaryDyn>(concat);
-        replace_node(write_node, concat_dyn);
-        concat_dyn->set_friendly_name(write_node->get_friendly_name());
+        replace_node(write_node, concat);
+        concat->set_friendly_name(write_node->get_friendly_name());
 
         return true;
     };

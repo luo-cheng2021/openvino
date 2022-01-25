@@ -56,12 +56,11 @@ NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
                 if (var_desc.type().has_tensor_array()) {
                     const auto& tensor_ps = in_tensor->get_partial_shape();
                     const auto& type = in_tensor->get_element_type();
-                    Shape shape(tensor_ps.size() + 1);
-                    shape[0] = 1;                   // unsqueeze
+                    Shape shape(tensor_ps.size());
                     for (auto i = 0; i < tensor_ps.size(); i++) {
                         const auto &dim = tensor_ps[i];
                         if (dim.is_static()) {
-                            shape[i + 1] = dim.get_length();
+                            shape[i] = dim.get_length();
                         }
                     }
 
@@ -347,7 +346,8 @@ void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) c
         ov::pass::Manager manager;
         manager.register_pass<ov::pass::VisualizeTree>("pre_normalize"+std::to_string(block_idx)+".png");
         manager.register_pass<ov::frontend::pdpd::pass::TransformTensorArray>(functions);
-        manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+        //manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
+        manager.register_pass<ov::frontend::pdpd::pass::TransformCond>(functions);
         manager.register_pass<ov::frontend::pdpd::pass::TransformWhile>(functions);
         manager.register_pass<ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice>(functions);
         manager.register_pass<ov::pass::VisualizeTree>("post_normalize"+std::to_string(block_idx)+".png");        

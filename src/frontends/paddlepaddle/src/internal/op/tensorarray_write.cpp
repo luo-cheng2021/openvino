@@ -30,5 +30,6 @@ bool op::internal::TensorArrayWrite::visit_attributes(AttributeVisitor& visitor)
 }
 
 void op::internal::TensorArrayWrite::validate_and_infer_types() { // FIXME
-    set_output_type(0, element::dynamic, {Dimension::dynamic()});
+    auto ps = get_input_node_ptr(1)->get_input_partial_shape(0);
+    set_output_type(0, get_input_element_type(0), ps); //{Dimension::dynamic()});
 }

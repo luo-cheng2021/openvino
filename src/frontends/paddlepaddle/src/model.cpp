@@ -96,7 +96,9 @@ void InputModelPDPD::InputModelPDPDImpl::loadPlaces() {
                 const auto& dims = tensor_desc.dims();
 
                 var_place->set_element_type(TYPE_MAP[tensor_desc.data_type()]);
-                var_place->set_partial_shape(PartialShape(std::vector<Dimension>(dims.begin(), dims.end()))); // FIXME
+                auto ps = std::vector<Dimension>(dims.begin(), dims.end());
+                ps.insert(ps.begin(), 1); // unsqueeze
+                var_place->set_partial_shape(PartialShape(ps)); // FIXME
                 //var_place->set_partial_shape(PartialShape(std::vector<Dimension>(0, 3))); // HARDCODE
             }            
         }

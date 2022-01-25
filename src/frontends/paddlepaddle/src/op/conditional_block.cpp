@@ -13,7 +13,7 @@ namespace ov {
 namespace frontend {
 namespace pdpd {
 namespace op {
-NamedOutputs conditional_block(const NodeContext& node) {
+NamedOutputs conditional_block_(const NodeContext& node) {
     const auto data = node.get_ng_inputs("Input");
     const auto cond = node.get_ng_input("Cond");
     const auto sub_block = node.get_attribute<ov::BlockIndex>("sub_block").get();
@@ -26,7 +26,7 @@ NamedOutputs conditional_block(const NodeContext& node) {
     return named_outputs;
 }
 
-NamedOutputs conditional_block_(const NodeContext& node) {
+NamedOutputs conditional_block(const NodeContext& node) {
     const auto cond = node.get_ng_input("Cond");
     auto sub_block = node.get_attribute<ov::BlockIndex>("sub_block");
     const auto is_scalar_condition = node.get_attribute<bool>("is_scalar_condition", true);

@@ -14,6 +14,7 @@
 #include "ngraph/op/util/multi_subgraph_base.hpp"
 #include "ngraph/runtime/reference/if.hpp"
 #include "ngraph/specialize_function.hpp"
+#include "ngraph/runtime/reference/if.hpp"
 
 using namespace std;
 using namespace ngraph;
@@ -80,6 +81,23 @@ void op::v8::If::validate_and_infer_type_body(
         body_parameter->set_partial_shape(input_partial_shape);
     }
     body->validate_nodes_and_infer_types();
+}
+
+// TODO: for test only
+bool op::v8::If::evaluate(const HostTensorVector& outputs, const HostTensorVector& inputs) const {
+    NGRAPH_OP_SCOPE(v8_if_evaluate);
+    ngraph::runtime::reference::if_reference(m_bodies,
+                                     m_output_descriptions,
+                                     m_input_descriptions,
+                                     outputs,
+                                     inputs);
+    return true;
+}
+
+bool op::v8::If::has_evaluate() const {
+    NGRAPH_OP_SCOPE(v8_Loop_has_evaluate);
+
+    return true;
 }
 
 void op::v8::If::validate_and_infer_types() {

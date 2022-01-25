@@ -174,6 +174,236 @@ ov::frontend::pdpd::pass::TransformIf::TransformIf(std::vector<std::shared_ptr<F
     this->register_matcher(m, callback);
 }
 
+ov::frontend::pdpd::pass::TransformCond::TransformCond(std::vector<std::shared_ptr<Function>> funcs) {
+    auto cond_label = ngraph::pattern::wrap_type<ov::op::internal::ConditionalBlock>();
+
+    matcher_pass_callback callback = [funcs](pattern::Matcher& m) -> bool {
+        std::vector<std::shared_ptr<Function>> functions = funcs;
+        std::cout << "HERE! I CALL YOU!!!" << std::endl;
+        auto conditional_block =
+            std::dynamic_pointer_cast<ov::op::internal::ConditionalBlock>(m.get_match_root());
+        size_t mask_idx = conditional_block->get_input_size() - 1;  // False branch
+        std::shared_ptr<Node> cond = conditional_block->get_input_node_shared_ptr(mask_idx);
+        
+        if (!conditional_block || !cond) {
+            std::cout << "Sorry! I EXIT HERE!!!" << std::endl;
+            return false;
+        }
+
+        /* build_if_node */
+
+        const int32_t then_idx = conditional_block->get_subblock_index();
+        const auto& then_branch = functions[then_idx];
+        const auto& then_params = then_branch->get_parameters();
+        
+        // make the else body, just pass through
+        ParameterVector params;
+        ResultVector results;
+        for (auto i = 0; i < then_branch->get_output_size(); i++) {
+            const auto param = std::make_shared<Parameter>(then_branch->get_output_element_type(i), then_branch->get_output_partial_shape(i));
+            param->set_friendly_name(then_branch->get_output_op(i)->get_output_tensor(0).get_any_name());
+            params.push_back(param);
+            const auto result = std::make_shared<Result>(param);
+            results.push_back(result);
+        }
+        const auto else_branch = std::make_shared<Function>(results, params);
+        const auto& else_params = else_branch->get_parameters();
+
+        auto if_node = std::make_shared<opset8::If>(cond);
+        if_node->set_then_body(then_branch);
+        if_node->set_else_body(else_branch);
+
+        const auto then_branch_inputs_from_parent = conditional_block->get_inputs_from_parent();
+        NGRAPH_CHECK(then_branch_inputs_from_parent.size() == then_params.size(),
+                     "Number of inputs to 'then_branch' is invalid. Expected " +
+                         std::to_string(then_branch_inputs_from_parent.size()) + ", actual " +
+                         std::to_string(then_params.size()));
+        auto then_param = then_params.cbegin();
+        for (const auto& from_parent : then_branch_inputs_from_parent) {
+            if_node->set_input(from_parent, *then_param, nullptr);
+            then_param++;
+        }
+        // set_input may change the type and shape, update else first
+        // for (auto i = 0; i < then_branch->get_output_size(); i++) {
+        //     params[i]->set_partial_shape(then_branch->get_output_partial_shape(i));
+        //     params[i]->set_element_type(then_branch->get_output_element_type(i));
+        // }
+        // else_branch->validate_nodes_and_infer_types();
+        auto else_param = else_params.cbegin();
+        for (const auto &else_param : else_params) {
+            bool found = false;
+            for (const auto& from_parent : then_branch_inputs_from_parent) {
+                if (from_parent.get_any_name() == else_param->get_friendly_name()) {
+                    if_node->set_input(from_parent, nullptr, else_param);
+                    found = true;
+                    break;
+                }
+            }
+            // the output generate from the body, make a default value
+            if (!found) {
+                auto ps = else_param->get_partial_shape();
+                const auto placeholder = Constant::create(else_param->get_element_type(), ps.get_min_shape(), {0});
+                if_node->set_input(placeholder, nullptr, else_param);
+            }
+        }
+
+        auto else_results = else_branch->get_results();
+        auto then_results = then_branch->get_results();
+        for (auto i = 0; i < else_results.size(); i++) {
+            if_node->set_output(then_results[i], else_results[i]);
+        }
+        /* replace conditional_block and if nodes. */
+        replace_node(conditional_block, if_node);
+        if_node->set_friendly_name(conditional_block->get_friendly_name());
+
+        return true;
+    };
+
+    auto m = std::make_shared<ngraph::pattern::Matcher>(cond_label, "condtionalblock_If");
+    this->register_matcher(m, callback);
+}
+
+ov::frontend::pdpd::pass::TransformIfIf::TransformIfIf(std::vector<std::shared_ptr<Function>> funcs) {
+    auto cond_label = ngraph::pattern::wrap_type<ov::op::internal::ConditionalBlock>();
+
+    matcher_pass_callback callback = [funcs](pattern::Matcher& m) -> bool {
+        std::vector<std::shared_ptr<Function>> functions = funcs;
+        std::cout << "HERE! I CALL YOU!!!" << std::endl;
+        //const auto& select_input = std::dynamic_pointer_cast<ov::op::internal::SelectInput>(m.get_match_root());
+        auto conditional_block_else =
+            std::dynamic_pointer_cast<ov::op::internal::ConditionalBlock>(m.get_match_root());
+        std::shared_ptr<ov::op::internal::ConditionalBlock> conditional_block_then;
+        const auto node = conditional_block_else->output(0).get_target_inputs().begin()->get_node();
+        size_t mask_idx;
+        std::shared_ptr<Node> cond;
+        conditional_block_then = std::dynamic_pointer_cast<ov::op::internal::ConditionalBlock>(node->shared_from_this());
+        if (conditional_block_then) {
+            mask_idx = conditional_block_then->get_input_size() - 1;  // False branch
+            cond = conditional_block_then->get_input_node_shared_ptr(mask_idx);
+        } else {
+            mask_idx = conditional_block_else->get_input_size() - 1;  // False branch
+            cond = conditional_block_else->get_input_node_shared_ptr(mask_idx);
+            // only have one conditional_block, make another condition
+            cond = std::make_shared<LogicalNot>(cond);
+            conditional_block_then = std::make_shared<ov::op::internal::ConditionalBlock>(conditional_block_else->outputs(),
+                                        cond,
+                                        true,
+                                        functions.size(),
+                                        conditional_block_else->get_output_size());
+            // else->result -> then->result
+            for (auto i = 0; i < conditional_block_else->outputs().size(); i++) {
+                for (auto& cond0_consumer : conditional_block_else->outputs()[i].get_target_inputs()) {
+                    const auto node = cond0_consumer.get_node()->shared_from_this();
+                    // replace each output of the select_input node
+                    cond0_consumer.replace_source_output(conditional_block_then->outputs()[i]);
+                }
+            }
+            // make the then body
+            const auto param_size = conditional_block_else->get_output_size();
+            ParameterVector params;
+            ResultVector results;
+            for (auto i = 0; i < param_size; i++) {
+                const auto& tensor = conditional_block_else->get_output_tensor(i);
+                const auto param = std::make_shared<Parameter>(tensor.get_element_type(), tensor.get_partial_shape());
+                param->set_friendly_name(tensor.get_any_name());
+                params.push_back(param);
+                const auto result = std::make_shared<Result>(param);
+                results.push_back(result);
+            }
+            functions.push_back(std::make_shared<Function>(results, params));
+        }
+
+        if (!conditional_block_then || !conditional_block_else || !cond) {
+            std::cout << "Sorry! I EXIT HERE!!!" << std::endl;
+            return false;
+        }
+
+        /* build_if_node */
+
+        // then <-> conditional_block_then, else <-> conditional_block_else as we switched the condition.
+        const int32_t then_idx = conditional_block_then->get_subblock_index();
+        const auto& then_branch = functions[then_idx];
+
+        const int32_t else_idx = conditional_block_else->get_subblock_index();
+        const auto& else_branch = functions[else_idx];
+
+        const auto& then_params = then_branch->get_parameters();
+        const auto& else_params = else_branch->get_parameters();
+
+        auto if_node = std::make_shared<opset8::If>(cond);
+        if_node->set_then_body(then_branch);
+        if_node->set_else_body(else_branch);
+
+        const auto then_branch_inputs_from_parent = conditional_block_then->get_inputs_from_parent();
+        NGRAPH_CHECK(then_branch_inputs_from_parent.size() == then_params.size(),
+                     "Number of inputs to 'then_branch' is invalid. Expected " +
+                         std::to_string(then_branch_inputs_from_parent.size()) + ", actual " +
+                         std::to_string(then_params.size()));
+        auto then_param = then_params.cbegin();
+        for (const auto& from_parent : then_branch_inputs_from_parent) {
+            auto node = from_parent;
+            if (node.get_node_shared_ptr() == conditional_block_else) {
+                const auto& inputs = conditional_block_else->input_values();
+                for (auto &&input : inputs) {
+                    if (input.get_node_shared_ptr()->get_friendly_name() == (*then_param)->get_friendly_name()) {
+                        node = input;
+                        break;
+                    }
+                }
+            }
+
+            if_node->set_input(node, *then_param, nullptr);
+            then_param++;
+        }
+
+        const auto else_branch_inputs_from_parent = conditional_block_else->get_inputs_from_parent();
+        NGRAPH_CHECK(else_branch_inputs_from_parent.size() == else_params.size(),
+                     "Number of inputs to 'else_branch' is invalid. Expected " +
+                         std::to_string(else_branch_inputs_from_parent.size()) + ", actual " +
+                         std::to_string(else_params.size()));
+        auto else_param = else_params.cbegin();
+        for (const auto& from_parent : else_branch_inputs_from_parent) {
+            if_node->set_input(from_parent, nullptr, *else_param);
+            else_param++;
+        }
+        // NGRAPH_CHECK(then_branch->get_results().size() == else_branch->get_results().size(),
+        //              "'then' and 'else' branches have to have the same number of outputs");
+        auto else_results = else_branch->get_results();
+        auto then_results = then_branch->get_results();
+        /* replace conditional_block and select_input nodes. */
+
+        NodeVector select_nodes;
+        int if_outputs_idx = 0;
+        for (auto i = 0; i < conditional_block_then->outputs().size(); i++) {
+            for (auto& cond0_consumer : conditional_block_then->outputs()[i].get_target_inputs()) {
+                const auto node =
+                    cond0_consumer.get_node()->shared_from_this();
+                std::cout << "HERE GOT node !!" << std::endl;
+                if_node->set_output(then_results[if_outputs_idx], else_results[if_outputs_idx]);
+                if_node->validate_and_infer_types();
+
+                // replace each output of the select_input node
+                cond0_consumer.replace_source_output(if_node->outputs()[if_outputs_idx]);
+                if_outputs_idx++;
+
+                if_node->add_node_control_dependents(node);
+                if_node->add_node_control_dependencies(node);
+                node->clear_control_dependents();
+
+                select_nodes.emplace_back(node);
+            }
+        }
+
+        copy_runtime_info(select_nodes, if_node);
+        if_node->set_friendly_name(if_node->get_friendly_name());
+
+        return true;
+    };
+
+    auto m = std::make_shared<ngraph::pattern::Matcher>(cond_label, "condtionalblock_If");
+    this->register_matcher(m, callback);
+}
+
 ov::frontend::pdpd::pass::ConditionalBlockTensorArrayOutputSlice::ConditionalBlockTensorArrayOutputSlice(std::vector<std::shared_ptr<Function>> functions) {
     // pattern: slice -> conditional_block -> const    
     auto conditionalblock_label = ngraph::pattern::wrap_type<ov::op::internal::ConditionalBlock>();
