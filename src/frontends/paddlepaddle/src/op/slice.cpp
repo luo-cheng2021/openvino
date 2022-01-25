@@ -16,22 +16,22 @@ using namespace default_opset;
 NamedOutputs slice(const NodeContext& node) {
     auto data = node.get_ng_input("Input");
 
-    // check if there are any TensorArray inputs.
-    const auto inputs_names = node.get_input_var_names("Input");
-    std::vector<TensorName> tensorarray_inputs;
-    for (const auto& inputname : inputs_names) {
-        if (node.is_tensorarray(inputname, 1)) {
-            tensorarray_inputs.push_back(inputname);
-        }
-    }
-    if (tensorarray_inputs.size()>0) {
-        auto start = Constant::create(element::i32, {1}, {0});
-        auto stop = Constant::create(element::i32, {1}, {1});
-        auto step = Constant::create(element::i32, {1}, {1});
-        auto axes = Constant::create(element::i32, {1}, {0});
-        const auto slice_node = std::make_shared<Slice>(data, start, stop, step, axes);
-        return node.default_single_output_mapping({slice_node}, {"Out"});
-    }
+    // // check if there are any TensorArray inputs.
+    // const auto inputs_names = node.get_input_var_names("Input");
+    // std::vector<TensorName> tensorarray_inputs;
+    // for (const auto& inputname : inputs_names) {
+    //     if (node.is_tensorarray(inputname, 1)) {
+    //         tensorarray_inputs.push_back(inputname);
+    //     }
+    // }
+    // if (tensorarray_inputs.size()>0) {
+    //     auto start = Constant::create(element::i32, {1}, {0});
+    //     auto stop = Constant::create(element::i32, {1}, {1});
+    //     auto step = Constant::create(element::i32, {1}, {1});
+    //     auto axes = Constant::create(element::i32, {1}, {0});
+    //     const auto slice_node = std::make_shared<Slice>(data, start, stop, step, axes);
+    //     return node.default_single_output_mapping({slice_node}, {"Out"});
+    // }
 
     auto axes = node.get_attribute<std::vector<int32_t>>("axes");
     Output<Node> start_idx_node, end_idx_node;
