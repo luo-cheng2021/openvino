@@ -19,12 +19,12 @@ NamedOutputs while_(const NodeContext& node) {
     const auto data = node.get_ng_inputs("X");
     const auto cond = node.get_ng_input("Condition");
     const auto sub_block = node.get_attribute<ov::BlockIndex>("sub_block").get();
-    const auto output_names = node.get_output_var_names("Out");
+    auto outputs_info = node.get_output_port_infos("Out");
 
     ov::OutputVector inputs = data;
     inputs.push_back(cond);
     NamedOutputs named_outputs;
-    named_outputs["Out"] = std::make_shared<ov::op::internal::While>(inputs, sub_block, output_names)->outputs();
+    named_outputs["Out"] = std::make_shared<ov::op::internal::While>(inputs, sub_block, outputs_info)->outputs();
     return named_outputs;
 }
 }  // namespace op

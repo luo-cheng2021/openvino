@@ -20,11 +20,13 @@ public:
                      const Output<Node>& cond,
                      bool is_scalar_condition,
                      int32_t sub_block_index,
-                     int32_t m_num_outputs);
+                     int32_t m_num_outputs,
+                     const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos);
     ConditionalBlock(const Output<Node>& cond,
                      bool is_scalar_condition,
                      int32_t sub_block_index,
-                     int32_t m_num_outputs);
+                     int32_t m_num_outputs,
+                     const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos);
 
     void validate_and_infer_types() override;
 
@@ -38,6 +40,7 @@ public:
     const int32_t get_subblock_index() const {
         return m_sub_block_index;
     }
+    std::vector<std::pair<ov::element::Type, ov::PartialShape>> m_output_infos;
 
 private:
     bool m_is_scalar_condition;

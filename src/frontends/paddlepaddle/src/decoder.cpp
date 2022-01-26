@@ -138,6 +138,16 @@ std::map<std::string, std::vector<ov::element::Type>> DecoderPDPDProto::get_outp
     return output_types;
 }
 
+std::vector<std::pair<ov::element::Type, ov::PartialShape>> DecoderPDPDProto::get_output_port_infos(const std::string& port_name) const {
+    std::vector<std::pair<ov::element::Type, ov::PartialShape>> output_types;
+    for (const auto& out_port : op_place->get_output_ports().at(port_name)) {
+            output_types.push_back(
+                {out_port->get_target_tensor_pdpd()->get_element_type(),
+                 out_port->get_target_tensor_pdpd()->get_partial_shape()});
+    }
+    return output_types;
+}
+
 ov::element::Type DecoderPDPDProto::get_out_port_type(const std::string& port_name) const {
     std::vector<ov::element::Type> output_types;
     for (const auto& out_port : op_place->get_output_ports().at(port_name)) {

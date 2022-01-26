@@ -37,7 +37,7 @@ ov::frontend::pdpd::pass::TransformWhile::TransformWhile(std::vector<std::shared
         if (!while_node)
             return false;
         const auto& inputs = while_node->input_values();
-        const auto trip_count = Constant::create(element::i64, {1}, {while_node->m_trip_count});
+        const auto trip_count = Constant::create(element::i64, {1}, {-1});
         const auto& cond = inputs.back();
         const auto cond_name = cond.get_node_shared_ptr()->get_friendly_name();
         auto loop = std::make_shared<Loop>(trip_count, cond);
@@ -46,46 +46,25 @@ ov::frontend::pdpd::pass::TransformWhile::TransformWhile(std::vector<std::shared
 
         const auto& parameters = sub_model->get_parameters();
         const auto submodel_outputs = sub_model->outputs();
-        if (while_node->m_trip_count == -1) {
-            for (size_t i = 0; i < parameters.size(); i++) {
-                const auto& param_name = inputs[i].get_node()->get_friendly_name();
-                auto out_node = sub_model->output(param_name);
-                loop->set_merged_input(parameters[i], inputs[i], out_node);
-            }
-            int64_t idx = -1;
-            for (size_t i = 0; i < sub_model->get_results().size(); i++) {
-                if (sub_model->output(i).get_tensor().get_any_name() == cond_name)
-                    idx = static_cast<int64_t>(i);
-            }
-            FRONT_END_GENERAL_CHECK(idx != -1, "could not find condition node in outputs.");
+        for (size_t i = 0; i < parameters.size(); i++) {
+            const auto& param_name = inputs[i].get_node()->get_friendly_name();
+            auto out_node = sub_model->output(param_name);
+            loop->set_merged_input(parameters[i], inputs[i], out_node);
+        }
+        int64_t idx = -1;
+        for (size_t i = 0; i < sub_model->get_results().size(); i++) {
+            if (sub_model->output(i).get_tensor().get_any_name() == cond_name)
+                idx = static_cast<int64_t>(i);
+        }
+        FRONT_END_GENERAL_CHECK(idx != -1, "could not find condition node in outputs.");
 
-            loop->set_special_body_ports(Loop::SpecialBodyPorts{-1, idx});
+        loop->set_special_body_ports(Loop::SpecialBodyPorts{-1, idx});
 
-            // replace output
-            const auto& results = sub_model->get_results();
-            for (size_t i = 0; i < results.size(); i++) {
-                auto out = loop->get_iter_value(results[i], -1);
-                while_node->output(i).replace(out);
-            }
-        } else {
-            // add cond parameter, result for if branch
-            const auto param = std::make_shared<Parameter>(cond.get_element_type(), cond.get_partial_shape());
-            const auto result = std::make_shared<Result>(param);
-            sub_model->add_parameters({param});
-            sub_model->add_results({result});
-
-            for (size_t i = 0; i < parameters.size(); i++) {
-                loop->set_invariant_input(parameters[i], inputs[i]);
-            }
-            // replace output
-            const auto& results = sub_model->get_results();
-
-            loop->set_special_body_ports(Loop::SpecialBodyPorts{-1, static_cast<int64_t>(results.size() - 1)});
-
-            for (size_t i = 0; i < results.size() - 1; i++) {
-                auto out = loop->get_iter_value(results[i], -1);
-                while_node->output(i).replace(out);
-            }
+        // replace output
+        const auto& results = sub_model->get_results();
+        for (size_t i = 0; i < results.size(); i++) {
+            auto out = loop->get_iter_value(results[i], -1);
+            while_node->output(i).replace(out);
         }
 
         loop->add_node_control_dependents(while_node);

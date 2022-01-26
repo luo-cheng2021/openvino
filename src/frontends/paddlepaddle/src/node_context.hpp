@@ -74,6 +74,7 @@ public:
     ///
     /// \return Type of specified output port
     virtual ov::element::Type get_out_port_type(const std::string& port_name) const = 0;
+    virtual std::vector<std::pair<ov::element::Type, ov::PartialShape>> get_output_port_infos(const std::string& port_name) const = 0;
 
     virtual std::string get_op_type() const = 0;
 };
@@ -211,6 +212,10 @@ public:
 
     size_t get_output_size(const std::string& port_name) const {
         return decoder.get_output_size(port_name);
+    }
+
+    std::vector<std::pair<ov::element::Type, ov::PartialShape>> get_output_port_infos(const std::string& port_name) const {
+        return decoder.get_output_port_infos(port_name);
     }
 
     NamedOutputs default_single_output_mapping(const std::shared_ptr<Node>& node,

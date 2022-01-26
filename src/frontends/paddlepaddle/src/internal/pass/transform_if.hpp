@@ -30,15 +30,6 @@ private:
     std::vector<std::shared_ptr<Function>> m_functions;
 };
 
-class TransformIfIf : public ov::pass::MatcherPass {
-public:
-    OPENVINO_RTTI("ov::frontend::pass::TransformIfIf");
-    TransformIfIf(std::vector<std::shared_ptr<Function>> functions);
-
-private:
-    std::vector<std::shared_ptr<Function>> m_functions;
-};
-
 class TensorArrayWriteConcatenation : public ov::pass::MatcherPass {
 public:
     OPENVINO_RTTI("ov::frontend::pass::TensorArrayWriteConcatenation");

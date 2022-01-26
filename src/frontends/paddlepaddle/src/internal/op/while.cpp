@@ -15,34 +15,24 @@ using namespace ov;
 
 BWDCMP_RTTI_DEFINITION(op::internal::While);
 
-op::internal::While::While(const OutputVector& inputs, int32_t sub_block, const std::vector<std::string>& output_names, int32_t trip_count)
+op::internal::While::While(const OutputVector& inputs, int32_t sub_block, const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos)
     : Op(inputs),
       m_sub_block(sub_block),
-      m_output_names(output_names),
-      m_trip_count(trip_count) {
+      m_output_infos(output_infos) {
     constructor_validate_and_infer_types();
 }
 
 std::shared_ptr<Node> op::internal::While::clone_with_new_inputs(const OutputVector& new_args) const {
-    return make_shared<While>(new_args, m_sub_block, m_output_names, m_trip_count);
+    return make_shared<While>(new_args, m_sub_block, m_output_infos);
 }
 
 bool op::internal::While::visit_attributes(AttributeVisitor& visitor) {
     visitor.on_attribute("sub_block", m_sub_block);
-    visitor.on_attribute("trip_count", m_trip_count);
     return true;
 }
 
 void op::internal::While::validate_and_infer_types() {
-    std::map<std::string, size_t> inputname_idx;
-    for (auto i = 0; i < get_input_size(); i++) {
-        auto node = get_input_node_ptr(i);
-        inputname_idx.insert({node->get_friendly_name(), i});
-    }
-
-    for (auto i = 0; i < m_output_names.size(); i++) {
-        const auto& name = m_output_names[i];
-        const auto input_idx = inputname_idx[name];
-        set_output_type(i, get_input_element_type(input_idx), get_input_partial_shape(input_idx));
+    for (auto i = 0; i < m_output_infos.size(); i++) {
+        set_output_type(i, m_output_infos[i].first, m_output_infos[i].second);
     }
 }

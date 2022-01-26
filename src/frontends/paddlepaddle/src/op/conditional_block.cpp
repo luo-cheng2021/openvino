@@ -13,19 +13,6 @@ namespace ov {
 namespace frontend {
 namespace pdpd {
 namespace op {
-NamedOutputs conditional_block_(const NodeContext& node) {
-    const auto data = node.get_ng_inputs("Input");
-    const auto cond = node.get_ng_input("Cond");
-    const auto sub_block = node.get_attribute<ov::BlockIndex>("sub_block").get();
-    const auto output_names = node.get_output_var_names("Out");
-
-    ov::OutputVector inputs = data;
-    inputs.push_back(cond);
-    NamedOutputs named_outputs;
-    named_outputs["Out"] = std::make_shared<ov::op::internal::While>(inputs, sub_block, output_names, 1)->outputs();
-    return named_outputs;
-}
-
 NamedOutputs conditional_block(const NodeContext& node) {
     const auto cond = node.get_ng_input("Cond");
     auto sub_block = node.get_attribute<ov::BlockIndex>("sub_block");
@@ -34,6 +21,7 @@ NamedOutputs conditional_block(const NodeContext& node) {
     std::cout << "conditional_block sub_block " << sub_block.get() << std::endl;
 
     int32_t num_outputs = node.get_output_size("Out");
+    auto outputs_info = node.get_output_port_infos("Out");
 
     // check if there are any TensorArray inputs.
     const auto inputs_names = node.get_input_var_names("Input");
@@ -51,12 +39,14 @@ NamedOutputs conditional_block(const NodeContext& node) {
                                                                            cond,
                                                                            is_scalar_condition,
                                                                            sub_block.get(),
-                                                                           num_outputs);
+                                                                           num_outputs,
+                                                                           outputs_info);
     } else {
         placehodler = std::make_shared<ov::op::internal::ConditionalBlock>(cond,
                                                                            is_scalar_condition,
                                                                            sub_block.get(),
-                                                                           num_outputs);
+                                                                           num_outputs,
+                                                                           outputs_info);
     }
     const auto split_outputs = placehodler->outputs();
 
