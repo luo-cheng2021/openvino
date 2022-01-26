@@ -26,8 +26,8 @@ std::shared_ptr<Node> op::internal::UnaryDyn::clone_with_new_inputs(const Output
 void op::internal::UnaryDyn::validate_and_infer_types() {
     auto ps = get_input_partial_shape(0);
 
-    // TODO: fix hardcode
-    ps[1] = ov::Dimension();
+    // TODO: which axis should be concat?
+    ps[1] = ov::Dimension(); // HARDCODE axis?
     set_output_type(0, get_input_element_type(0), ps);
 }
 
