@@ -229,6 +229,7 @@ static const std::vector<std::string> models{
     std::string("maxPool_test3"),
     std::string("maxPool_test4"),
     std::string("maxPool_test5"),
+    std::string("meshgrid/meshgrid.pdmodel"),
     // maxPool_test6(nchw support is disabled now),
     std::string("maxPool_test7"),
     std::string("maxPool_test8"),
