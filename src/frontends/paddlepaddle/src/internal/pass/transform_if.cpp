@@ -223,12 +223,7 @@ ov::frontend::pdpd::pass::TransformCond::TransformCond(std::vector<std::shared_p
             if_node->set_input(from_parent, *then_param, nullptr);
             then_param++;
         }
-        // set_input may change the type and shape, update else first
-        // for (auto i = 0; i < then_branch->get_output_size(); i++) {
-        //     params[i]->set_partial_shape(then_branch->get_output_partial_shape(i));
-        //     params[i]->set_element_type(then_branch->get_output_element_type(i));
-        // }
-        // else_branch->validate_nodes_and_infer_types();
+
         auto else_param = else_params.cbegin();
         for (const auto &else_param : else_params) {
             bool found = false;
