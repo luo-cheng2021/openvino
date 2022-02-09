@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021 Intel Corporation
+// Copyright (C) 2018-2022 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -182,10 +182,9 @@ void loop(const std::shared_ptr<Function>& func,
 
         for (const auto& desc : out_descs) {
             if (const auto& body_desc = std::dynamic_pointer_cast<opset5::Loop::BodyOutputDescription>(desc)) {
-                out[body_desc->m_output_index]->set_shape(body_outputs[body_desc->m_body_value_index]->get_shape());
-                out[body_desc->m_output_index]->set_element_type(body_outputs[body_desc->m_body_value_index]->get_element_type());
-                out[body_desc->m_output_index]->write(body_outputs[body_desc->m_body_value_index]->get_data_ptr(),
-                                                      body_outputs[body_desc->m_body_value_index]->get_size_in_bytes());
+                const auto& res = body_outputs[body_desc->m_body_value_index];
+                out[body_desc->m_output_index]->set_shape(res->get_shape());
+                out[body_desc->m_output_index]->write(res->get_data_ptr(), res->get_size_in_bytes());
             }
         }
 
@@ -194,12 +193,7 @@ void loop(const std::shared_ptr<Function>& func,
             const auto& concat_desc = concat_outputs[i];
             auto shape = func->get_results().at(concat_desc->m_body_value_index)->get_shape();
             std::vector<Shape> shapes_to_concat(values_to_concat[i].size(), shape);
-            size_t len = 0;
-            for (const auto &v : values_to_concat[i]) {
-                len += v->get_shape()[0];
-            }
-
-            shape.at(concat_desc->m_axis) = len; // values_to_concat[i].size();
+            shape.at(concat_desc->m_axis) = values_to_concat[i].size();
             out[concat_desc->m_output_index]->set_shape(shape);
             std::vector<const char*> pointers_on_values;
             pointers_on_values.reserve(values_to_concat[i].size());

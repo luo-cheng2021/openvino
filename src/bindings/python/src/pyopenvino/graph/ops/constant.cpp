@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021 Intel Corporation
+// Copyright (C) 2018-2022 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -57,11 +57,17 @@ py::array _cast_vector(const ov::op::v0::Constant& self) {
     return py::array(vec.size(), vec.data());
 }
 
+template <>
+py::array _cast_vector<ov::float16>(const ov::op::v0::Constant& self) {
+    auto vec = self.cast_vector<ov::float16>();
+    return py::array(py::dtype("float16"), vec.size(), vec.data());
+}
+
 void regclass_graph_op_Constant(py::module m) {
     py::class_<ov::op::v0::Constant, std::shared_ptr<ov::op::v0::Constant>, ov::Node> constant(m,
                                                                                                "Constant",
                                                                                                py::buffer_protocol());
-    constant.doc() = "openvino.impl.op.Constant wraps ov::op::v0::Constant";
+    constant.doc() = "openvino.runtime.op.Constant wraps ov::op::v0::Constant";
     constant.def(py::init<const ov::element::Type&, const ov::Shape&, const std::vector<char>&>());
     constant.def(py::init<const ov::element::Type&, const ov::Shape&, const std::vector<ov::float16>&>());
     constant.def(py::init<const ov::element::Type&, const ov::Shape&, const std::vector<float>&>());

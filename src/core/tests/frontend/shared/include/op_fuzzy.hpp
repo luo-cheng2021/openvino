@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021 Intel Corporation
+// Copyright (C) 2018-2022 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -6,9 +6,7 @@
 
 #include <gtest/gtest.h>
 
-#include <manager.hpp>
-
-#include "engines_util/engine_factory.hpp"
+#include <openvino/frontend/manager.hpp>
 
 using FuzzyOpTestParam = std::tuple<std::string,   // FrontEnd name
                                     std::string,   // Base path to models
@@ -32,6 +30,5 @@ protected:
 
     void doLoadFromFile();
 
-    template <typename Engine, ngraph::test::TestCaseType tct = ngraph::test::TestCaseType::STATIC>
-    void runConvertedModel(const std::shared_ptr<ngraph::Function> function, const std::string& model_file);
+    void runConvertedModel(const std::shared_ptr<ov::Model> function, const std::string& model_file);
 };

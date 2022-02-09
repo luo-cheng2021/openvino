@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2021 Intel Corporation
+// Copyright (C) 2018-2022 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -13,8 +13,9 @@
 
 using namespace ngraph;
 using namespace InferenceEngine;
+
+using namespace ngraph;
 using namespace ov::frontend;
-using namespace ngraph::test;
 
 std::string FrontEndFuzzyOpTest::getTestCaseName(const testing::TestParamInfo<FuzzyOpTestParam>& obj) {
     std::string fe, path, fileName;
@@ -37,16 +38,13 @@ void FrontEndFuzzyOpTest::doLoadFromFile() {
     std::tie(m_frontEnd, m_inputModel) = FrontEndTestUtils::load_from_file(m_fem, m_feName, m_modelFile);
 }
 
-template <typename T1, typename T2, TestCaseType tct = TestCaseType::STATIC>
-inline void addInputOutput(cnpy::NpyArray& npy_array,
-                           test::TestCase<T2, tct>& test_case,
-                           bool is_input = true) {
-    T1* npy_begin = npy_array.data<T1>();
-    std::vector<T1> data(npy_begin, npy_begin + npy_array.num_vals);
+template <typename T>
+inline void addInputOutput(cnpy::NpyArray& npy_array, test::TestCase& test_case, bool is_input = true) {
+    T* npy_begin = npy_array.data<T>();
+    std::vector<T> data(npy_begin, npy_begin + npy_array.num_vals);
     if (is_input)
         test_case.add_input(data);
     else
-        // test_case.add_expected_output(data);
         test_case.add_expected_output(npy_array.shape, data);
 }
 
@@ -63,13 +61,12 @@ static std::string getModelFolder(const std::string& modelFile) {
     return modelFile.substr(0, found);
 };
 
-template <typename Engine, TestCaseType tct = TestCaseType::STATIC>
 void FrontEndFuzzyOpTest::runConvertedModel(const std::shared_ptr<ngraph::Function> function,
                                             const std::string& modelFile) {
     auto modelFolder = getModelFolder(modelFile);
 
     // run test
-    auto testCase = test::TestCase<Engine, tct>(function);
+    auto testCase = test::TestCase(function); // TODO: "CPU"
 
     const auto parameters = function->get_parameters();
     for (size_t i = 0; i < parameters.size(); i++) {
@@ -92,7 +89,7 @@ void FrontEndFuzzyOpTest::runConvertedModel(const std::shared_ptr<ngraph::Functi
         } else if (input_dtype == element::boolean) {
             addInputOutput<bool>(input, testCase, true);
         } else {
-            throw std::runtime_error("not supported dtype in " + input_dtype.get_type_name());
+            throw std::runtime_error("not supported dtype in" + input_dtype.get_type_name());
         }
     }
 
@@ -116,7 +113,7 @@ void FrontEndFuzzyOpTest::runConvertedModel(const std::shared_ptr<ngraph::Functi
     }
 
     if (useFloatTest) {
-        testCase.run_with_tolerance_as_fp();
+        testCase.run_with_tolerance_as_fp(2e-5);
     } else {
         testCase.run();
     }
@@ -132,6 +129,5 @@ TEST_P(FrontEndFuzzyOpTest, testOpFuzzy) {
     ASSERT_NE(function, nullptr);
 
     // run
-    runConvertedModel<test::INTERPRETER_Engine, TestCaseType::DYNAMIC>(function, m_modelFile);
-    //runConvertedModel<test::INTERPRETER_Engine, TestCaseType::DYNAMIC>(function, m_modelFile);
+    runConvertedModel(function, m_modelFile);
 }
