@@ -25,7 +25,7 @@
 #include "paddlepaddle_frontend/place.hpp"
 #include "pdpd_fw_node.hpp"
 #include "pdpd_utils.hpp"
-#include "internal/op/unary_dyn.hpp"
+#include "internal/op/tensorarray_create.hpp"
 #include <ngraph/pattern/matcher.hpp>
 #include <ngraph/pattern/op/wrap_type.hpp>
 
@@ -72,14 +72,11 @@ NamedOutputs make_ng_node(const std::map<pdpd::TensorName, Output<Node>>& nodes,
                             shape[i] = dim.get_length();
                         }
                     }
-                    if (tensor_ps.is_static()) {
-                        shape[1] = 0;
-                    }
 
                     std::cout << "tensorarray ps " << tensor_ps << "fakenode " << shape << std::endl;
 
                     auto init = ov::opset6::Constant::create(type, shape, {0}); // FIXME
-                    auto fakenode = std::make_shared<ov::op::internal::UnaryDyn>(init);
+                    auto fakenode = std::make_shared<ov::op::internal::TensorArrayCreate>(init);
                     fakenode->set_friendly_name(in_tensor_name);
                     fakenode->output(0).get_tensor().add_names({in_tensor_name}); // ??
                     named_inputs[input_port.parameter()].push_back(fakenode);
@@ -354,40 +351,12 @@ std::map<int32_t, std::shared_ptr<Function>> FrontEndPDPD::convert_each_node_rec
     return block_funcs;
 }
 
-namespace {
-// TODO: to be merged into the transformation lib
-// copy from src/common/transformations/include/transformations/common_optimizations/nop_elimination.hpp
-class EliminateConvert: public ov::pass::MatcherPass {
-public:
-    OPENVINO_RTTI("ov::frontend::pass::EliminateConvert");
-    EliminateConvert();
-};
-
-EliminateConvert::EliminateConvert() {
-    auto convert_pattern = ngraph::pattern::wrap_type<opset7::Convert>();
-
-    matcher_pass_callback callback = [](ngraph::pattern::Matcher& m) {
-        auto convert = std::dynamic_pointer_cast<opset7::Convert>(m.get_match_root());
-        if (!convert) {
-            return false;
-        }
-        if (convert->get_input_element_type(0) == convert->get_element_type()) {
-            convert->output(0).replace(convert->input_value(0));
-            return true;
-        }
-        return false;
-    };
-
-    auto m = std::make_shared<ngraph::pattern::Matcher>(convert_pattern, "nop_convert");
-    this->register_matcher(m, callback);
-}
-};
 void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) const {
     auto block_idx = 0;
     for (auto &function : functions) {
         ov::pass::Manager manager;
         manager.register_pass<ov::pass::VisualizeTree>("pre_normalize"+std::to_string(block_idx)+".png");
-        manager.register_pass<EliminateConvert>();
+        manager.register_pass<ov::frontend::pdpd::pass::TransformEliminateConvert>();
         manager.register_pass<ov::frontend::pdpd::pass::TransformTensorArray>(functions);
         //manager.register_pass<ov::frontend::pdpd::pass::TransformIf>(functions);
         manager.register_pass<ov::frontend::pdpd::pass::TransformCond>(functions);
@@ -396,7 +365,11 @@ void FrontEndPDPD::normalize(std::vector<std::shared_ptr<Function>> functions) c
         manager.register_pass<ov::pass::VisualizeTree>("post_normalize"+std::to_string(block_idx)+".png");        
         manager.run_passes(function);
         block_idx++;
-    }    
+    }
+    ov::pass::Manager manager;
+    manager.register_pass<ov::frontend::pdpd::pass::TransformMarkupTensorArray>();
+    manager.register_pass<ov::pass::VisualizeTree>("post_markup.png");
+    manager.run_passes(functions[0]);
 }
 
 void FrontEndPDPD::normalize(std::shared_ptr<Function> function) const {

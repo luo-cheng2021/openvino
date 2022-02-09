@@ -7,6 +7,7 @@
 #include <node_context.hpp>
 
 #include "default_opset.hpp"
+#include "internal/op/tensorarray_to_tensor.hpp"
 
 namespace ov {
 namespace frontend {
@@ -15,15 +16,34 @@ namespace op {
 using namespace default_opset;
 NamedOutputs slice(const NodeContext& node) {
     auto data = node.get_ng_input("Input");
+    auto decrease_axis = node.get_attribute<std::vector<int32_t>>("decrease_axis");
 
     // // check if there are any TensorArray inputs.
-    // const auto inputs_names = node.get_input_var_names("Input");
-    // std::vector<TensorName> tensorarray_inputs;
-    // for (const auto& inputname : inputs_names) {
-    //     if (node.is_tensorarray(inputname, 1)) {
-    //         tensorarray_inputs.push_back(inputname);
-    //     }
-    // }
+    const auto inputs_names = node.get_input_var_names("Input");
+    std::vector<TensorName> tensorarray_inputs;
+    for (const auto& inputname : inputs_names) {
+        // TODO: add support for 'StartsTensor'
+        if (node.is_tensorarray(inputname, 1) && decrease_axis.size() == 1) {
+            auto starts = node.get_attribute<std::vector<int32_t>>("starts");
+            auto ends = node.get_attribute<std::vector<int32_t>>("ends");
+            PDPD_OP_VALIDATION_CHECK(node,
+                                     starts.size() == 1,
+                                     "tensor array 'starts' size should be 1, got: ",
+                                     starts.size());
+            PDPD_OP_VALIDATION_CHECK(node,
+                                     ends.size() == 1,
+                                     "tensor array 'ends' size should be 1, got: ",
+                                     ends.size());
+            PDPD_OP_VALIDATION_CHECK(node,
+                                     starts[0] + 1 == ends[0],
+                                     "tensor array 'ends[0]' should equal ' starts[0] + 1', got starts[0], ends[0]: ",
+                                     starts[0], ends[0]);
+            ov::op::internal::TensorArrayToTensor::SliceParam param{starts[0]};
+            auto placeholder = std::make_shared<ov::op::internal::TensorArrayToTensor>(data, param);
+
+            return node.default_single_output_mapping({placeholder}, {"Out"});
+        }
+    }
     // if (tensorarray_inputs.size()>0) {
     //     auto start = Constant::create(element::i32, {1}, {0});
     //     auto stop = Constant::create(element::i32, {1}, {1});
@@ -91,8 +111,6 @@ NamedOutputs slice(const NodeContext& node) {
                                                             fixed_end_node,
                                                             std::vector<int64_t>{0},
                                                             std::vector<int64_t>{0});
-
-    auto decrease_axis = node.get_attribute<std::vector<int32_t>>("decrease_axis");
 
     if (decrease_axis.size() > 0) {
         // according to paddle slice_op, when all axes are decreased, output shape is [1], instead of scalar.

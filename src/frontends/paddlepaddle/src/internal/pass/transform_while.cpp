@@ -17,7 +17,7 @@
 #include "internal/op/while.hpp"
 #include "internal/op/tensorarray_to_tensor.hpp"
 #include "internal/op/tensorarray_write.hpp"
-#include "internal/op/unary_dyn.hpp"
+#include "internal/op/tensorarray_create.hpp"
 #include "openvino/op/util/op_types.hpp"
 #include "openvino/opsets/opset8.hpp"
 #include "openvino/pass/constant_folding.hpp"
