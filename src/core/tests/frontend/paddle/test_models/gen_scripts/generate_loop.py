@@ -246,25 +246,6 @@ def loop_tensor_array():
     x = np.full(shape=[30,3], fill_value=1, dtype='float32')
     return exportModel('loop_tensor_array', test_model, [x], target_dir=sys.argv[1])
 
-def loop_tensor_array_concat1_slice1():
-    paddle.disable_static()
-
-    @paddle.jit.to_static
-    def test_model(x):
-        i = paddle.full(shape=[1], fill_value=0, dtype='int32')
-        
-        t = paddle.full(shape=[1], fill_value=10, dtype='int32')
-
-        result = []
-        while t >= i:
-            i = i + 1
-            result.append(x)
-
-        return paddle.concat(result, 1), result[1]
-
-    x = np.full(shape=[30,3], fill_value=1, dtype='float32')
-    return exportModel('loop_tensor_array_concat1_slice1', test_model, [x], target_dir=sys.argv[1])
-
 def loop_if_tensor_array():
     paddle.disable_static()
 
@@ -304,5 +285,4 @@ if __name__ == "__main__":
     print(loop_if_loop_if().numpy())
     print(loop_if_loop_complex())
     print(loop_tensor_array().numpy())
-    loop_tensor_array_concat1_slice1()
     x, y = loop_if_tensor_array()

@@ -27,16 +27,6 @@ public:
     TransformEliminateConvert();
 };
 
-class TransformMarkupTensorArray : public ov::pass::ModelPass {
-public:
-    OPENVINO_RTTI("ov::frontend::pass::TransformMarkupTensorArray");
-
-    TransformMarkupTensorArray() = default;
-
-    bool run_on_function(std::shared_ptr<ov::Model> f) override;
-
-private:
-};
 }  // namespace pass
 }  // namespace paddle
 }  // namespace frontend

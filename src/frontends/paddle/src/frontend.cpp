@@ -76,6 +76,10 @@ NamedOutputs make_ng_node(const std::map<paddle::TensorName, Output<Node>>& node
                         }
                     }
 
+                    if (tensor_ps.is_static()) {
+                        shape[1] = 0;
+                    }
+
                     std::cout << "tensorarray ps " << tensor_ps << "fakenode " << shape << std::endl;
 
                     auto init = ov::opset6::Constant::create(type, shape, {0}); // FIXME
@@ -370,10 +374,6 @@ void FrontEnd::normalize(const std::vector<std::shared_ptr<Model>>& models) cons
         manager.run_passes(model);
         block_idx++;
     }
-    ov::pass::Manager manager;
-    manager.register_pass<ov::frontend::paddle::pass::TransformMarkupTensorArray>();
-    manager.register_pass<ov::pass::VisualizeTree>("post_markup.png");
-    manager.run_passes(models[0]);
 }
 
 void FrontEnd::normalize(const std::shared_ptr<ov::Model>& model) const {
