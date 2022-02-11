@@ -29,6 +29,73 @@ def test_conditional_block_slice0():
     a_shape[0] = -1
     test('conditional_block_slice0_dyn', [a], [a_shape])
 
+def test_conditional_block_slice0_else():
+    def test(model_name, inputs:list, input_shapes=[]):
+        with paddle.static.program_guard(paddle.static.Program(), paddle.static.Program()):
+            @paddle.jit.to_static
+            def test_model(a):
+                rpn_rois_list = []
+
+                if a.shape[0] >= 1:
+                    rpn_rois_list.append(a)
+                else:
+                    rpn_rois_list.append(a)
+
+                return rpn_rois_list[0]
+            exportModel(model_name, test_model, inputs, target_dir=sys.argv[1], dyn_shapes=input_shapes)
+
+    a = paddle.to_tensor([[1.0, 2.0, 3.0],
+                        [4.0, 5.0, 6.0]])
+    test('conditional_block_slice0_else', [a])
+
+# wrong test case. paddle throw error " IndexError: list index out of range" in paddle.jit.save()
+def test_conditional_block_slice0_empty():
+    def test(model_name, inputs:list, input_shapes=[]):
+        with paddle.static.program_guard(paddle.static.Program(), paddle.static.Program()):
+            @paddle.jit.to_static
+            def test_model(a):
+                rpn_rois_list = []
+
+                return rpn_rois_list[0]    
+            exportModel(model_name, test_model, inputs, target_dir=sys.argv[1], dyn_shapes=input_shapes)
+
+    a = paddle.to_tensor([[1.0, 2.0, 3.0],
+                        [4.0, 5.0, 6.0]])
+    test('conditional_block_slice0_empty', [a])
+
+# wrong test case. paddle throw error " IndexError: list index out of range" in paddle.jit.save()
+def test_conditional_block_concat_empty():
+    def test(model_name, inputs:list, input_shapes=[]):
+        with paddle.static.program_guard(paddle.static.Program(), paddle.static.Program()):
+            @paddle.jit.to_static
+            def test_model(a):
+                rpn_rois_list = []
+
+                return paddle.concat(rpn_rois_list)
+            exportModel(model_name, test_model, inputs, target_dir=sys.argv[1], dyn_shapes=input_shapes)
+
+    a = paddle.to_tensor([[1.0, 2.0, 3.0],
+                        [4.0, 5.0, 6.0]])
+    test('conditional_block_concat_empty', [a])    
+
+# could generate paddle model, but paddle throw exception during inferencing.
+def test_conditional_block_slice0_empty_false():
+    def test(model_name, inputs:list, input_shapes=[]):
+        with paddle.static.program_guard(paddle.static.Program(), paddle.static.Program()):
+            @paddle.jit.to_static
+            def test_model(a):
+                rpn_rois_list = []
+
+                if a.shape[0] >= 1000: # false condition
+                    rpn_rois_list.append(a)
+
+                return rpn_rois_list[0]
+            exportModel(model_name, test_model, inputs, target_dir=sys.argv[1], dyn_shapes=input_shapes)
+
+    a = paddle.to_tensor([[1.0, 2.0, 3.0],
+                        [4.0, 5.0, 6.0]])
+    test('conditional_block_slice0_empty_false', [a])    
+
 def test_conditional_block_slice0_scaler():
     def test(model_name, inputs:list, input_shapes=[]):
         with paddle.static.program_guard(paddle.static.Program(), paddle.static.Program()):
@@ -284,3 +351,7 @@ if __name__ == "__main__":
     test_conditional_block_slice0_aixs1_axis2()
     test_conditional_block_slice0_2tensorarrays()
     test_conditional_block_slice0_2tensorarrays_extra()
+    test_conditional_block_slice0_else()
+    # test_conditional_block_slice0_empty()
+    # test_conditional_block_concat_empty()
+    # test_conditional_block_slice0_empty_false()
