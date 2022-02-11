@@ -26,8 +26,9 @@ std::shared_ptr<Node> op::internal::TensorArrayCreate::clone_with_new_inputs(con
 void op::internal::TensorArrayCreate::validate_and_infer_types() {
     auto ps = get_input_partial_shape(0);
 
-    // TODO: which axis should be concat?
-    ps[1] = ov::Dimension(); // HARDCODE axis?
+    for (auto i = 0; i < ps.size(); i++) {
+        ps[i] = ov::Dimension();
+    }
     set_output_type(0, get_input_element_type(0), ps);
 }
 
