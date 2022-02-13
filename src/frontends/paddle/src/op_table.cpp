@@ -52,7 +52,10 @@ OP_CONVERTER(less_than);
 OP_CONVERTER(linear_interp_v2);
 OP_CONVERTER(lod_array_length);
 OP_CONVERTER(log);
+OP_CONVERTER(logical_and);
 OP_CONVERTER(logical_not);
+OP_CONVERTER(logical_or);
+OP_CONVERTER(logical_xor);
 OP_CONVERTER(matmul);
 OP_CONVERTER(matmul_v2);
 OP_CONVERTER(matrix_nms);
@@ -64,6 +67,11 @@ OP_CONVERTER(pow);
 OP_CONVERTER(pool2d);
 OP_CONVERTER(prior_box);
 OP_CONVERTER(range);
+OP_CONVERTER(reduce_max);
+OP_CONVERTER(reduce_mean);
+OP_CONVERTER(reduce_min);
+OP_CONVERTER(reduce_prod);
+OP_CONVERTER(reduce_sum);
 OP_CONVERTER(relu);
 OP_CONVERTER(relu6);
 OP_CONVERTER(reshape2);
@@ -140,7 +148,10 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"linear_interp_v2", op::linear_interp_v2},
             {"lod_array_length", op::lod_array_length},
             {"log", op::log},
+            {"logical_and", op::logical_and},
             {"logical_not", op::logical_not},
+            {"logical_or", op::logical_or},
+            {"logical_xor", op::logical_xor},
             {"lookup_table_v2", op::embedding},
             {"matmul", op::matmul},
             {"matmul_v2", op::matmul_v2},
@@ -155,6 +166,11 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"pool2d", op::pool2d},
             {"prior_box", op::prior_box},
             {"range", op::range},
+            {"reduce_max", op::reduce_max},
+            {"reduce_mean", op::reduce_mean},
+            {"reduce_min", op::reduce_min},
+            {"reduce_prod", op::reduce_prod},
+            {"reduce_sum", op::reduce_sum},
             {"relu", op::relu},
             {"relu6", op::relu6},
             {"reshape2", op::reshape2},
