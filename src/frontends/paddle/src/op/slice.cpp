@@ -81,9 +81,11 @@ NamedOutputs slice(const NodeContext& node) {
     auto end_node = std::make_shared<Broadcast>(const_max_node, shape_shape_node);
     auto axes_node = Constant::create(element::i32, {axes.size(), 1}, axes);
     // update t1
-    auto fixed_start_node = std::make_shared<ScatterNDUpdate>(start_node, axes_node, start_idx_node);
+    auto start_idx_node_convert = std::make_shared<ConvertLike>(start_idx_node, start_node);
+    auto fixed_start_node = std::make_shared<ScatterNDUpdate>(start_node, axes_node, start_idx_node_convert);
     // update t2
-    auto fixed_end_node = std::make_shared<ScatterNDUpdate>(end_node, axes_node, end_idx_node);
+    auto end_idx_node_convert = std::make_shared<ConvertLike>(end_idx_node, end_node);
+    auto fixed_end_node = std::make_shared<ScatterNDUpdate>(end_node, axes_node, end_idx_node_convert);
 
     auto stride_slice_node = std::make_shared<StridedSlice>(data,
                                                             fixed_start_node,

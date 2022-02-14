@@ -19,7 +19,7 @@ public:
     SelectInput(const Output<Node>& args0,
                 const Output<Node>& args1,
                 const Output<Node>& mask,
-                const element::Type output_type);
+                const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos);
 
     void validate_and_infer_types() override;
 
@@ -28,7 +28,7 @@ public:
     std::shared_ptr<Node> clone_with_new_inputs(const OutputVector& new_args) const override;
 
 private:
-    element::Type m_output_type;
+    std::vector<std::pair<ov::element::Type, ov::PartialShape>> m_output_infos;
 };
 
 }  // namespace internal
