@@ -107,18 +107,20 @@ NamedOutputs make_ng_node(const std::map<paddle::TensorName, Output<Node>>& node
                         }
                     }
 
-                    if (tensor_ps.is_static()) {
-                        shape[1] = 0;
-                    }
+                    // if (tensor_ps.is_static()) {
+                    //     shape[1] = 0;
+                    // }
+                    // pre-append zero, we will remove the data in slice&tenorarray_tensor
+                    shape[1] = 1;
 
                     std::cout << "tensorarray ps " << tensor_ps << "fakenode " << shape << std::endl;
 
                     auto init = ov::opset6::Constant::create(type, shape, {0}); // FIXME
                     //auto fakenode = std::make_shared<ov::op::internal::TensorArrayCreate>(init);
-                    //auto fakenode = init;
-                    PartialShape ps(tensor_ps);
-                    ps[1] = Dimension();
-                    auto fakenode = make_fake_dyn_out_node(1, ps, init->output(0)).get_node_shared_ptr();
+                    auto fakenode = init;
+                    // PartialShape ps(tensor_ps);
+                    // ps[1] = Dimension();
+                    // auto fakenode = make_fake_dyn_out_node(1, ps, init->output(0)).get_node_shared_ptr();
                     fakenode->set_friendly_name(in_tensor_name);
                     fakenode->output(0).get_tensor().add_names({in_tensor_name}); // ??
                     named_inputs[input_port.parameter()].push_back(fakenode);
@@ -401,7 +403,7 @@ void FrontEnd::normalize(const std::vector<std::shared_ptr<Model>>& models) cons
     for (auto &model : models) {
         ov::pass::Manager manager;
         manager.register_pass<ov::pass::VisualizeTree>("pre_normalize"+std::to_string(block_idx)+".png");
-        //manager.register_pass<ov::frontend::paddle::pass::TransformEliminateConvert>();
+        manager.register_pass<ov::frontend::paddle::pass::TransformEliminateConvert>();
         manager.register_pass<ov::frontend::paddle::pass::TransformTensorArray>(models);
         manager.register_pass<ov::frontend::paddle::pass::TransformIf>(models);
         manager.register_pass<ov::frontend::paddle::pass::TransformWhile>(models);

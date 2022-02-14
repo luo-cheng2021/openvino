@@ -14,23 +14,17 @@ namespace op {
 using namespace default_opset;
 NamedOutputs slice(const NodeContext& node) {
     auto data = node.get_input("Input");
+    auto decrease_axis = node.get_attribute<std::vector<int32_t>>("decrease_axis");
 
-    // // check if there are any TensorArray inputs.
-    // const auto inputs_names = node.get_input_var_names("Input");
-    // std::vector<TensorName> tensorarray_inputs;
-    // for (const auto& inputname : inputs_names) {
-    //     if (node.is_tensorarray(inputname, 1)) {
-    //         tensorarray_inputs.push_back(inputname);
-    //     }
-    // }
-    // if (tensorarray_inputs.size()>0) {
-    //     auto start = Constant::create(element::i32, {1}, {0});
-    //     auto stop = Constant::create(element::i32, {1}, {1});
-    //     auto step = Constant::create(element::i32, {1}, {1});
-    //     auto axes = Constant::create(element::i32, {1}, {0});
-    //     const auto slice_node = std::make_shared<Slice>(data, start, stop, step, axes);
-    //     return node.default_single_output_mapping({slice_node}, {"Out"});
-    // }
+    // check if there are any TensorArray inputs.
+    const auto inputs_names = node.get_input_var_names("Input");
+    bool is_tensorarray = false;
+    for (const auto& inputname : inputs_names) {
+        if (node.is_tensorarray(inputname, 1)) {
+            is_tensorarray = true;
+            break;
+        }
+    }
 
     auto axes = node.get_attribute<std::vector<int32_t>>("axes");
     Output<Node> start_idx_node, end_idx_node;
@@ -82,6 +76,11 @@ NamedOutputs slice(const NodeContext& node) {
     auto axes_node = Constant::create(element::i32, {axes.size(), 1}, axes);
     // update t1
     auto fixed_start_node = std::make_shared<ScatterNDUpdate>(start_node, axes_node, start_idx_node);
+    if (is_tensorarray && !decrease_axis.empty()) {
+        // skip pre-append const
+        const auto one = Constant::create(element::i32, {1}, {1});
+        fixed_start_node = std::make_shared<ScatterNDUpdate>(fixed_start_node, one, one);
+    }
     // update t2
     auto fixed_end_node = std::make_shared<ScatterNDUpdate>(end_node, axes_node, end_idx_node);
 
@@ -90,8 +89,6 @@ NamedOutputs slice(const NodeContext& node) {
                                                             fixed_end_node,
                                                             std::vector<int64_t>{0},
                                                             std::vector<int64_t>{0});
-
-    auto decrease_axis = node.get_attribute<std::vector<int32_t>>("decrease_axis");
 
     if (decrease_axis.size() > 0) {
         // according to paddle slice_op, when all axes are decreased, output shape is [1], instead of scalar.
