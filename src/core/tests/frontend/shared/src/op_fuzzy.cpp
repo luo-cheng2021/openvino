@@ -65,21 +65,28 @@ void FrontEndFuzzyOpTest::runConvertedModel(const std::shared_ptr<ngraph::Functi
                                             const std::string& modelFile) {
     auto modelFolder = getModelFolder(modelFile);
 
+    // reshape for models with dynamic input shape
+    const auto parameters = function->get_parameters();
+    for (size_t i = 0; i < parameters.size(); i++) {
+        if (parameters[i]->get_partial_shape().is_dynamic()) {
+            // read input npy file
+            std::string dataFile = modelFolder + "/input" + std::to_string((parameters.size() - 1) - i) + ".npy";
+            cnpy::NpyArray input = cnpy::npy_load(dataFile);
+
+            parameters[i]->set_partial_shape(Shape(input.shape));
+        }
+    }
+    function->validate_nodes_and_infer_types(); // FIXME: in need? any better way to reshape?
+
     // run test
     auto testCase = test::TestCase(function, "CPU");
     //auto testCase = test::TestCase(function);
 
-    const auto parameters = function->get_parameters();
     for (size_t i = 0; i < parameters.size(); i++) {
         // read input npy file
         std::string dataFile = modelFolder + "/input" + std::to_string((parameters.size() - 1) - i) + ".npy";
         cnpy::NpyArray input = cnpy::npy_load(dataFile);
         auto input_dtype = parameters[i]->get_element_type();
-
-        // for models with dynamic input shape
-        if (parameters[i]->get_partial_shape().is_dynamic()) {
-            parameters[i]->set_partial_shape(Shape(input.shape));
-        }
 
         if (input_dtype == element::f32) {
             addInputOutput<float>(input, testCase, true);
