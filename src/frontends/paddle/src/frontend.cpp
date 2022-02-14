@@ -368,6 +368,7 @@ void FrontEnd::normalize(const std::vector<std::shared_ptr<Model>>& models) cons
         manager.register_pass<ov::pass::VisualizeTree>("pre_normalize"+std::to_string(block_idx)+".png");
         manager.register_pass<ov::frontend::paddle::pass::TransformEliminateConvert>();
         manager.register_pass<ov::frontend::paddle::pass::TransformTensorArray>(models);
+        manager.register_pass<ov::frontend::paddle::pass::TransformSelectInput>(models);
         manager.register_pass<ov::frontend::paddle::pass::TransformIf>(models);
         manager.register_pass<ov::frontend::paddle::pass::TransformWhile>(models);
         manager.register_pass<ov::pass::VisualizeTree>("post_normalize"+std::to_string(block_idx)+".png");
