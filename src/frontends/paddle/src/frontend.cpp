@@ -107,11 +107,9 @@ NamedOutputs make_ng_node(const std::map<paddle::TensorName, Output<Node>>& node
                         }
                     }
 
-                    // if (tensor_ps.is_static()) {
-                    //     shape[1] = 0;
-                    // }
-                    // pre-append zero, we will remove the data in slice&tenorarray_tensor
-                    shape[1] = 1;
+                    if (tensor_ps.is_static()) {
+                        shape[1] = 0;
+                    }
 
                     std::cout << "tensorarray ps " << tensor_ps << "fakenode " << shape << std::endl;
 
