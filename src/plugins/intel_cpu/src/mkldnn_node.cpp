@@ -814,6 +814,7 @@ bool MKLDNNNode::isConstant() {
         if (constant == ConstantType::Unknown)
             constant = ConstantType::NoConst;
     }
+    if (isDynamicNode()) return false;
     return constant == ConstantType::Const;
 }
 

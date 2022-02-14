@@ -193,7 +193,12 @@ void loop(const std::shared_ptr<Function>& func,
             const auto& concat_desc = concat_outputs[i];
             auto shape = func->get_results().at(concat_desc->m_body_value_index)->get_shape();
             std::vector<Shape> shapes_to_concat(values_to_concat[i].size(), shape);
-            shape.at(concat_desc->m_axis) = values_to_concat[i].size();
+            size_t len = 0;
+            for (const auto &v : values_to_concat[i]) {
+                len += v->get_shape()[concat_desc->m_axis];
+            }
+
+            shape.at(concat_desc->m_axis) = len; // values_to_concat[i].size();
             out[concat_desc->m_output_index]->set_shape(shape);
             std::vector<const char*> pointers_on_values;
             pointers_on_values.reserve(values_to_concat[i].size());

@@ -250,6 +250,9 @@ void DynamicBuffer::init(const mkldnn::engine& eng) {
     auto src_desc = src_mem.get_desc();
     auto dims = src_desc.dims();
 
+    if (dims[axis] == 0)
+        return;
+
     if (dims[axis] != abs_stride)
         IE_THROW() << "TensorIterator (Loop) has incorrect output shape[axis] after iteration for concatenation. " << abs_stride <<
                    " is expected, but actual: " << dims[axis];
