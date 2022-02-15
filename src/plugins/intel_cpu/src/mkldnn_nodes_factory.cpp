@@ -75,7 +75,7 @@
 #include "nodes/mkldnn_cum_sum_node.h"
 #include "nodes/mkldnn_depth_to_space_node.h"
 #include "nodes/mkldnn_input_node.h"
-#include "nodes/mkldnn_experimental_detectron_generate_proposals_single_image_node.h"
+#include "nodes/mkldnn_generate_proposals_single_image_node.h"
 #include "nodes/mkldnn_embedding_bag_packed_sum_node.h"
 #include "nodes/mkldnn_reduce_node.h"
 #include "nodes/mkldnn_if_node.h"
@@ -127,7 +127,7 @@ MKLDNNPlugin::MKLDNNNode::NodesFactory::NodesFactory()
     MKLDNN_NODE(MKLDNNEmbeddingSegmentsSumNode, EmbeddingSegmentsSum);
     MKLDNN_NODE(MKLDNNSelectNode, Select);
     MKLDNN_NODE(MKLDNNShapeOfNode, ShapeOf);
-    MKLDNN_NODE(MKLDNNExperimentalDetectronGenerateProposalsSingleImageNode, ExperimentalDetectronGenerateProposalsSingleImage);
+    MKLDNN_NODE(MKLDNNGenerateProposalsSingleImageNode, GenerateProposalsSingleImage);
     MKLDNN_NODE(MKLDNNReverseSequenceNode, ReverseSequence);
     MKLDNN_NODE(MKLDNNFakeQuantizeNode, FakeQuantize);
     MKLDNN_NODE(MKLDNNNonMaxSuppressionNode, NonMaxSuppression);

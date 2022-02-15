@@ -9,9 +9,9 @@
 
 namespace MKLDNNPlugin {
 
-class MKLDNNExperimentalDetectronGenerateProposalsSingleImageNode : public MKLDNNNode {
+class MKLDNNGenerateProposalsSingleImageNode : public MKLDNNNode {
 public:
-    MKLDNNExperimentalDetectronGenerateProposalsSingleImageNode(const std::shared_ptr<ngraph::Node>& op,
+    MKLDNNGenerateProposalsSingleImageNode(const std::shared_ptr<ngraph::Node>& op,
         const mkldnn::engine& eng, MKLDNNWeightsSharing::Ptr &cache);
 
     void getSupportedDescriptors() override {};

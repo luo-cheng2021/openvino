@@ -180,7 +180,7 @@ const InferenceEngine::details::caseless_unordered_map<std::string, Type> type_t
         { "ExperimentalDetectronTopKROIs", ExperimentalDetectronTopKROIs},
         { "ExperimentalDetectronROIFeatureExtractor", ExperimentalDetectronROIFeatureExtractor},
         { "ExperimentalDetectronPriorGridGenerator", ExperimentalDetectronPriorGridGenerator},
-        { "ExperimentalDetectronGenerateProposalsSingleImage", ExperimentalDetectronGenerateProposalsSingleImage},
+        { "GenerateProposalsSingleImage", GenerateProposalsSingleImage},
         { "ExtractImagePatches", ExtractImagePatches},
         { "NonMaxSuppression", NonMaxSuppression},
         { "NonMaxSuppressionIEInternal", NonMaxSuppression},
@@ -361,8 +361,8 @@ std::string NameFromType(const Type type) {
             return "ExperimentalDetectronROIFeatureExtractor";
         case ExperimentalDetectronPriorGridGenerator:
             return "ExperimentalDetectronPriorGridGenerator";
-        case ExperimentalDetectronGenerateProposalsSingleImage:
-            return "ExperimentalDetectronGenerateProposalsSingleImage";
+        case GenerateProposalsSingleImage:
+            return "GenerateProposalsSingleImage";
         case ExtractImagePatches:
             return "ExtractImagePatches";
         case NonMaxSuppression:
