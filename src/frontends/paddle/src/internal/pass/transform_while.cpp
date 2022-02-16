@@ -46,10 +46,21 @@ ov::frontend::paddle::pass::TransformWhile::TransformWhile(std::vector<std::shar
 
         const auto& parameters = sub_model->get_parameters();
         const auto submodel_outputs = sub_model->outputs();
+        const auto is_exist = [&submodel_outputs](const std::string& name) {
+            for (const auto& out : submodel_outputs) {
+                if (out.get_any_name() == name)
+                    return true;
+            }
+            return false;
+        };
         for (size_t i = 0; i < parameters.size(); i++) {
             const auto& param_name = inputs[i].get_node()->get_friendly_name();
-            auto out_node = sub_model->output(param_name);
-            loop->set_merged_input(parameters[i], inputs[i], out_node);
+            if (is_exist(param_name)) {
+                auto out_node = sub_model->output(param_name);
+                loop->set_merged_input(parameters[i], inputs[i], out_node);
+            } else {
+                loop->set_invariant_input(parameters[i], inputs[i]);
+            }
         }
         int64_t idx = -1;
         for (size_t i = 0; i < sub_model->get_results().size(); i++) {

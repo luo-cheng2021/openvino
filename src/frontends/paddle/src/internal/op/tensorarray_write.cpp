@@ -32,5 +32,10 @@ bool op::internal::TensorArrayWrite::visit_attributes(AttributeVisitor& visitor)
 void op::internal::TensorArrayWrite::validate_and_infer_types() {
     // TODO: use tensorarray as the 3rd input to generalize this shape infer.
     auto ps = get_input_node_ptr(1)->get_input_partial_shape(0);
+    if (ps.rank().is_static() && ps.rank().get_length() >= 2) {
+        if (ps[1].is_static()) {
+            ps[1] += 1;
+        }
+    }
     set_output_type(0, get_input_element_type(0), ps);
 }

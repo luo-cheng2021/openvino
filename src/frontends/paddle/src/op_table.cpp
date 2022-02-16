@@ -52,6 +52,7 @@ OP_CONVERTER(less_than);
 OP_CONVERTER(linear_interp_v2);
 OP_CONVERTER(lod_array_length);
 OP_CONVERTER(log);
+OP_CONVERTER(logical_and);
 OP_CONVERTER(logical_not);
 OP_CONVERTER(matmul);
 OP_CONVERTER(matmul_v2);
@@ -140,6 +141,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"linear_interp_v2", op::linear_interp_v2},
             {"lod_array_length", op::lod_array_length},
             {"log", op::log},
+            {"logical_and", op::logical_and},
             {"logical_not", op::logical_not},
             {"lookup_table_v2", op::embedding},
             {"matmul", op::matmul},
