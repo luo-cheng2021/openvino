@@ -12,7 +12,7 @@ namespace ov {
 namespace frontend {
 namespace paddle {
 namespace op {
-NamedOutputs select_input_(const NodeContext& node) {
+NamedOutputs select_input(const NodeContext& node) {
     const auto x = node.get_ng_inputs("X");
     const auto mask = node.get_input("Mask");
 
@@ -62,7 +62,7 @@ NamedOutputs select_input_(const NodeContext& node) {
     // }
 }
 
-NamedOutputs select_input(const NodeContext& node) {
+NamedOutputs select_input_(const NodeContext& node) {
     const auto x = node.get_ng_inputs("X");
     const auto mask = node.get_input("Mask");
 
