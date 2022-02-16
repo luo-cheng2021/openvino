@@ -21,6 +21,15 @@ private:
     std::vector<std::shared_ptr<Model>> m_functions;
 };
 
+class TransformSelectInput : public ov::pass::MatcherPass {
+public:
+    OPENVINO_RTTI("ov::frontend::pass::TransformSelectInput");
+    TransformSelectInput(std::vector<std::shared_ptr<Model>> functions);
+
+private:
+    std::vector<std::shared_ptr<Model>> m_functions;
+};
+
 }  // namespace pass
 }  // namespace paddle
 }  // namespace frontend

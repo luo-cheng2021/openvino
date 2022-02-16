@@ -12,7 +12,7 @@ namespace ov {
 namespace frontend {
 namespace paddle {
 namespace op {
-NamedOutputs select_input(const NodeContext& node) {
+NamedOutputs select_input_(const NodeContext& node) {
     const auto x = node.get_ng_inputs("X");
     const auto mask = node.get_input("Mask");
 
@@ -60,6 +60,16 @@ NamedOutputs select_input(const NodeContext& node) {
     //     if_node->set_output(then_result, else_result);
     //     return node.default_single_output_mapping({if_node}, {"Out"});
     // }
+}
+
+NamedOutputs select_input(const NodeContext& node) {
+    const auto x = node.get_ng_inputs("X");
+    const auto mask = node.get_input("Mask");
+
+    auto outputs_info = node.get_output_port_infos("Out");
+    auto placehodler = std::make_shared<ov::op::internal::SelectInput>(x[0], x[1], mask, outputs_info);
+
+    return node.default_single_output_mapping({placehodler}, {"Out"});
 }
 
 }  // namespace op
