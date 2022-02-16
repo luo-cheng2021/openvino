@@ -42,36 +42,6 @@ namespace frontend {
 namespace paddle {
 namespace {
 
-ov::Output<ov::Node> make_fake_dyn_out_node(const int axis, const PartialShape& partial_shape, const ov::Output<ov::Node>& input_node) {
-    // data movement model
-    const auto const_false = Constant::create(element::i32, {1}, {false});
-    const auto param_input = std::make_shared<Parameter>(input_node.get_element_type(), partial_shape);
-    const auto param_cond = std::make_shared<Parameter>(element::i32, PartialShape{1});
-    const auto cond_result = std::make_shared<Result>(std::make_shared<Convert>(param_cond, element::boolean));
-    const auto result = std::make_shared<Result>(param_input);
-    auto sub_model = std::make_shared<Model>(ResultVector{result, cond_result}, ParameterVector{param_input, param_cond});
-
-    const auto trip_count = Constant::create(element::i64, {1}, {-1});
-    const auto cond = Constant::create(element::boolean, {1}, {true});
-    auto loop = std::make_shared<Loop>(trip_count, cond);
-    ov::pass::disable_constant_folding(loop);
-    
-    // iter, condition output idx
-    loop->set_special_body_ports(Loop::SpecialBodyPorts{-1, 1});
-    loop->set_function(sub_model);
-    const auto& parameters = sub_model->get_parameters();
-    const auto& results = sub_model->get_results();
-    loop->set_invariant_input(parameters[0], input_node);
-    loop->set_invariant_input(parameters[1], const_false);
-
-    // the dynamic output
-    const auto out = loop->get_concatenated_slices(results[0], 0, 1, 1, -1, axis);
-    // the condition output
-    loop->get_iter_value(results[1], -1);
-
-    return out;
-}
-
 NamedOutputs make_ng_node(const std::map<paddle::TensorName, Output<Node>>& nodes,
                           const std::shared_ptr<OpPlace>& op_place,
                           const std::map<std::string, CreatorFunction>& CREATORS_MAP,
@@ -113,12 +83,7 @@ NamedOutputs make_ng_node(const std::map<paddle::TensorName, Output<Node>>& node
 
                     std::cout << "tensorarray ps " << tensor_ps << "fakenode " << shape << std::endl;
 
-                    auto init = ov::opset6::Constant::create(type, shape, {0}); // FIXME
-                    //auto fakenode = std::make_shared<ov::op::internal::TensorArrayCreate>(init);
-                    auto fakenode = init;
-                    // PartialShape ps(tensor_ps);
-                    // ps[1] = Dimension();
-                    // auto fakenode = make_fake_dyn_out_node(1, ps, init->output(0)).get_node_shared_ptr();
+                    auto fakenode = ov::opset6::Constant::create(type, shape, {0}); // FIXME
                     fakenode->set_friendly_name(in_tensor_name);
                     fakenode->output(0).get_tensor().add_names({in_tensor_name}); // ??
                     named_inputs[input_port.parameter()].push_back(fakenode);

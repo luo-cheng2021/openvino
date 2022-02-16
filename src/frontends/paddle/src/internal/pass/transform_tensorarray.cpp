@@ -24,6 +24,7 @@
 #include "openvino/pass/pattern/op/label.hpp"
 #include "openvino/frontend/paddle/exception.hpp"
 #include <ngraph/log.hpp>
+#include <transformations/common_optimizations/remove_concat_zero_dim_input.hpp>
 
 using namespace std;
 using namespace ov;
@@ -44,7 +45,10 @@ ov::frontend::paddle::pass::TransformTensorArray::TransformTensorArray(std::vect
         const auto& list = length_node->get_input_node_shared_ptr(0);
         const auto& new_item_unsqueeze = std::make_shared<Unsqueeze>(new_item->output(0), Constant::create(element::i32, {1}, {0}));
         // remove TensorArrayLength->TensorArrayWrite
-        const auto concat = std::make_shared<Concat>(OutputVector{list->output(0), new_item_unsqueeze->output(0)}, 1/*HARDCODE axis*/); // TODO: which axis should be concat?
+        const auto concat = std::make_shared<Concat>(OutputVector{list->output(0), new_item_unsqueeze->output(0)}, 1);
+        // prevent to remove concating zero-tensor
+        ov::pass::disable_remove_concat_zerodim_input(concat);
+
         replace_node(write_node, concat);
         concat->set_friendly_name(write_node->get_friendly_name());
 

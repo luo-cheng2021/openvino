@@ -90,8 +90,7 @@ bool ngraph::pass::MOCTransformations::run_on_model(const std::shared_ptr<ngraph
     // Zero dimensions in shape causes creation empty tensors, which are incorrect during CF.
     // In particular, if zero dim tensor is consumed in body of MultiSubGraphOp
     // RemoveConcatZeroDimInput and RemoveMultiSubGraphOpDanglingParams should be called together.
-    // TODO: add condition to bypass
-    //manager.register_pass<ov::pass::RemoveConcatZeroDimInput>();
+    manager.register_pass<ov::pass::RemoveConcatZeroDimInput>();
     manager.register_pass<ov::pass::Validate>();
     manager.register_pass<ov::pass::RemoveMultiSubGraphOpDanglingParams>();
     manager.register_pass<ngraph::pass::DisableRandomUniformConstantFolding>();
