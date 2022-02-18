@@ -9,9 +9,9 @@
 
 namespace MKLDNNPlugin {
 
-class MKLDNNExperimentalDetectronGenerateProposalsSingleImageNode : public MKLDNNNode {
+class MKLDNNGenerateProposalsSingleImageNode : public MKLDNNNode {
 public:
-    MKLDNNExperimentalDetectronGenerateProposalsSingleImageNode(const std::shared_ptr<ngraph::Node>& op,
+    MKLDNNGenerateProposalsSingleImageNode(const std::shared_ptr<ngraph::Node>& op,
         const mkldnn::engine& eng, MKLDNNWeightsSharing::Ptr &cache);
 
     void getSupportedDescriptors() override {};
@@ -33,7 +33,6 @@ private:
     // Outputs:
     //      rois,    shape [rois_num, 4]
     //      scores,  shape [rois_num]
-    //      num,     shape [1]
 
     const int INPUT_IM_INFO {0};
     const int INPUT_ANCHORS {1};
@@ -41,14 +40,12 @@ private:
     const int INPUT_SCORES {3};
     const int OUTPUT_ROIS {0};
     const int OUTPUT_SCORES {1};
-    const int OUTPUT_NUM {2};
 
     float min_size_;
     int pre_nms_topn_;
     int post_nms_topn_;
     float nms_thresh_;
-    float coordinates_offset;
-    bool dynamic_output;
+    float coordinates_offset_;
 
     std::vector<int> roi_indices_;
 };

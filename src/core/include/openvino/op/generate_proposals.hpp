@@ -14,11 +14,11 @@
 namespace ov {
 namespace op {
 namespace v6 {
-/// \brief An operation ExperimentalDetectronGenerateProposalsSingleImage
+/// \brief An operation GenerateProposalsSingleImage
 /// computes ROIs and their scores based on input data.
-class OPENVINO_API ExperimentalDetectronGenerateProposalsSingleImage : public Op {
+class OPENVINO_API GenerateProposalsSingleImage : public Op {
 public:
-    OPENVINO_OP("ExperimentalDetectronGenerateProposalsSingleImage", "opset6", op::Op, 6);
+    OPENVINO_OP("GenerateProposalsSingleImage", "opset6", op::Op, 6);
     BWDCMP_RTTI_DECLARATION;
 
     /// \brief Structure that specifies attributes of the operation
@@ -33,15 +33,15 @@ public:
         int64_t pre_nms_count;
     };
 
-    ExperimentalDetectronGenerateProposalsSingleImage() = default;
-    /// \brief Constructs a ExperimentalDetectronGenerateProposalsSingleImage operation.
+    GenerateProposalsSingleImage() = default;
+    /// \brief Constructs a GenerateProposalsSingleImage operation.
     ///
     /// \param im_info Input image info
     /// \param anchors Input anchors
     /// \param deltas Input deltas
     /// \param scores Input scores
     /// \param attrs Operation attributes
-    ExperimentalDetectronGenerateProposalsSingleImage(const Output<Node>& im_info,
+    GenerateProposalsSingleImage(const Output<Node>& im_info,
                                                       const Output<Node>& anchors,
                                                       const Output<Node>& deltas,
                                                       const Output<Node>& scores,
@@ -62,12 +62,12 @@ private:
 };
 }  // namespace v6
 
-namespace v8 {
-/// \brief An operation ExperimentalDetectronGenerateProposalsSingleImage
+namespace v9 {
+/// \brief An operation GenerateProposalsSingleImage
 /// computes ROIs and their scores based on input data.
-class OPENVINO_API ExperimentalDetectronGenerateProposalsSingleImage : public Op {
+class OPENVINO_API GenerateProposalsSingleImage : public Op {
 public:
-    OPENVINO_OP("ExperimentalDetectronGenerateProposalsSingleImage", "opset8", op::Op, 8);
+    OPENVINO_OP("GenerateProposalsSingleImage", "opset9", op::Op, 9);
     BWDCMP_RTTI_DECLARATION;
 
     /// \brief Structure that specifies attributes of the operation
@@ -80,19 +80,23 @@ public:
         int64_t post_nms_count;
         // number of top-n proposals before NMS
         int64_t pre_nms_count;
-        // specifies whether the output is dynamic shape or static shape
-        bool dynamic_output = false;
+        // specify whether the bbox is normalized or not.
+        // For example if *normalized* is true, width = x_right - x_left
+        // If *normalized* is false, width = x_right - x_left + 1.
+        bool normalized = true;
+        // specify eta parameter for adaptive NMS in generate proposals
+        float nms_eta = 1.0;
     };
 
-    ExperimentalDetectronGenerateProposalsSingleImage() = default;
-    /// \brief Constructs a ExperimentalDetectronGenerateProposalsSingleImage operation.
+    GenerateProposalsSingleImage() = default;
+    /// \brief Constructs a GenerateProposalsSingleImage operation.
     ///
     /// \param im_info Input image info
     /// \param anchors Input anchors
     /// \param deltas Input deltas
     /// \param scores Input scores
     /// \param attrs Operation attributes
-    ExperimentalDetectronGenerateProposalsSingleImage(const Output<Node>& im_info,
+    GenerateProposalsSingleImage(const Output<Node>& im_info,
                                                       const Output<Node>& anchors,
                                                       const Output<Node>& deltas,
                                                       const Output<Node>& scores,
@@ -111,6 +115,6 @@ public:
 private:
     Attributes m_attrs;
 };
-}  // namespace v8
+}  // namespace v9
 }  // namespace op
 }  // namespace ov
