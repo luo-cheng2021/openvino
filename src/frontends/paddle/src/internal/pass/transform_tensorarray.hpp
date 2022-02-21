@@ -21,7 +21,7 @@ private:
     std::vector<std::shared_ptr<Model>> m_functions;
 };
 
-class TransformEliminateConvert: public ov::pass::MatcherPass {
+class TransformEliminateConvert : public ov::pass::MatcherPass {
 public:
     OPENVINO_RTTI("ov::frontend::pass::TransformEliminateConvert");
     TransformEliminateConvert();

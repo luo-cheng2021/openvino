@@ -7,26 +7,25 @@
 #include <fstream>
 #include <map>
 #include <ngraph/pass/visualize_tree.hpp>
+#include <ngraph/pattern/matcher.hpp>
+#include <ngraph/pattern/op/wrap_type.hpp>
 #include <string>
 #include <vector>
 
 #include "decoder_proto.hpp"
 #include "framework.pb.h"
 #include "input_model.hpp"
-#include "internal/pass/transform_if.hpp"
-#include "internal/pass/transform_while.hpp"
-#include "internal/pass/transform_tensorarray.hpp"
-#include "openvino/pass/manager.hpp"
-#include "openvino/pass/constant_folding.hpp"
-#include "openvino/frontend/paddle/exception.hpp"
 #include "internal/op/tensorarray_create.hpp"
-#include <ngraph/pattern/matcher.hpp>
-#include <ngraph/pattern/op/wrap_type.hpp>
-
+#include "internal/pass/transform_if.hpp"
+#include "internal/pass/transform_tensorarray.hpp"
+#include "internal/pass/transform_while.hpp"
 #include "op_table.hpp"
 #include "openvino/frontend/extension/conversion.hpp"
+#include "openvino/frontend/paddle/exception.hpp"
 #include "openvino/frontend/paddle/node_context.hpp"
 #include "openvino/opsets/opset7.hpp"
+#include "openvino/pass/constant_folding.hpp"
+#include "openvino/pass/manager.hpp"
 #include "openvino/util/common_util.hpp"
 #include "paddle_fw_node.hpp"
 #include "paddle_utils.hpp"
@@ -60,18 +59,19 @@ NamedOutputs make_ng_node(const std::map<paddle::TensorName, Output<Node>>& node
             // as its output. e.g. the tensorarray is both the input and output of the same node.
             // So we have to create a fake empty node here.
             // Problem is, we have no idea which axis should be 0.
-            // Since the models (faster/mask rcnn) are either concating tensors in tensorarray along the dynamic dimension,
-            // or concating static shape tensors.
-            // So we make the dynamic dimension to be 0. In case of static shape, we simply the the first dimension be 0.
+            // Since the models (faster/mask rcnn) are either concating tensors in tensorarray along the dynamic
+            // dimension, or concating static shape tensors. So we make the dynamic dimension to be 0. In case of static
+            // shape, we simply the the first dimension be 0.
             if (node_it == nodes.end()) {
-                const auto& in_tensor = std::dynamic_pointer_cast<TensorPlace>(model->get_place_by_tensor_name(in_tensor_name));
+                const auto& in_tensor =
+                    std::dynamic_pointer_cast<TensorPlace>(model->get_place_by_tensor_name(in_tensor_name));
                 const auto& var_desc = in_tensor->get_desc();
                 if (var_desc.type().has_tensor_array()) {
                     const auto& tensor_ps = in_tensor->get_partial_shape();
                     const auto& type = in_tensor->get_element_type();
                     Shape shape(tensor_ps.size());
                     for (auto i = 0; i < tensor_ps.size(); i++) {
-                        const auto &dim = tensor_ps[i];
+                        const auto& dim = tensor_ps[i];
                         if (dim.is_static()) {
                             shape[i] = dim.get_length();
                         }
@@ -83,11 +83,11 @@ NamedOutputs make_ng_node(const std::map<paddle::TensorName, Output<Node>>& node
 
                     std::cout << "tensorarray ps " << tensor_ps << "fakenode " << shape << std::endl;
 
-                    auto fakenode = ov::opset6::Constant::create(type, shape, {0}); // FIXME
+                    auto fakenode = ov::opset6::Constant::create(type, shape, {0});  // FIXME
                     fakenode->set_friendly_name(in_tensor_name);
-                    fakenode->output(0).get_tensor().add_names({in_tensor_name}); // ??
+                    fakenode->output(0).get_tensor().add_names({in_tensor_name});  // ??
                     named_inputs[input_port.parameter()].push_back(fakenode);
-                    continue; // ignore, handle it in its write_to_array
+                    continue;  // ignore, handle it in its write_to_array
                 }
             }
 
@@ -204,10 +204,10 @@ std::vector<std::shared_ptr<ov::Model>> FrontEnd::convert_each_node(
     }
     auto funcs = convert_each_node_recursive(model, 0, input_tensors, output_tensors, func);
     std::vector<std::shared_ptr<Model>> funcs_vec;
-    for (auto &&item : funcs) {
+    for (auto&& item : funcs) {
         funcs_vec.emplace_back(item.second);
     }
-    
+
     return funcs_vec;
 }
 
@@ -226,9 +226,10 @@ std::map<int32_t, std::shared_ptr<ov::Model>> FrontEnd::convert_each_node_recurs
     OutputVector output_nodes;
 
     using PaddleOpType = std::string;
-    std::map<int32_t, std::tuple<PaddleOpType,
-                           std::vector<std::shared_ptr<TensorPlace>>,
-                           std::vector<std::shared_ptr<TensorPlace>>>>
+    std::map<int32_t,
+             std::tuple<PaddleOpType,
+                        std::vector<std::shared_ptr<TensorPlace>>,
+                        std::vector<std::shared_ptr<TensorPlace>>>>
         subblock_inputs_outputs;  // keep info of controlflow ops
 
     for (const auto& _inp_place : input_tensors) {
@@ -295,7 +296,7 @@ std::map<int32_t, std::shared_ptr<ov::Model>> FrontEnd::convert_each_node_recurs
 
                 subblock_inputs_outputs[block_idx] = std::make_tuple(op_desc.type(), inp_tensors, outp_tensors);
             }
-            
+
             paddle::NamedOutputs named_outputs = func(nodes_dict, op_place);
 
             if (!named_outputs.empty()) {
@@ -352,9 +353,10 @@ std::map<int32_t, std::shared_ptr<ov::Model>> FrontEnd::convert_each_node_recurs
     std::map<int32_t, std::shared_ptr<ov::Model>> block_funcs;
     block_funcs.insert({block_idx, main_block_func});
 
-    for (auto& item: subblock_inputs_outputs) {
+    for (auto& item : subblock_inputs_outputs) {
         auto ctl_op_info = item.second;
-        auto sub_block_func = convert_each_node_recursive(model, item.first, std::get<1>(ctl_op_info), std::get<2>(ctl_op_info), func);
+        auto sub_block_func =
+            convert_each_node_recursive(model, item.first, std::get<1>(ctl_op_info), std::get<2>(ctl_op_info), func);
         block_funcs.insert(sub_block_func.begin(), sub_block_func.end());
     }
 
@@ -363,15 +365,15 @@ std::map<int32_t, std::shared_ptr<ov::Model>> FrontEnd::convert_each_node_recurs
 
 void FrontEnd::normalize(const std::vector<std::shared_ptr<Model>>& models) const {
     auto block_idx = 0;
-    for (auto &model : models) {
+    for (auto& model : models) {
         ov::pass::Manager manager;
-        manager.register_pass<ov::pass::VisualizeTree>("pre_normalize"+std::to_string(block_idx)+".svg");
+        manager.register_pass<ov::pass::VisualizeTree>("pre_normalize" + std::to_string(block_idx) + ".svg");
         manager.register_pass<ov::frontend::paddle::pass::TransformEliminateConvert>();
         manager.register_pass<ov::frontend::paddle::pass::TransformTensorArray>(models);
-        //manager.register_pass<ov::frontend::paddle::pass::TransformSelectInput>(models);
+        // manager.register_pass<ov::frontend::paddle::pass::TransformSelectInput>(models);
         manager.register_pass<ov::frontend::paddle::pass::TransformIf>(models);
         manager.register_pass<ov::frontend::paddle::pass::TransformWhile>(models);
-        manager.register_pass<ov::pass::VisualizeTree>("post_normalize"+std::to_string(block_idx)+".svg");
+        manager.register_pass<ov::pass::VisualizeTree>("post_normalize" + std::to_string(block_idx) + ".svg");
         manager.run_passes(model);
         block_idx++;
     }

@@ -78,7 +78,7 @@ public:
         return decoder.get_input_var_names(var_name);
     }
 
-    bool is_tensorarray(const TensorName& tensor, bool inport=1) const {
+    bool is_tensorarray(const TensorName& tensor, bool inport = 1) const {
         return decoder.is_tensorarray(tensor, inport);
     }
 
@@ -98,7 +98,8 @@ public:
         return decoder.get_output_size(port_name);
     }
 
-    std::vector<std::pair<ov::element::Type, ov::PartialShape>> get_output_port_infos(const std::string& port_name) const {
+    std::vector<std::pair<ov::element::Type, ov::PartialShape>> get_output_port_infos(
+        const std::string& port_name) const {
         return decoder.get_output_port_infos(port_name);
     }
 

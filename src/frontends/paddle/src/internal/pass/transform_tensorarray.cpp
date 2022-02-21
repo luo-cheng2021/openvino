@@ -4,27 +4,27 @@
 
 #include "internal/pass/transform_tensorarray.hpp"
 
+#include <ngraph/log.hpp>
 #include <ngraph/ngraph.hpp>
 #include <ngraph/pattern/matcher.hpp>
 #include <ngraph/pattern/op/or.hpp>
 #include <ngraph/pattern/op/wrap_type.hpp>
 #include <ngraph/rt_info.hpp>
 #include <ngraph/variant.hpp>
+#include <transformations/common_optimizations/remove_concat_zero_dim_input.hpp>
 
 #include "default_opset.hpp"
 #include "internal/op/conditional_block.hpp"
+#include "internal/op/tensorarray_create.hpp"
 #include "internal/op/tensorarray_length.hpp"
-#include "internal/op/while.hpp"
 #include "internal/op/tensorarray_to_tensor.hpp"
 #include "internal/op/tensorarray_write.hpp"
-#include "internal/op/tensorarray_create.hpp"
+#include "internal/op/while.hpp"
+#include "openvino/frontend/paddle/exception.hpp"
 #include "openvino/op/util/op_types.hpp"
 #include "openvino/opsets/opset8.hpp"
 #include "openvino/pass/constant_folding.hpp"
 #include "openvino/pass/pattern/op/label.hpp"
-#include "openvino/frontend/paddle/exception.hpp"
-#include <ngraph/log.hpp>
-#include <transformations/common_optimizations/remove_concat_zero_dim_input.hpp>
 
 using namespace std;
 using namespace ov;
@@ -33,7 +33,8 @@ using namespace frontend::paddle::op::default_opset;
 
 ov::frontend::paddle::pass::TransformTensorArray::TransformTensorArray(std::vector<std::shared_ptr<Model>> functions) {
     auto length_label = ngraph::pattern::wrap_type<ov::op::internal::TensorArrayLength>();
-    auto write_label = ngraph::pattern::wrap_type<ov::op::internal::TensorArrayWrite>({ngraph::pattern::any_input(), length_label});
+    auto write_label =
+        ngraph::pattern::wrap_type<ov::op::internal::TensorArrayWrite>({ngraph::pattern::any_input(), length_label});
 
     matcher_pass_callback callback = [=](pattern::Matcher& m) -> bool {
         const auto& opsMap = m.get_pattern_value_map();
@@ -43,7 +44,8 @@ ov::frontend::paddle::pass::TransformTensorArray::TransformTensorArray(std::vect
             return false;
         const auto& new_item = write_node->get_input_node_shared_ptr(0);
         const auto& list = length_node->get_input_node_shared_ptr(0);
-        const auto& new_item_unsqueeze = std::make_shared<Unsqueeze>(new_item->output(0), Constant::create(element::i32, {1}, {0}));
+        const auto& new_item_unsqueeze =
+            std::make_shared<Unsqueeze>(new_item->output(0), Constant::create(element::i32, {1}, {0}));
         // remove TensorArrayLength->TensorArrayWrite
         const auto concat = std::make_shared<Concat>(OutputVector{list->output(0), new_item_unsqueeze->output(0)}, 1);
         // prevent to remove concating zero-tensor

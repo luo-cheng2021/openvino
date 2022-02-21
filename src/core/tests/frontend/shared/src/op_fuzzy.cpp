@@ -67,7 +67,7 @@ void FrontEndFuzzyOpTest::runConvertedModel(const std::shared_ptr<ngraph::Functi
 
     // run test
     auto testCase = test::TestCase(function, "CPU");
-    //auto testCase = test::TestCase(function);
+    // auto testCase = test::TestCase(function);
 
     const auto parameters = function->get_parameters();
     for (size_t i = 0; i < parameters.size(); i++) {

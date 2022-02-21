@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "openvino/frontend/paddle/node_context.hpp"
 #include "default_opset.hpp"
+#include "openvino/frontend/paddle/node_context.hpp"
 
 namespace ov {
 namespace frontend {
@@ -48,9 +48,7 @@ NamedOutputs expand_v2(const NodeContext& node) {
     auto zero_node = Constant::create(ov::element::i32, {1}, {0});
     auto mask_node = std::make_shared<Greater>(shape_expected_node, zero_node);
     auto fixed_shape_node = std::make_shared<Select>(mask_node, shape_expected_node, fixed_input_shape_node);
-    return node.default_single_output_mapping(
-        {std::make_shared<Broadcast>(x, fixed_shape_node)},
-        {"Out"});
+    return node.default_single_output_mapping({std::make_shared<Broadcast>(x, fixed_shape_node)}, {"Out"});
 }
 
 }  // namespace op

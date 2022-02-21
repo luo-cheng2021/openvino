@@ -15,8 +15,7 @@ using namespace ov;
 
 BWDCMP_RTTI_DEFINITION(op::internal::TensorArrayLength);
 
-op::internal::TensorArrayLength::TensorArrayLength(const Output<Node>& arg0)
-    : Op({arg0}) {
+op::internal::TensorArrayLength::TensorArrayLength(const Output<Node>& arg0) : Op({arg0}) {
     constructor_validate_and_infer_types();
 }
 

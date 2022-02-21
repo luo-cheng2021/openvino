@@ -233,12 +233,13 @@ void op::v5::Loop::validate_and_infer_types() {
                 set_output_type(index, body_value.get_element_type(), ps);
             } else {
                 if (back_edges.count(output_description->m_body_value_index)) {
-                    auto back_param = m_bodies[0]->get_parameters().at(back_edges[output_description->m_body_value_index]);
+                    auto back_param =
+                        m_bodies[0]->get_parameters().at(back_edges[output_description->m_body_value_index]);
                     const auto& param_partial_shape = back_param->get_partial_shape();
                     if (param_partial_shape != ps) {
                         NODE_VALIDATION_CHECK(this,
-                                            ps.rank().get_length() == param_partial_shape.rank().get_length(),
-                                            "Back edge input and output rank should be same");                        
+                                              ps.rank().get_length() == param_partial_shape.rank().get_length(),
+                                              "Back edge input and output rank should be same");
                         ov::PartialShape new_ps(ps);
                         for (auto i = 0; i < ps.size(); i++) {
                             if (ps[i] != param_partial_shape[i]) {

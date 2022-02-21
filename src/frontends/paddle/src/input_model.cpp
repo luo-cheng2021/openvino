@@ -94,7 +94,7 @@ void InputModel::InputModelImpl::loadPlaces() {
         for (const auto& var : block.vars()) {
             const auto& var_type = var.type();
             const auto& var_typename = var_type.GetTypeName();
-            
+
             m_var_places[var.name()] = std::make_shared<TensorPlace>(m_input_model, var);
 
             if (var_type.has_tensor_array()) {
@@ -107,10 +107,10 @@ void InputModel::InputModelImpl::loadPlaces() {
 
                 var_place->set_element_type(TYPE_MAP[tensor_desc.data_type()]);
                 auto ps = std::vector<Dimension>(dims.begin(), dims.end());
-                ps.insert(ps.begin(), 1); // unsqueeze
-                var_place->set_partial_shape(PartialShape(ps)); // FIXME
-                //var_place->set_partial_shape(PartialShape(std::vector<Dimension>(0, 3))); // HARDCODE
-            }            
+                ps.insert(ps.begin(), 1);                        // unsqueeze
+                var_place->set_partial_shape(PartialShape(ps));  // FIXME
+                // var_place->set_partial_shape(PartialShape(std::vector<Dimension>(0, 3))); // HARDCODE
+            }
         }
 
         for (const auto& op : block.ops()) {
@@ -240,8 +240,7 @@ std::basic_string<wchar_t> get_model_path(const std::basic_string<wchar_t>& path
 #endif
 }  // namespace
 
-std::vector<std::shared_ptr<OpPlace>> InputModel::InputModelImpl::get_op_places(
-    const int32_t blck_idx) const {
+std::vector<std::shared_ptr<OpPlace>> InputModel::InputModelImpl::get_op_places(const int32_t blck_idx) const {
     if (m_graph_changed) {
         return determine_cut_nodes();
     }

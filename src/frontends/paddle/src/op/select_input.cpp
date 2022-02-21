@@ -4,9 +4,8 @@
 
 #include "internal/op/select_input.hpp"
 
-#include "openvino/frontend/paddle/node_context.hpp"
-
 #include "default_opset.hpp"
+#include "openvino/frontend/paddle/node_context.hpp"
 
 namespace ov {
 namespace frontend {
@@ -39,9 +38,7 @@ NamedOutputs select_input(const NodeContext& node) {
             auto placehodler = std::make_shared<default_opset::Select>(cond, x[fix_idx(1)], x[fix_idx(0)]);
             return node.default_single_output_mapping({placehodler}, {"Out"});
         }
-        PADDLE_OP_CHECK(node,
-                        false,
-                        "input shapes should be compatible.");
+        PADDLE_OP_CHECK(node, false, "input shapes should be compatible.");
 
         return {};
     }

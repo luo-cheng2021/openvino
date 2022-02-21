@@ -15,11 +15,12 @@ using namespace ov;
 
 BWDCMP_RTTI_DEFINITION(op::internal::ConditionalBlock);
 
-op::internal::ConditionalBlock::ConditionalBlock(const Output<Node>& cond,
-                                                 bool is_scalar_condition,
-                                                 int32_t sub_block_index,
-                                                 int32_t num_outputs,
-                                                 const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos)
+op::internal::ConditionalBlock::ConditionalBlock(
+    const Output<Node>& cond,
+    bool is_scalar_condition,
+    int32_t sub_block_index,
+    int32_t num_outputs,
+    const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos)
     : Op({cond}),
       m_is_scalar_condition(is_scalar_condition),
       m_sub_block_index(sub_block_index),
@@ -28,12 +29,13 @@ op::internal::ConditionalBlock::ConditionalBlock(const Output<Node>& cond,
     constructor_validate_and_infer_types();
 }
 
-op::internal::ConditionalBlock::ConditionalBlock(const OutputVector& inputs,
-                                                 const Output<Node>& cond,
-                                                 bool is_scalar_condition,
-                                                 int32_t sub_block_index,
-                                                 int32_t num_outputs,
-                                                 const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos)
+op::internal::ConditionalBlock::ConditionalBlock(
+    const OutputVector& inputs,
+    const Output<Node>& cond,
+    bool is_scalar_condition,
+    int32_t sub_block_index,
+    int32_t num_outputs,
+    const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos)
     : m_is_scalar_condition(is_scalar_condition),
       m_sub_block_index(sub_block_index),
       m_num_outputs(num_outputs),
@@ -49,7 +51,11 @@ std::shared_ptr<Node> op::internal::ConditionalBlock::clone_with_new_inputs(cons
     check_new_args_count(this, new_args);  // FIXME: have to?
 
     if (new_args.size() == 1) {  // w/o inputs
-        return make_shared<ConditionalBlock>(new_args.at(0), m_is_scalar_condition, m_sub_block_index, m_num_outputs, m_output_infos);
+        return make_shared<ConditionalBlock>(new_args.at(0),
+                                             m_is_scalar_condition,
+                                             m_sub_block_index,
+                                             m_num_outputs,
+                                             m_output_infos);
     } else {
         OutputVector inputs_args;
         for (auto i = 0; i < new_args.size() - 1; i++) {

@@ -1,8 +1,8 @@
 // Copyright (C) 2018-2022 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
-#include "openvino/frontend/paddle/node_context.hpp"
 #include "default_opset.hpp"
+#include "openvino/frontend/paddle/node_context.hpp"
 
 namespace ov {
 namespace frontend {
@@ -15,19 +15,20 @@ NamedOutputs multiclass_nms(const NodeContext& node) {
     auto bboxes = node.get_input("BBoxes");
     auto scores = node.get_input("Scores");
 
-    // a new style of parameters: https://github.com/PaddlePaddle/PaddleDetection/blob/417537702bf8a8b25b41d48651fff0a0b1c8a4b2/ppdet/modeling/ops.py#L873
+    // a new style of parameters:
+    // https://github.com/PaddlePaddle/PaddleDetection/blob/417537702bf8a8b25b41d48651fff0a0b1c8a4b2/ppdet/modeling/ops.py#L873
     const auto scores_ps = scores.get_partial_shape();
     if (scores_ps.rank().is_static() && scores_ps.rank().get_length() == 2) {
         // bboxes: [M, C, 4] -> [N=1, M(M*C), 4]
         // scores: [M, C] -> [N=1, C, M(M*C)]
-        bboxes = std::make_shared<Reshape>(bboxes,
-            Constant::create(element::i32, {3}, {1, -1, 4}), false);
-        scores = std::make_shared<Transpose>(scores,
-            Constant::create(element::i32, {2}, {1, 0}));
+        bboxes = std::make_shared<Reshape>(bboxes, Constant::create(element::i32, {3}, {1, -1, 4}), false);
+        scores = std::make_shared<Transpose>(scores, Constant::create(element::i32, {2}, {1, 0}));
         // TODO: remove static shape
         const auto scores_1d = std::make_shared<Reshape>(scores, Constant::create(element::i32, {1}, {-1}), false);
         const auto shape = std::make_shared<Concat>(
-            NodeVector{Constant::create(element::i32, {2}, std::vector<int64_t>{1, scores_ps[1].get_length()}), std::make_shared<ShapeOf>(scores_1d, element::i32)}, 0);
+            NodeVector{Constant::create(element::i32, {2}, std::vector<int64_t>{1, scores_ps[1].get_length()}),
+                       std::make_shared<ShapeOf>(scores_1d, element::i32)},
+            0);
         scores = std::make_shared<Broadcast>(scores_1d, shape);
     }
 

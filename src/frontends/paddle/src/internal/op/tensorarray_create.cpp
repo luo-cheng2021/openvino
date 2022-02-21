@@ -15,7 +15,7 @@ using namespace ov;
 
 BWDCMP_RTTI_DEFINITION(op::internal::TensorArrayCreate);
 
-op::internal::TensorArrayCreate::TensorArrayCreate(const Output<Node>& args0) : Op({args0}){
+op::internal::TensorArrayCreate::TensorArrayCreate(const Output<Node>& args0) : Op({args0}) {
     constructor_validate_and_infer_types();
 }
 

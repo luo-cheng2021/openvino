@@ -52,7 +52,8 @@ public:
     ///
     /// \return Type of specified output port
     virtual ov::element::Type get_out_port_type(const std::string& port_name) const = 0;
-    virtual std::vector<std::pair<ov::element::Type, ov::PartialShape>> get_output_port_infos(const std::string& port_name) const = 0;
+    virtual std::vector<std::pair<ov::element::Type, ov::PartialShape>> get_output_port_infos(
+        const std::string& port_name) const = 0;
 
     /// \brief Get the type of the operation
     virtual std::string get_op_type() const = 0;

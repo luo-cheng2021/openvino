@@ -4,9 +4,8 @@
 
 #include "internal/op/while.hpp"
 
-#include "openvino/frontend/paddle/node_context.hpp"
-
 #include "default_opset.hpp"
+#include "openvino/frontend/paddle/node_context.hpp"
 
 namespace ov {
 namespace frontend {

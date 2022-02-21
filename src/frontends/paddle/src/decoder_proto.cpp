@@ -121,8 +121,8 @@ bool DecoderProto::is_tensorarray(const paddle::TensorName& tensor_name, bool in
     const auto& query = inputmodel.get_place_by_tensor_name(tensor_name);
 
     (void)inport;
-    
-    const auto& tensorplace = std::dynamic_pointer_cast<TensorPlace>(query);    
+
+    const auto& tensorplace = std::dynamic_pointer_cast<TensorPlace>(query);
     const auto& var_desc = tensorplace->get_desc();
     if (var_desc.type().has_tensor_array()) {
         return true;
@@ -154,12 +154,12 @@ std::map<std::string, std::vector<ov::element::Type>> DecoderProto::get_output_t
     return output_types;
 }
 
-std::vector<std::pair<ov::element::Type, ov::PartialShape>> DecoderProto::get_output_port_infos(const std::string& port_name) const {
+std::vector<std::pair<ov::element::Type, ov::PartialShape>> DecoderProto::get_output_port_infos(
+    const std::string& port_name) const {
     std::vector<std::pair<ov::element::Type, ov::PartialShape>> output_types;
     for (const auto& out_port : op_place->get_output_ports().at(port_name)) {
-            output_types.push_back(
-                {out_port->get_target_tensor_paddle()->get_element_type(),
-                 out_port->get_target_tensor_paddle()->get_partial_shape()});
+        output_types.push_back({out_port->get_target_tensor_paddle()->get_element_type(),
+                                out_port->get_target_tensor_paddle()->get_partial_shape()});
     }
     return output_types;
 }

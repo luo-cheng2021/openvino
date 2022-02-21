@@ -84,11 +84,7 @@ void ov::op::v8::If::validate_and_infer_type_body(
 // TODO: for test only
 bool ov::op::v8::If::evaluate(const HostTensorVector& outputs, const HostTensorVector& inputs) const {
     NGRAPH_OP_SCOPE(v8_if_evaluate);
-    ngraph::runtime::reference::if_reference(m_bodies,
-                                     m_output_descriptions,
-                                     m_input_descriptions,
-                                     outputs,
-                                     inputs);
+    ngraph::runtime::reference::if_reference(m_bodies, m_output_descriptions, m_input_descriptions, outputs, inputs);
     return true;
 }
 

@@ -16,7 +16,9 @@ public:
 
     While() = default;
 
-    While(const OutputVector& inputs, int32_t sub_block, const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos);
+    While(const OutputVector& inputs,
+          int32_t sub_block,
+          const std::vector<std::pair<ov::element::Type, ov::PartialShape>>& output_infos);
 
     void validate_and_infer_types() override;
 

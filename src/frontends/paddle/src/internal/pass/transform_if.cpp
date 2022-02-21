@@ -17,10 +17,10 @@
 #include "internal/op/tensorarray_length.hpp"
 #include "internal/op/tensorarray_write.hpp"
 #include "ngraph/op/util/op_types.hpp"
+#include "openvino/frontend/paddle/exception.hpp"
 #include "openvino/op/util/op_types.hpp"
 #include "openvino/opsets/opset8.hpp"
 #include "openvino/pass/pattern/op/label.hpp"
-#include "openvino/frontend/paddle/exception.hpp"
 
 using namespace std;
 using namespace ov;
@@ -32,11 +32,10 @@ ov::frontend::paddle::pass::TransformIf::TransformIf(std::vector<std::shared_ptr
 
     matcher_pass_callback callback = [funcs](pattern::Matcher& m) -> bool {
         std::vector<std::shared_ptr<Model>> functions = funcs;
-        auto conditional_block =
-            std::dynamic_pointer_cast<ov::op::internal::ConditionalBlock>(m.get_match_root());
+        auto conditional_block = std::dynamic_pointer_cast<ov::op::internal::ConditionalBlock>(m.get_match_root());
         size_t mask_idx = conditional_block->get_input_size() - 1;  // False branch
         std::shared_ptr<Node> cond = conditional_block->get_input_node_shared_ptr(mask_idx);
-        
+
         if (!conditional_block || !cond) {
             return false;
         }
@@ -45,12 +44,13 @@ ov::frontend::paddle::pass::TransformIf::TransformIf(std::vector<std::shared_ptr
         const int32_t then_idx = conditional_block->get_subblock_index();
         const auto& then_branch = functions[then_idx];
         const auto& then_params = then_branch->get_parameters();
-        
+
         // make the else body, just pass through
         ParameterVector params;
         ResultVector results;
         for (auto i = 0; i < then_branch->get_output_size(); i++) {
-            const auto param = std::make_shared<Parameter>(then_branch->get_output_element_type(i), then_branch->get_output_partial_shape(i));
+            const auto param = std::make_shared<Parameter>(then_branch->get_output_element_type(i),
+                                                           then_branch->get_output_partial_shape(i));
             param->set_friendly_name(then_branch->get_output_op(i)->get_output_tensor(0).get_any_name());
             params.push_back(param);
             const auto result = std::make_shared<Result>(param);
@@ -75,7 +75,7 @@ ov::frontend::paddle::pass::TransformIf::TransformIf(std::vector<std::shared_ptr
         }
 
         auto else_param = else_params.cbegin();
-        for (const auto &else_param : else_params) {
+        for (const auto& else_param : else_params) {
             bool found = false;
             for (const auto& from_parent : then_branch_inputs_from_parent) {
                 if (from_parent.get_any_name() == else_param->get_friendly_name()) {
@@ -106,7 +106,6 @@ ov::frontend::paddle::pass::TransformIf::TransformIf(std::vector<std::shared_ptr
     auto m = std::make_shared<ngraph::pattern::Matcher>(cond_label, "condtionalblock_if");
     this->register_matcher(m, callback);
 }
-
 
 ov::frontend::paddle::pass::TransformSelectInput::TransformSelectInput(std::vector<std::shared_ptr<Model>> functions) {
     // auto false_label = ngraph::pattern::wrap_type<opset8::LogicalNot>(); // TODO: false_label,
@@ -161,7 +160,7 @@ ov::frontend::paddle::pass::TransformSelectInput::TransformSelectInput(std::vect
             auto node = from_parent;
             if (node.get_node_shared_ptr() == conditional_block1) {
                 const auto& inputs = conditional_block1->input_values();
-                for (auto &&input : inputs) {
+                for (auto&& input : inputs) {
                     if (input.get_node_shared_ptr()->get_friendly_name() == (*then_param)->get_friendly_name()) {
                         node = input;
                         break;
@@ -183,7 +182,7 @@ ov::frontend::paddle::pass::TransformSelectInput::TransformSelectInput(std::vect
             auto node = from_parent;
             if (node.get_node_shared_ptr() == conditional_block0) {
                 const auto& inputs = conditional_block0->input_values();
-                for (auto &&input : inputs) {
+                for (auto&& input : inputs) {
                     if (input.get_node_shared_ptr()->get_friendly_name() == (*else_param)->get_friendly_name()) {
                         node = input;
                         break;
@@ -240,7 +239,8 @@ ov::frontend::paddle::pass::TransformSelectInput::TransformSelectInput(std::vect
                     auto result_node =
                         std::dynamic_pointer_cast<opset8::Result>(cond0_consumer.get_node()->shared_from_this());
 
-                    result_node->input(0).replace_source_output(Constant::create(element::f32, {1}, {0})->get_default_output());
+                    result_node->input(0).replace_source_output(
+                        Constant::create(element::f32, {1}, {0})->get_default_output());
                 }
             }
         }

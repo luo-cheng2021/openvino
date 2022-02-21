@@ -21,7 +21,9 @@ public:
     std::shared_ptr<Node> clone_with_new_inputs(const OutputVector& new_args) const override;
     bool evaluate(const HostTensorVector& outputs, const HostTensorVector& inputs) const override;
     void validate_and_infer_types() override;
-    bool has_evaluate() const { return true; }
+    bool has_evaluate() const {
+        return true;
+    }
     bool constant_fold(OutputVector& output_values, const OutputVector& inputs_values) override;
 
 private:

@@ -87,7 +87,7 @@ protected:
         const std::vector<std::shared_ptr<TensorPlace>>& input_tensors,
         const std::vector<std::shared_ptr<TensorPlace>>& output_tensors,
         std::function<std::map<std::string, OutputVector>(const std::map<std::string, Output<Node>>&,
-                                                        const std::shared_ptr<OpPlace>&)> func);
+                                                          const std::shared_ptr<OpPlace>&)> func);
     // m_extensions should be the first member here,
     // m_extensions can contain SO Extension (holder for other Extensions),
     // so it should be released last.

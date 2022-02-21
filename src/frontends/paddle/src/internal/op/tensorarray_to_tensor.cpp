@@ -8,16 +8,15 @@
 #include <ngraph/validation_util.hpp>
 
 #include "ngraph/op/constant.hpp"
-#include "openvino/op/util/precision_sensitive_attribute.hpp"
 #include "ngraph/validation_util.hpp"
+#include "openvino/op/util/precision_sensitive_attribute.hpp"
 
 using namespace std;
 using namespace ov;
 
 BWDCMP_RTTI_DEFINITION(op::internal::TensorArrayToTensor);
 
-op::internal::TensorArrayToTensor::TensorArrayToTensor(const Output<Node>& arg0)
-    : Op({arg0}) {
+op::internal::TensorArrayToTensor::TensorArrayToTensor(const Output<Node>& arg0) : Op({arg0}) {
     constructor_validate_and_infer_types();
 }
 

@@ -42,7 +42,6 @@ private:
     std::map<std::string, std::shared_ptr<TensorPlace>> get_var_places() const;
     std::map<std::string, Output<Node>> get_tensor_values() const;
     int32_t get_block_count() const;
-    
 };
 
 }  // namespace paddle
