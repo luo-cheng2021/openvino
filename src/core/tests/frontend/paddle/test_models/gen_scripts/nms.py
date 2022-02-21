@@ -55,11 +55,11 @@ def NMS(name: str, bboxes, scores, attrs: dict, quite=True):
     with pdpd.static.program_guard(pdpd.static.Program(),
                                    pdpd.static.Program()):
         node_boxes = pdpd.static.data(name='bboxes',
-                                      shape=bboxes.shape,
+                                      shape=[-1,] + list(bboxes.shape[1:]),
                                       dtype=bboxes.dtype,
                                       lod_level=1)
         node_scores = pdpd.static.data(name='scores',
-                                       shape=scores.shape,
+                                       shape=[-1,] + list(scores.shape[1:]),
                                        dtype=scores.dtype,
                                        lod_level=1)
 
