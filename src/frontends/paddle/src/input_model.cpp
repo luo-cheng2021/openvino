@@ -61,6 +61,7 @@ private:
     void loadPlaces();
     template <typename T>
     void loadConsts(const std::basic_string<T>& folder_with_weights, std::istream* weight_stream);
+    void createTempConsts();
     std::vector<std::shared_ptr<OpPlace>> determine_cut_nodes() const;
 
     std::vector<std::vector<std::shared_ptr<OpPlace>>> m_op_places;
@@ -92,25 +93,7 @@ void InputModel::InputModelImpl::loadPlaces() {
         const auto& block = blocks[block_idx];
 
         for (const auto& var : block.vars()) {
-            const auto& var_type = var.type();
-            const auto& var_typename = var_type.GetTypeName();
-
             m_var_places[var.name()] = std::make_shared<TensorPlace>(m_input_model, var);
-
-            if (var_type.has_tensor_array()) {
-                std::cout << "GOT TensorArray " << var_typename << ", " << var.name() << std::endl;
-
-                auto& var_place = m_var_places[var.name()];
-
-                const auto& tensor_desc = var_place->get_desc().type().tensor_array().tensor();
-                const auto& dims = tensor_desc.dims();
-
-                var_place->set_element_type(TYPE_MAP[tensor_desc.data_type()]);
-                auto ps = std::vector<Dimension>(dims.begin(), dims.end());
-                ps.insert(ps.begin(), 1);                        // unsqueeze
-                var_place->set_partial_shape(PartialShape(ps));  // FIXME
-                // var_place->set_partial_shape(PartialShape(std::vector<Dimension>(0, 3))); // HARDCODE
-            }
         }
 
         for (const auto& op : block.ops()) {
@@ -352,6 +335,53 @@ InputModel::InputModelImpl::InputModelImpl(const std::basic_string<T>& path,
     } else {
         loadConsts(path, nullptr);
     }
+    createTempConsts();
+}
+
+void InputModel::InputModelImpl::createTempConsts() {
+    for (const auto& item : m_var_places) {
+        const auto& var_place = item.second;
+        const auto& var_desc = var_place->get_desc();
+        const auto& name = item.first;
+        if (var_desc.persistable())
+            continue;
+
+        // The node with tensorarray as its input may be created before the node with this tensorarray
+        // as its output. e.g. the tensorarray is both the input and output of the same node.
+        // So we have to create a fake empty node here.
+        // Problem is, we have no idea which axis should be 0.
+        // Since the models (faster/mask rcnn) are either concating tensors in tensorarray along the dynamic
+        // dimension, or concating static shape tensors. So we make the dynamic dimension to be 0. In case of static
+        // shape, we simply the the first dimension be 0.
+        if (var_desc.type().has_tensor_array()) {
+            const auto& tensor = var_desc.type().tensor_array().tensor();
+            const auto& type = TYPE_MAP[tensor.data_type()];
+
+            PartialShape tensor_ps(std::vector<Dimension>(tensor.dims().cbegin(), tensor.dims().cend()));
+            tensor_ps.insert(tensor_ps.begin(), 1);  // unsqueeze
+            // also update the place for following initialize the graph connection
+            var_place->set_element_type(type);
+            var_place->set_partial_shape(tensor_ps);
+
+            Shape shape(tensor_ps.size());
+            for (auto i = 0; i < tensor_ps.size(); i++) {
+                const auto& dim = tensor_ps[i];
+                if (dim.is_static()) {
+                    shape[i] = dim.get_length();
+                }
+            }
+
+            if (tensor_ps.is_static()) {
+                shape[1] = 0;
+            }
+
+            auto node = opset7::Constant::create(type, shape, {0});
+            node->set_friendly_name(name);
+            node->output(0).get_tensor().add_names({name});
+
+            m_tensor_values[name] = node;
+        }
+    }
 }
 
 InputModel::InputModelImpl::InputModelImpl(const std::vector<std::istream*>& streams,
@@ -372,6 +402,7 @@ InputModel::InputModelImpl::InputModelImpl(const std::vector<std::istream*>& str
     loadPlaces();
     if (streams.size() > 1)
         loadConsts(std::string(), streams[1]);
+    createTempConsts();
 }
 
 std::vector<Place::Ptr> InputModel::InputModelImpl::getInputs() const {

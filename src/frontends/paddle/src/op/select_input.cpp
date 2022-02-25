@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "internal/op/select_input.hpp"
-
 #include "default_opset.hpp"
 #include "openvino/frontend/paddle/node_context.hpp"
 
@@ -24,6 +22,9 @@ NamedOutputs select_input(const NodeContext& node) {
         auto placehodler = std::make_shared<default_opset::Select>(cond, x[1], x[0]);
         return node.default_single_output_mapping({placehodler}, {"Out"});
     } else {
+        // paddle detection model code is wrong and will result a dynamic rank model:
+        //   https://github.com/PaddlePaddle/PaddleDetection/blob/16e3d7408161713c765886cfb952f98d9f68713c/ppdet/modeling/layers.py#L407
+        // workaround: check the rank and remove the wrong condition
         if (ps0.rank() != ps1.rank()) {
             const auto fix_idx = [&](int idx) {
                 const auto ps = x[idx].get_partial_shape();
@@ -42,31 +43,6 @@ NamedOutputs select_input(const NodeContext& node) {
 
         return {};
     }
-    //     // fallback to if ops
-    //     const auto if_node = std::make_shared<default_opset::If>(cond);
-    //     const auto then_param = std::make_shared<default_opset::Parameter>(x[1].get_element_type(), ps1);
-    //     const auto then_result = std::make_shared<default_opset::Result>(then_param);
-    //     const auto then_branch = std::make_shared<Model>(ResultVector{then_result}, ParameterVector{then_param});
-    //     const auto else_param = std::make_shared<default_opset::Parameter>(x[0].get_element_type(), ps0);
-    //     const auto else_result = std::make_shared<default_opset::Result>(else_param);
-    //     const auto else_branch = std::make_shared<Model>(ResultVector{else_result}, ParameterVector{else_param});
-    //     if_node->set_then_body(then_branch);
-    //     if_node->set_else_body(else_branch);
-    //     if_node->set_input(x[1], then_param, nullptr);
-    //     if_node->set_input(x[0], nullptr, else_param);
-    //     if_node->set_output(then_result, else_result);
-    //     return node.default_single_output_mapping({if_node}, {"Out"});
-    // }
-}
-
-NamedOutputs select_input_(const NodeContext& node) {
-    const auto x = node.get_ng_inputs("X");
-    const auto mask = node.get_input("Mask");
-
-    auto outputs_info = node.get_output_port_infos("Out");
-    auto placehodler = std::make_shared<ov::op::internal::SelectInput>(x[0], x[1], mask, outputs_info);
-
-    return node.default_single_output_mapping({placehodler}, {"Out"});
 }
 
 }  // namespace op

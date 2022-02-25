@@ -58,10 +58,6 @@ public:
 
     void add_extension(const std::shared_ptr<ov::Extension>& extension) override;
 
-    ///
-    void normalize(const std::shared_ptr<ov::Model>& model) const override;
-    void normalize(const std::vector<std::shared_ptr<Model>>& models) const;
-
 protected:
     /// \brief Check if FrontEnd can recognize model from given parts
     /// \param params Can be path to folder which contains __model__ file or path to
@@ -77,6 +73,8 @@ protected:
     InputModel::Ptr load_impl(const std::vector<ov::Any>& params) const override;
 
 protected:
+    void try_remove_internal_ops(const std::vector<std::shared_ptr<Model>>& models) const;
+
     static std::vector<std::shared_ptr<Model>> convert_each_node(
         const std::shared_ptr<InputModel>& frontend_model,
         std::function<std::map<std::string, OutputVector>(const std::map<std::string, Output<Node>>&,

@@ -78,7 +78,7 @@ public:
         return decoder.get_input_var_names(var_name);
     }
 
-    bool is_tensorarray(const TensorName& tensor, bool inport = 1) const {
+    bool is_tensorarray(const TensorName& tensor, bool inport = true) const {
         return decoder.is_tensorarray(tensor, inport);
     }
 

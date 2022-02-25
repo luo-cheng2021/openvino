@@ -48,7 +48,7 @@ op::internal::ConditionalBlock::ConditionalBlock(
 }
 
 std::shared_ptr<Node> op::internal::ConditionalBlock::clone_with_new_inputs(const OutputVector& new_args) const {
-    check_new_args_count(this, new_args);  // FIXME: have to?
+    check_new_args_count(this, new_args);
 
     if (new_args.size() == 1) {  // w/o inputs
         return make_shared<ConditionalBlock>(new_args.at(0),

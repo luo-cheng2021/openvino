@@ -17,8 +17,6 @@ NamedOutputs conditional_block(const NodeContext& node) {
     auto sub_block = node.get_attribute<int32_t>("sub_block");
     const auto is_scalar_condition = node.get_attribute<bool>("is_scalar_condition", true);
 
-    std::cout << "conditional_block sub_block " << sub_block << std::endl;
-
     int32_t num_outputs = node.get_output_size("Out");
     auto outputs_info = node.get_output_port_infos("Out");
 

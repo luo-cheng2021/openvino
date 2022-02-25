@@ -15,9 +15,7 @@
 
 #include "default_opset.hpp"
 #include "internal/op/conditional_block.hpp"
-#include "internal/op/tensorarray_create.hpp"
 #include "internal/op/tensorarray_length.hpp"
-#include "internal/op/tensorarray_to_tensor.hpp"
 #include "internal/op/tensorarray_write.hpp"
 #include "internal/op/while.hpp"
 #include "openvino/frontend/paddle/exception.hpp"

@@ -5,7 +5,6 @@
 #include <limits.h>
 
 #include "default_opset.hpp"
-#include "internal/op/tensorarray_to_tensor.hpp"
 #include "openvino/frontend/paddle/node_context.hpp"
 
 namespace ov {
@@ -27,8 +26,6 @@ NamedOutputs tensor_array_to_tensor(const NodeContext& node) {
                                                           std::vector<int64_t>{0},
                                                           std::vector<int64_t>{0});
 
-    // auto placeholder = std::make_shared<default_opset::Squeeze>(x, default_opset::Constant::create(element::i32, {1},
-    // {0}));
     auto placeholder = std::make_shared<Reshape>(x, new_shape, false);
 
     return node.default_single_output_mapping({placeholder}, {"Out"});
