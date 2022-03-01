@@ -228,7 +228,7 @@ std::map<int32_t, std::shared_ptr<ov::Model>> FrontEnd::convert_each_node_recurs
                                                       const std::shared_ptr<OpPlace>&)> func) {
     auto model = std::dynamic_pointer_cast<InputModel>(frontend_model);
     FRONT_END_GENERAL_CHECK(model, "Invalid input model");
-    auto nodes_dict(model->get_tensor_values());  // std::map<paddle::TensorName, Output<Node>>
+    auto nodes_dict(model->get_tensor_values());
     ParameterVector parameter_nodes;
     ResultVector result_nodes;
     OutputVector output_nodes;

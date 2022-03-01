@@ -65,8 +65,8 @@ TEST(op_eval, loop_dynamic_output) {
 
     // Set up the cell body, a function from (Xi) -> Concat(Xi, C) -> (Zo)
     // Body parameters
-    auto current_iteration = std::make_shared<ov::opset8::Parameter>(ov::element::i64, ov::PartialShape{});
-    auto Xi = std::make_shared<ov::opset8::Parameter>(ov::element::f32, ov::PartialShape{1, ov::Dimension::dynamic(), 2});
+    auto Xi =
+        std::make_shared<ov::opset8::Parameter>(ov::element::f32, ov::PartialShape{1, ov::Dimension::dynamic(), 2});
 
     auto body_condition = std::make_shared<ov::opset8::Constant>(ov::element::boolean, ov::Shape{}, true);
     auto exec_condition = std::make_shared<ov::opset8::Constant>(ov::element::boolean, ov::Shape{}, true);
@@ -75,20 +75,18 @@ TEST(op_eval, loop_dynamic_output) {
     auto C = ov::opset8::Constant::create(ov::element::f32, {1, 1, 2}, {2});
     auto Zo = std::make_shared<ov::opset8::Concat>(ov::NodeVector{Xi, C}, 1);
     auto Z = std::make_shared<ov::opset8::Result>(Zo);
-    auto body = std::make_shared<ov::Model>(ov::OutputVector{Z, body_condition}, ov::ParameterVector{Xi, current_iteration});
+    auto body = std::make_shared<ov::Model>(ov::OutputVector{Z, body_condition}, ov::ParameterVector{Xi});
 
     auto loop = std::make_shared<ov::opset8::Loop>(T, exec_condition);
     loop->set_function(body);
-    loop->set_special_body_ports(ov::opset8::Loop::SpecialBodyPorts{1, 1});
+    loop->set_special_body_ports(ov::opset8::Loop::SpecialBodyPorts{-1, 1});
 
     loop->set_merged_input(Xi, X, Z);
     // Output 1 is last Z
-    auto out0 = loop->get_iter_value(body_condition, -1);
     auto out1 = loop->get_iter_value(Z, -1);
-    auto result0 = std::make_shared<ov::opset8::Result>(out0);
     auto result1 = std::make_shared<ov::opset8::Result>(out1);
 
-    auto results = ov::ResultVector{result0, result1};
+    auto results = ov::ResultVector{result1};
     auto f = std::make_shared<ov::Model>(results, ov::ParameterVector{X, T});
     std::vector<float> inputX{0, 0};
     std::vector<float> expected_result{0, 0, 2, 2, 2, 2, 2, 2};

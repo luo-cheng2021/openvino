@@ -73,7 +73,6 @@ ov::frontend::paddle::pass::TransformIf::TransformIf(std::vector<std::shared_ptr
             then_param++;
         }
 
-        auto else_param = else_params.cbegin();
         for (const auto& else_param : else_params) {
             bool found = false;
             for (const auto& from_parent : then_branch_inputs_from_parent) {

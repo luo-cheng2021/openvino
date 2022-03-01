@@ -1021,7 +1021,8 @@ TEST(type_prop, loop_operation_dynamic_iter_dynamic_shapes_sliced_inputs_concate
 // trip_count = dynamic
 // execution_condition = true
 // body_condition = true
-// input is static shape, sub-model output shapes has one dynamic dimension and this output is a backedge to a parameter, other shapes are static
+// input is static shape, sub-model output shapes has one dynamic dimension and this output is a backedge to a
+// parameter, other shapes are static
 TEST(type_prop, loop_operation_dynamic_iter_static_shapes_inputs_dynamic_shape_outputs) {
     // That which we iterate over
     auto X = make_shared<opset5::Parameter>(element::f32, PartialShape{1, 1, 10});
@@ -1029,7 +1030,6 @@ TEST(type_prop, loop_operation_dynamic_iter_static_shapes_inputs_dynamic_shape_o
 
     // Set up the cell body, a function from (Xi) -> Concat(Xi, C) -> (Zo)
     // Body parameters
-    auto current_iteration = make_shared<opset5::Parameter>(element::i64, Shape{});
     auto Xi = make_shared<opset5::Parameter>(element::f32, PartialShape{1, Dimension::dynamic(), 10});
 
     auto body_condition = make_shared<opset5::Constant>(element::boolean, Shape{}, true);
@@ -1040,13 +1040,12 @@ TEST(type_prop, loop_operation_dynamic_iter_static_shapes_inputs_dynamic_shape_o
     auto C = opset5::Constant::create(element::f32, {1, 1, 10}, {0});
     auto Zo = make_shared<opset5::Concat>(NodeVector{Xi, C}, 1);
     auto Z = make_shared<opset5::Result>(Zo);
-    auto body = make_shared<Function>(OutputVector{Z, body_condition}, ParameterVector{Xi, current_iteration});
+    auto body = make_shared<Function>(OutputVector{Z, body_condition}, ParameterVector{Xi});
 
     auto loop = make_shared<opset5::Loop>(T, exec_condition);
     loop->set_function(body);
-    loop->set_special_body_ports(opset5::Loop::SpecialBodyPorts{1, 1});
+    loop->set_special_body_ports(opset5::Loop::SpecialBodyPorts{-1, 1});
     loop->set_merged_input(Xi, X, Z);
-    loop->set_invariant_input(current_iteration, T);
 
     // check input descriptors
     for (auto& desc : loop->get_input_descriptions()) {
@@ -1092,10 +1091,9 @@ TEST(type_prop, loop_operation_dynamic_iter_static_shapes_inputs_dynamic_shape_o
 
     const auto inp0_shape = PartialShape{1, Dimension::dynamic(), 10};
     const auto inp1_shape = Shape{};
-    EXPECT_EQ(body->get_parameters().size(), 2);
+    EXPECT_EQ(body->get_parameters().size(), 1);
     // backedge, should be also dynamic
     EXPECT_EQ(body->get_parameters().at(0)->get_partial_shape(), inp0_shape);
-    EXPECT_EQ(body->get_parameters().at(1)->get_shape(), inp1_shape);
 
     EXPECT_EQ(loop->get_output_size(), 2);
     EXPECT_EQ(loop->get_output_shape(0), out0_shape);

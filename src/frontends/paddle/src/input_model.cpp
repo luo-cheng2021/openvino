@@ -227,7 +227,9 @@ std::vector<std::shared_ptr<OpPlace>> InputModel::InputModelImpl::get_op_places(
     if (m_graph_changed) {
         return determine_cut_nodes();
     }
-    return m_op_places[blck_idx];
+    if (static_cast<size_t>(blck_idx) < m_op_places.size())
+        return m_op_places[blck_idx];
+    return {};
 }
 
 std::vector<std::shared_ptr<OpPlace>> InputModel::InputModelImpl::determine_cut_nodes() const {
