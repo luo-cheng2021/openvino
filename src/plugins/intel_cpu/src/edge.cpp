@@ -449,7 +449,8 @@ void MKLDNNEdge::init() {
     if (edgePtr.get() == this) {
         changeStatus(Status::NeedAllocation);
     } else {
-        if (edgePtr->getParent()->isConstant() && !edgePtr->getChild()->isConstant()) {
+        if (edgePtr->getParent()->isConstant() && !edgePtr->getChild()->isConstant() &&
+            edgePtr->getChild()->getType() != Reshape) {
             changeStatus(Status::NeedAllocation);
             return;
         }
