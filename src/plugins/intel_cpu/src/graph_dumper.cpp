@@ -236,24 +236,108 @@ void serializeToXML(const Graph &graph, const std::string& path) {
 }
 
 void serializeToCout(const Graph &graph) {
+    std::cout << "ov::intel_cpu::Graph " << graph.GetName() << " {" << std::endl;
+    auto node_id = [](const NodePtr & node) {
+        return std::string("t") + std::to_string(node->getExecIndex());
+    };
+
+    auto is_single_output_port = [](const NodePtr & node) {
+        for(auto & e : node->getChildEdges()) {
+            auto edge = e.lock();
+            if (!edge) continue;
+            if (edge->getInputNum() != 0)
+                return false;
+        }
+        return true;
+    };
+
     for (const auto& node : graph.GetNodes()) {
-        std::cout << "name: " << node->getName() << " [ ";
         auto nodeDesc = node->getSelectedPrimitiveDescriptor();
+        std::stringstream leftside;
+        
         if (nodeDesc) {
+            /*
             auto& inConfs = nodeDesc->getConfig().inConfs;
             if (!inConfs.empty()) {
-                std::cout << "in: " << inConfs.front().getMemDesc()->getPrecision().name()
-                          << "/l=" << inConfs.front().getMemDesc()->serializeFormat()
-                          << "; ";
-            }
+                std::cout << " in:[";
+                for (auto& c : inConfs) {
+                    std::cout << c.getMemDesc()->getPrecision().name()
+                            << c.getMemDesc()->
+                            << "/" << c.getMemDesc()->serializeFormat()
+                            << "; ";
+                }
+                std::cout << "]";
+            }*/
+
             auto& outConfs = nodeDesc->getConfig().outConfs;
             if (!outConfs.empty()) {
-                std::cout << "out: " << outConfs.front().getMemDesc()->getPrecision().name()
-                          << "/l=" << outConfs.front().getMemDesc()->serializeFormat();
+                if (outConfs.size() > 1) leftside << "(";
+                std::string sep = "";
+                for (auto& c : outConfs) {
+                    leftside << sep << c.getMemDesc()->getPrecision().name()
+                              << "_" << c.getMemDesc()->serializeFormat()
+                              << "_" << c.getMemDesc()->getShape().toString();
+                    sep = ",";
+                }
+                if (outConfs.size() > 1) leftside << ")";
             }
         }
-        std::cout << " ]"  << std::endl;
+        leftside << "  " << node_id(node) <<  " = ";
+        std::cout << std::right << std::setw(50) << leftside.str();
+        std::cout << std::left << node->getTypeStr();
+        if (node->getAlgorithm() != Algorithm::Default)
+            std::cout << "." << algToString(node->getAlgorithm());
+        std::cout << " (";
+        std::string sep = "";
+        int id = 0;
+        for (const auto & e : node->getParentEdges()) {
+            auto edge = e.lock();
+            if (!edge) continue;
+            auto n = edge->getParent();
+            
+            std::cout << sep;
+            if (edge->getOutputNum() != id)
+                std::cout << "in" << edge->getOutputNum() << "=";
+
+            std::cout << node_id(edge->getParent());
+
+            if (!is_single_output_port(n))
+                std::cout << "[" << edge->getInputNum() << "]";
+            sep = ",";
+            id ++;
+        }
+        std::cout << ")  ";
+        std::cout << " " << node->getPrimitiveDescriptorType();
+
+        auto split_str = [] (const std::string &str, const char delim) {
+            std::vector<std::string> out;
+            size_t start;
+            size_t end = 0;
+            while ((start = str.find_first_not_of(delim, end)) != std::string::npos) {
+                end = str.find(delim, start);
+                out.push_back(str.substr(start, end - start));
+            }
+            return out;
+        };
+
+        // last line(s): fused layers
+        auto name = node->getName();
+        auto vstr = split_str(node->getOriginalLayers(), ',');
+        if (vstr.size() == 0) {
+            std::cout << " " << name;
+        } else {
+            if ((vstr.size() == 1) && (vstr[0] == name)) {
+                std::cout << " " << name;
+            } else {
+                if (name != vstr[0])
+                    vstr.insert(vstr.begin(), name);
+                for(auto& str : vstr)
+                    std::cout << std::endl << std::setw(56) << std::right << " // " << str;
+            }
+        }
+        std::cout << std::endl;
     }
+    std::cout << "}" << std::endl;
 }
 #endif
 }   // namespace intel_cpu

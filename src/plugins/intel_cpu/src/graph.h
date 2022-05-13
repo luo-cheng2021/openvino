@@ -76,7 +76,7 @@ public:
         return graphNodes;
     }
 
-    std::string GetName() {
+    std::string GetName() const {
         return _name;
     }
 
