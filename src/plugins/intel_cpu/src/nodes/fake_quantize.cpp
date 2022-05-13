@@ -1789,13 +1789,13 @@ void FakeQuantize::initializePostOpData(const VectorDims &dims, const size_t buf
 }
 
 void FakeQuantize::initializePostOpDataLegacy(const VectorDims &dims, const size_t bufferAlignment) {
-    if (isPostOpDataInitialized)
+    if (isPostOpDataInitializedLegacy)
         return;
 
     if (getAlgorithm() == Algorithm::FQBinarization) {
         const auto realAxisSize = dims[dims.size() > 1 ? 1 : 0];
         const auto axisPaddedSize = rnd_up(realAxisSize, bufferAlignment);
-        if (!isPostOpDataInitialized) {
+        if (!isPostOpDataInitializedLegacy) {
             binarizationThresholds.resize(axisPaddedSize, 0);
             binarizationOutputMask.resize(axisPaddedSize, 0);
 
@@ -1821,7 +1821,7 @@ void FakeQuantize::initializePostOpDataLegacy(const VectorDims &dims, const size
         quantizationData.resize(quantizationDataSize + bufferPaddingSize, 0);
     }
 
-    isPostOpDataInitialized = true;
+    isPostOpDataInitializedLegacy = true;
 }
 
 void FakeQuantize::appendMemory(const size_t dataSize, const void *data, MemoryPtr &memPtr, std::vector<MemoryPtr>& postOpsMem) {

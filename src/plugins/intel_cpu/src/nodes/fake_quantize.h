@@ -203,6 +203,7 @@ private:
 
     // onednn style post ops data representation
     bool isPostOpDataInitialized = false;
+    bool isPostOpDataInitializedLegacy = false;
     dnnl::impl::shifts_t<float> cropLowData;
     dnnl::impl::shifts_t<float> cropHighData;
     dnnl::impl::scales_t inputScaleData;
