@@ -576,16 +576,24 @@ void Convolution::setPostOps(dnnl::primitive_attr &attr, const VectorDims &dims,
                     std::vector<float> fqScale = fakeQuantizeNode->getFQScales();
                     if (!fqScale.empty()) {
                         size_t size = fqScale.size();
-                        size_t OC = getOutputShapeAtPort(0).getStaticDims()[1];
+                        bool use_output_scales = true;
                         if (size == 1) {
-                            fqScale.resize(OC);
-                            for (size_t k = 0; k < OC; k++)
-                                fqScale[k] = fqScale[0];
+                            auto OC_min = getOutputShapeAtPort(0).getMinDims()[1];
+                            auto OC_max = getOutputShapeAtPort(0).getMaxDims()[1];
+                            if (OC_min == OC_max && OC_max != Shape::UNDEFINED_DIM)
+                            {
+                                fqScale.resize(OC_max);
+                                for (size_t k = 0; k < OC_max; k++)
+                                    fqScale[k] = fqScale[0];
+                            } else {
+                                use_output_scales = false;
+                            }
                         }
 
-                        attr.set_output_scales(1 << 1, fqScale);
-
-                        continue;
+                        if (use_output_scales) {
+                            attr.set_output_scales(1 << 1, fqScale);
+                            continue;
+                        }
                     }
                 }
 
