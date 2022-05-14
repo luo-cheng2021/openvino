@@ -251,13 +251,9 @@ static std::ostream & operator<<(std::ostream & os, str_separator & sep) {
 };
 
 void serializeToCout(const Graph &graph) {
-    std::cout << "ov::intel_cpu::Graph " << graph.GetName() << " {" << std::endl;
     auto node_id = [](const NodePtr & node) {
         return std::string("t") + std::to_string(node->getExecIndex());
     };
-
-    str_separator comma(",");
-
     auto is_single_output_port = [](const NodePtr & node) {
         for(auto & e : node->getChildEdges()) {
             auto edge = e.lock();
@@ -276,6 +272,21 @@ void serializeToCout(const Graph &graph) {
         }
         return count;
     };
+
+    str_separator comma(",");
+
+    auto input_nodes = const_cast<Graph&>(graph).GetInputNodesMap();
+    auto output_nodes = const_cast<Graph&>(graph).GetOutputNodesMap();
+
+    comma.reset();
+    for (auto it = output_nodes.begin(); it != output_nodes.end(); ++it) {
+        std::cout << comma << it->first << "(" << node_id(it->second) << ")";
+    }
+    std::cout << " " << graph.GetName() << "(" << std::endl;
+    for (auto it = input_nodes.begin(); it != input_nodes.end(); ++it) {
+        std::cout << "\t" << it->first << "(" << node_id(it->second) << ")," << std::endl;
+    }
+    std::cout << ") {" << std::endl;
 
     for (const auto& node : graph.GetNodes()) {
         auto nodeDesc = node->getSelectedPrimitiveDescriptor();
