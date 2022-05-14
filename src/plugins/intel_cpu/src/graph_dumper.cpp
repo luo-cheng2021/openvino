@@ -235,11 +235,28 @@ void serializeToXML(const Graph &graph, const std::string& path) {
     manager.run_passes(graph.dump());
 }
 
+struct str_separator {
+    std::string sep;
+    bool first;
+    str_separator(const std::string & sep): sep(sep), first(true) {};
+    void reset() { first = true; }
+};
+
+static std::ostream & operator<<(std::ostream & os, str_separator & sep) {
+    if (!sep.first)
+        os << sep.sep;
+    else
+        sep.first = false;
+    return os;
+};
+
 void serializeToCout(const Graph &graph) {
     std::cout << "ov::intel_cpu::Graph " << graph.GetName() << " {" << std::endl;
     auto node_id = [](const NodePtr & node) {
         return std::string("t") + std::to_string(node->getExecIndex());
     };
+
+    str_separator comma(",");
 
     auto is_single_output_port = [](const NodePtr & node) {
         for(auto & e : node->getChildEdges()) {
@@ -250,12 +267,23 @@ void serializeToCout(const Graph &graph) {
         }
         return true;
     };
+    auto replace_all = [](std::string& inout, std::string what, std::string with) {
+        std::size_t count{};
+        for (std::string::size_type pos{};
+            inout.npos != (pos = inout.find(what.data(), pos, what.length()));
+            pos += with.length(), ++count) {
+            inout.replace(pos, what.length(), with.data(), with.length());
+        }
+        return count;
+    };
 
     for (const auto& node : graph.GetNodes()) {
         auto nodeDesc = node->getSelectedPrimitiveDescriptor();
         std::stringstream leftside;
         
         if (nodeDesc) {
+            // output Desc is enough since input is always in consistent
+            // with output.
             /*
             auto& inConfs = nodeDesc->getConfig().inConfs;
             if (!inConfs.empty()) {
@@ -272,30 +300,31 @@ void serializeToCout(const Graph &graph) {
             auto& outConfs = nodeDesc->getConfig().outConfs;
             if (!outConfs.empty()) {
                 if (outConfs.size() > 1) leftside << "(";
-                std::string sep = "";
+                comma.reset();
                 for (auto& c : outConfs) {
-                    leftside << sep << c.getMemDesc()->getPrecision().name()
+                    auto shape_str = c.getMemDesc()->getShape().toString();
+                    replace_all(shape_str, "0 - ?", "?");
+                    leftside << comma << c.getMemDesc()->getPrecision().name()
                               << "_" << c.getMemDesc()->serializeFormat()
-                              << "_" << c.getMemDesc()->getShape().toString();
-                    sep = ",";
+                              << "_" << shape_str;
                 }
                 if (outConfs.size() > 1) leftside << ")";
             }
         }
         leftside << "  " << node_id(node) <<  " = ";
-        std::cout << std::right << std::setw(50) << leftside.str();
+        std::cout << std::right << std::setw(40) << leftside.str();
         std::cout << std::left << node->getTypeStr();
         if (node->getAlgorithm() != Algorithm::Default)
             std::cout << "." << algToString(node->getAlgorithm());
         std::cout << " (";
-        std::string sep = "";
+        comma.reset();
         int id = 0;
         for (const auto & e : node->getParentEdges()) {
             auto edge = e.lock();
             if (!edge) continue;
             auto n = edge->getParent();
             
-            std::cout << sep;
+            std::cout << comma;
             if (edge->getOutputNum() != id)
                 std::cout << "in" << edge->getOutputNum() << "=";
 
@@ -303,9 +332,26 @@ void serializeToCout(const Graph &graph) {
 
             if (!is_single_output_port(n))
                 std::cout << "[" << edge->getInputNum() << "]";
-            sep = ",";
             id ++;
         }
+
+        if (node->getType() == intel_cpu::Type::Input && node->isConstant()) {
+            auto & pmem = node->getChildEdgeAt(0)->getMemoryPtr();
+            void * data = pmem->GetData();
+            auto shape = pmem->getDesc().getShape().getDims();
+
+            if (shape_size(shape) <= 8) {
+                auto type = details::convertPrecision(pmem->getDesc().getPrecision());
+                auto tensor = std::make_shared<ngraph::runtime::HostTensor>(type, shape, data);
+                auto constop = std::make_shared<ngraph::op::Constant>(tensor);
+                comma.reset();
+                for (auto & v : constop->get_value_strings())
+                    std::cout << comma << v;
+            } else {
+                std::cout << "...";
+            }
+        }
+
         std::cout << ")  ";
         std::cout << " " << node->getPrimitiveDescriptorType();
 
@@ -332,7 +378,7 @@ void serializeToCout(const Graph &graph) {
                 if (name != vstr[0])
                     vstr.insert(vstr.begin(), name);
                 for(auto& str : vstr)
-                    std::cout << std::endl << std::setw(56) << std::right << " // " << str;
+                    std::cout << std::endl << std::setw(46) << std::right << " // " << str;
             }
         }
         std::cout << std::endl;
