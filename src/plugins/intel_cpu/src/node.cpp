@@ -13,6 +13,7 @@
 #include <limits>
 #include <cstdint>
 #include <unordered_map>
+#include <iomanip>
 
 #include "nodes/concat.h"
 #include "nodes/conv.h"
@@ -1565,6 +1566,168 @@ bool Node::canFuseSimpleOperation(const NodePtr& node) const {
 
 void Node::addFusedNode(const NodePtr &fusingNode) {
     fusedWith.push_back(fusingNode);
+}
+struct str_separator {
+    std::string sep;
+    bool first;
+    str_separator(const std::string & sep): sep(sep), first(true) {};
+    void reset() { first = true; }
+};
+
+static std::ostream & operator<<(std::ostream & os, str_separator & sep) {
+    if (!sep.first)
+        os << sep.sep;
+    else
+        sep.first = false;
+    return os;
+};
+
+std::ostream & operator<<(std::ostream & os, const Node &c_node) {
+    Node & node = const_cast<Node &>(c_node);
+    const int align_col = 50;
+    str_separator comma(",");
+    auto node_id = [](Node & node) {
+        auto id = node.getName();
+        if (id.size() > 20)
+            return node.getTypeStr() + "_" + std::to_string(node.getExecIndex());
+        return id;
+    };
+    auto is_single_output_port = [](Node & node) {
+        for(auto & e : node.getChildEdges()) {
+            auto edge = e.lock();
+            if (!edge) continue;
+            if (edge->getInputNum() != 0)
+                return false;
+        }
+        return true;
+    };
+    auto replace_all = [](std::string& inout, std::string what, std::string with) {
+        std::size_t count{};
+        for (std::string::size_type pos{};
+            inout.npos != (pos = inout.find(what.data(), pos, what.length()));
+            pos += with.length(), ++count) {
+            inout.replace(pos, what.length(), with.data(), with.length());
+        }
+        return count;
+    };
+    auto nodeDesc = node.getSelectedPrimitiveDescriptor();
+    std::stringstream leftside;
+    
+    if (nodeDesc) {
+        // output Desc is enough since input is always in consistent
+        // with output.
+        /*
+        auto& inConfs = nodeDesc->getConfig().inConfs;
+        if (!inConfs.empty()) {
+            os << " in:[";
+            for (auto& c : inConfs) {
+                os << c.getMemDesc()->getPrecision().name()
+                        << c.getMemDesc()->
+                        << "/" << c.getMemDesc()->serializeFormat()
+                        << "; ";
+            }
+            os << "]";
+        }*/
+
+        auto& outConfs = nodeDesc->getConfig().outConfs;
+        if (!outConfs.empty()) {
+            if (outConfs.size() > 1) leftside << "(";
+            comma.reset();
+            for (auto& c : outConfs) {
+                auto shape_str = c.getMemDesc()->getShape().toString();
+                replace_all(shape_str, "0 - ?", "?");
+                leftside << comma << c.getMemDesc()->getPrecision().name()
+                            << "_" << c.getMemDesc()->serializeFormat()
+                            << "_" << shape_str;
+            }
+            if (outConfs.size() > 1) leftside << ")";
+        }
+    } else {
+        // no SPD yet, use orginal shapes
+        comma.reset();
+        for (int i = 0; i < node.outputShapes.size(); i++) {
+            auto shape = node.outputShapes[i];
+            std::string prec_name = "Undef";
+            if (i < node.originalOutputPrecisions.size())
+                prec_name = node.originalOutputPrecisions[i].name();
+            auto shape_str = shape.toString();
+            replace_all(shape_str, "0 - ?", "?");
+            leftside << comma << prec_name
+                        << "_" << shape_str;
+        }
+    }
+    leftside << "  " << node_id(node) <<  " = ";
+    os << std::right << std::setw(align_col) << leftside.str();
+    os << std::left << node.getTypeStr();
+    if (node.getAlgorithm() != Algorithm::Default)
+        os << "." << algToString(node.getAlgorithm());
+    os << " (";
+    comma.reset();
+
+    for (int port = 0; port < node.getParentEdges().size(); ++port) {
+        // find the Parent edge connecting to port
+        for (const auto & e : node.getParentEdges()) {
+            auto edge = e.lock();
+            if (!edge) continue;
+            if (edge->getOutputNum() != port) continue;
+            auto n = edge->getParent();
+            os << comma;
+            os << node_id(*edge->getParent());
+            if (!is_single_output_port(*n))
+                os << "[" << edge->getInputNum() << "]";
+            break;
+        }
+    }
+
+    if (node.getType() == intel_cpu::Type::Input && node.isConstant()) {
+        if (auto input_node = reinterpret_cast<intel_cpu::node::Input *>(&node)) {
+            auto pmem = input_node->getMemoryPtr();
+            void * data = pmem->GetData();
+            auto shape = pmem->getDesc().getShape().getDims();
+
+            if (shape_size(shape) <= 8) {
+                auto type = details::convertPrecision(pmem->getDesc().getPrecision());
+                auto tensor = std::make_shared<ngraph::runtime::HostTensor>(type, shape, data);
+                auto constop = std::make_shared<ngraph::op::Constant>(tensor);
+                comma.reset();
+                for (auto & v : constop->get_value_strings())
+                    os << comma << v;
+            } else {
+                os << "...";
+            }
+        } else {
+            os << "?";
+        }
+    }
+
+    os << ")  ";
+    os << " " << node.getPrimitiveDescriptorType();
+
+    auto split_str = [] (const std::string &str, const char delim) {
+        std::vector<std::string> out;
+        size_t start;
+        size_t end = 0;
+        while ((start = str.find_first_not_of(delim, end)) != std::string::npos) {
+            end = str.find(delim, start);
+            out.push_back(str.substr(start, end - start));
+        }
+        return out;
+    };
+
+    // last line(s): fused layers
+    auto name = node.getName();
+    auto vstr = split_str(node.getOriginalLayers(), ',');
+    if (vstr.size() > 0) {
+        if ((vstr.size() > 1) || (vstr[0] != name)) {
+            if (name != vstr[0])
+                vstr.insert(vstr.begin(), name);
+            for(auto& str : vstr)
+                os << std::endl << std::setw(align_col + 6) << std::right << " // " << str;
+        }
+    }
+
+    os << "   " << node.getExecIndex();
+    return os;
 }
 
 }   // namespace intel_cpu

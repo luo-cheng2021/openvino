@@ -235,166 +235,33 @@ void serializeToXML(const Graph &graph, const std::string& path) {
     manager.run_passes(graph.dump());
 }
 
-struct str_separator {
-    std::string sep;
-    bool first;
-    str_separator(const std::string & sep): sep(sep), first(true) {};
-    void reset() { first = true; }
-};
-
-static std::ostream & operator<<(std::ostream & os, str_separator & sep) {
-    if (!sep.first)
-        os << sep.sep;
-    else
-        sep.first = false;
-    return os;
-};
-
-void serializeToCout(const Graph &graph) {
+std::ostream & operator<<(std::ostream & os, const Graph &graph) {
     auto node_id = [](const NodePtr & node) {
-        return std::string("t") + std::to_string(node->getExecIndex());
+        return node->getName();
     };
-    auto is_single_output_port = [](const NodePtr & node) {
-        for(auto & e : node->getChildEdges()) {
-            auto edge = e.lock();
-            if (!edge) continue;
-            if (edge->getInputNum() != 0)
-                return false;
-        }
-        return true;
-    };
-    auto replace_all = [](std::string& inout, std::string what, std::string with) {
-        std::size_t count{};
-        for (std::string::size_type pos{};
-            inout.npos != (pos = inout.find(what.data(), pos, what.length()));
-            pos += with.length(), ++count) {
-            inout.replace(pos, what.length(), with.data(), with.length());
-        }
-        return count;
-    };
-
-    str_separator comma(",");
-
     auto input_nodes = const_cast<Graph&>(graph).GetInputNodesMap();
     auto output_nodes = const_cast<Graph&>(graph).GetOutputNodesMap();
 
-    comma.reset();
+    const char *comma = "";
     for (auto it = output_nodes.begin(); it != output_nodes.end(); ++it) {
-        std::cout << comma << it->first << "(" << node_id(it->second) << ")";
+        os << comma << it->first << "(" << node_id(it->second) << ")";
+        comma = ",";
     }
-    std::cout << " " << graph.GetName() << "(" << std::endl;
+    os << " " << graph.GetName() << "(" << std::endl;
     for (auto it = input_nodes.begin(); it != input_nodes.end(); ++it) {
-        std::cout << "\t" << it->first << "(" << node_id(it->second) << ")," << std::endl;
+        os << "\t" << it->first << "(" << node_id(it->second) << ")," << std::endl;
     }
-    std::cout << ") {" << std::endl;
+    os << ") {" << std::endl;
 
     for (const auto& node : graph.GetNodes()) {
-        auto nodeDesc = node->getSelectedPrimitiveDescriptor();
-        std::stringstream leftside;
-        
-        if (nodeDesc) {
-            // output Desc is enough since input is always in consistent
-            // with output.
-            /*
-            auto& inConfs = nodeDesc->getConfig().inConfs;
-            if (!inConfs.empty()) {
-                std::cout << " in:[";
-                for (auto& c : inConfs) {
-                    std::cout << c.getMemDesc()->getPrecision().name()
-                            << c.getMemDesc()->
-                            << "/" << c.getMemDesc()->serializeFormat()
-                            << "; ";
-                }
-                std::cout << "]";
-            }*/
-
-            auto& outConfs = nodeDesc->getConfig().outConfs;
-            if (!outConfs.empty()) {
-                if (outConfs.size() > 1) leftside << "(";
-                comma.reset();
-                for (auto& c : outConfs) {
-                    auto shape_str = c.getMemDesc()->getShape().toString();
-                    replace_all(shape_str, "0 - ?", "?");
-                    leftside << comma << c.getMemDesc()->getPrecision().name()
-                              << "_" << c.getMemDesc()->serializeFormat()
-                              << "_" << shape_str;
-                }
-                if (outConfs.size() > 1) leftside << ")";
-            }
-        }
-        leftside << "  " << node_id(node) <<  " = ";
-        std::cout << std::right << std::setw(40) << leftside.str();
-        std::cout << std::left << node->getTypeStr();
-        if (node->getAlgorithm() != Algorithm::Default)
-            std::cout << "." << algToString(node->getAlgorithm());
-        std::cout << " (";
-        comma.reset();
-        int id = 0;
-        for (const auto & e : node->getParentEdges()) {
-            auto edge = e.lock();
-            if (!edge) continue;
-            auto n = edge->getParent();
-            
-            std::cout << comma;
-            if (edge->getOutputNum() != id)
-                std::cout << "in" << edge->getOutputNum() << "=";
-
-            std::cout << node_id(edge->getParent());
-
-            if (!is_single_output_port(n))
-                std::cout << "[" << edge->getInputNum() << "]";
-            id ++;
-        }
-
-        if (node->getType() == intel_cpu::Type::Input && node->isConstant()) {
-            auto & pmem = node->getChildEdgeAt(0)->getMemoryPtr();
-            void * data = pmem->GetData();
-            auto shape = pmem->getDesc().getShape().getDims();
-
-            if (shape_size(shape) <= 8) {
-                auto type = details::convertPrecision(pmem->getDesc().getPrecision());
-                auto tensor = std::make_shared<ngraph::runtime::HostTensor>(type, shape, data);
-                auto constop = std::make_shared<ngraph::op::Constant>(tensor);
-                comma.reset();
-                for (auto & v : constop->get_value_strings())
-                    std::cout << comma << v;
-            } else {
-                std::cout << "...";
-            }
-        }
-
-        std::cout << ")  ";
-        std::cout << " " << node->getPrimitiveDescriptorType();
-
-        auto split_str = [] (const std::string &str, const char delim) {
-            std::vector<std::string> out;
-            size_t start;
-            size_t end = 0;
-            while ((start = str.find_first_not_of(delim, end)) != std::string::npos) {
-                end = str.find(delim, start);
-                out.push_back(str.substr(start, end - start));
-            }
-            return out;
-        };
-
-        // last line(s): fused layers
-        auto name = node->getName();
-        auto vstr = split_str(node->getOriginalLayers(), ',');
-        if (vstr.size() == 0) {
-            std::cout << " " << name;
-        } else {
-            if ((vstr.size() == 1) && (vstr[0] == name)) {
-                std::cout << " " << name;
-            } else {
-                if (name != vstr[0])
-                    vstr.insert(vstr.begin(), name);
-                for(auto& str : vstr)
-                    std::cout << std::endl << std::setw(46) << std::right << " // " << str;
-            }
-        }
-        std::cout << std::endl;
+        os << *node << std::endl;
     }
-    std::cout << "}" << std::endl;
+    os << "}" << std::endl;
+    return os;
+}
+
+void serializeToCout(const Graph &graph) {
+    std::cout << graph;
 }
 #endif
 }   // namespace intel_cpu
