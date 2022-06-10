@@ -49,6 +49,7 @@
 #include <transformations/utils/utils.hpp>
 #include <low_precision/low_precision.hpp>
 #include "memory_desc/dnnl_blocked_memory_desc.h"
+#include "graph_advisor.h"
 
 using namespace dnnl;
 using namespace InferenceEngine;
@@ -237,6 +238,7 @@ void Graph::Replicate(const CNNNetwork &network, const ExtensionManager::Ptr& ex
         IE_THROW() << "Function pointer inside CNNNetwork is nullptr";
     }
 
+    Advisor::AdviseBrgconv(eng, func);
     isQuantizedFlag = (config.lpTransformsMode == Config::On) &&
                       ngraph::pass::low_precision::LowPrecision::isFunctionQuantized(func);
 
