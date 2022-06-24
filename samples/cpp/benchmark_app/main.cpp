@@ -28,6 +28,22 @@
 #include "remote_tensors_filling.hpp"
 #include "statistics_report.hpp"
 #include "utils.hpp"
+#include <immintrin.h>
+#include <xmmintrin.h>
+
+static constexpr unsigned int DENORMALS_ZERO = 0x0040;
+static constexpr unsigned int FLUSH_ZERO = 0x8000;
+void init_fp_mode() {
+    // We set ftz to avoid denormals in perf measurements
+    //_MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+    unsigned int csr = _mm_getcsr();
+    //csr &= ~DENORMALS_ZERO;
+    //csr &= ~FLUSH_ZERO;
+    csr |= DENORMALS_ZERO;
+    csr |= FLUSH_ZERO;
+    _mm_setcsr(csr);    
+}
+
 // clang-format on
 
 static const size_t progressBarDefaultTotalCount = 1000;
@@ -146,6 +162,7 @@ ov::hint::PerformanceMode get_performance_hint(const std::string& device, const 
  * @brief The entry point of the benchmark application
  */
 int main(int argc, char* argv[]) {
+    init_fp_mode();
     std::shared_ptr<StatisticsReport> statistics;
     try {
         ov::CompiledModel compiledModel;
