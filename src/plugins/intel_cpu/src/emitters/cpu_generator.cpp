@@ -32,7 +32,7 @@ public:
 
     ~jit_snippet() = default;
 
-    jit_snippet() : jit_generator() {
+    jit_snippet() : jit_generator(jit_name()) {
     }
 
     void generate() override {
