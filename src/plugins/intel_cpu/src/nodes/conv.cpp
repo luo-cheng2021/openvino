@@ -518,7 +518,7 @@ void Convolution::getSupportedDescriptors() {
 
             bool acceptedFormat = inputDataType == memory::data_type::bf16;
             bool nspcAdded = false;
-            acceptedFormat |= cpuExperimental.count(EXPERIMENTAL_KEY_BRGCONV) && inputDataType == memory::data_type::f32;
+            acceptedFormat |= 0 && cpuExperimental.count(EXPERIMENTAL_KEY_BRGCONV) && inputDataType == memory::data_type::f32;
             if (acceptedFormat && impl::cpu::x64::mayiuse(impl::cpu::x64::avx512_core)) {
                 in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
                 out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
@@ -1389,6 +1389,8 @@ void Convolution::prepareParams() {
         primArgs[DNNL_ARG_SRC] = srcMemPtr->GetPrimitive();
         primArgs[DNNL_ARG_WEIGHTS] = wghMemPtr->GetPrimitive();
         primArgs[DNNL_ARG_DST] = dstMemPtr->GetPrimitive();
+        // printf("@@@@@@@@@@@@dst raw = 0x%p, offseted = 0x%p, offset = %zd size = %zd\n", dstMemPtr->GetData(),
+        //     dstMemPtr->GetPtr(), (char*)dstMemPtr->GetPtr() - (char*)dstMemPtr->GetData(), dstMemPtr->GetSize());
 
         if (withBiases) {
             primArgs[DNNL_ARG_BIAS] = biasMemPtr->GetPrimitive();
