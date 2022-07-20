@@ -21,7 +21,7 @@ public:
     void getSupportedDescriptors() override;
     void initSupportedPrimitiveDescriptors() override;
     void initOptimalPrimitiveDescriptor() override;
-    void selectOptimalPrimitiveDescriptor() override;
+    void selectOptimalPrimitiveDescriptor(bool inParentCall = false) override;
     bool created() const override;
     void execute(dnnl::stream strm) override;
     void executeDynamicImpl(dnnl::stream strm) override { execute(strm); }

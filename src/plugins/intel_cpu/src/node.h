@@ -345,7 +345,7 @@ public:
 
     virtual void createPrimitive();
 
-    virtual void selectOptimalPrimitiveDescriptor();
+    virtual void selectOptimalPrimitiveDescriptor(bool inParentCall = false);
     virtual void initOptimalPrimitiveDescriptor();
 
     virtual void getSupportedDescriptors() = 0;

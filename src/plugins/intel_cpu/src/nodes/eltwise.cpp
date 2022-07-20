@@ -1999,7 +1999,7 @@ bool Eltwise::needPrepareParams() const {
     return false;
 }
 
-void Eltwise::selectOptimalPrimitiveDescriptor() {
+void Eltwise::selectOptimalPrimitiveDescriptor(bool inParentCall) {
     selectPreferPrimitiveDescriptor(getPrimitivesPriority(), true);
 }
 

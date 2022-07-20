@@ -518,11 +518,19 @@ void Convolution::getSupportedDescriptors() {
 
             bool acceptedFormat = inputDataType == memory::data_type::bf16;
             bool nspcAdded = false;
-            acceptedFormat |= 0 && cpuExperimental.count(EXPERIMENTAL_KEY_BRGCONV) && inputDataType == memory::data_type::f32;
+            acceptedFormat |= cpuExperimental.count(EXPERIMENTAL_KEY_BRGCONV) && inputDataType == memory::data_type::f32;
             if (acceptedFormat && impl::cpu::x64::mayiuse(impl::cpu::x64::avx512_core)) {
                 in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
                 out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
                 createDescriptor({ in_candidate }, { out_candidate });
+                if (inputDataType == memory::data_type::f32) {
+                    in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
+                    out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nCsp16c);
+                    createDescriptor({ in_candidate }, { out_candidate });
+                    in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nCsp16c);
+                    out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
+                    createDescriptor({ in_candidate }, { out_candidate });
+                }
                 nspcAdded = true;
             }
 
@@ -685,8 +693,8 @@ void Convolution::setPostOps(dnnl::primitive_attr &attr, const VectorDims &dims,
     attr.set_post_ops(ops);
 }
 
-void Convolution::selectOptimalPrimitiveDescriptor() {
-    selectPreferPrimitiveDescriptor(getPrimitivesPriority(), true);
+void Convolution::selectOptimalPrimitiveDescriptor(bool inParentCall) {
+    selectPreferPrimitiveDescriptor(getPrimitivesPriority(), true, inParentCall);
 }
 
 void Convolution::initSupportedPrimitiveDescriptors() {
@@ -1194,6 +1202,126 @@ bool Convolution::isNspcAvailable() const {
     return true;
 }
 
+void Convolution::selectPreferPrimitiveDescriptor(const std::vector<impl_desc_type>& priority, bool ignoreConstInputs, bool inParentCall) {
+    if (!inParentCall) {
+        std::vector<size_t> spdIdx;
+        const auto it = std::find_if(priority.begin(), priority.end(), [](const impl_desc_type& type) { return (type & brgconv_avx512) == brgconv_avx512; });
+        if (it != priority.end()) {
+            for (size_t i = 0; i < getSupportedPrimitiveDescriptors().size(); i++) {
+                impl_desc_type supportedType = getSupportedPrimitiveDescriptors()[i].getImplementationType();
+                if ((supportedType & brgconv_avx512) == brgconv_avx512) {
+                    spdIdx.push_back(i);
+                }
+            }
+
+            // decide input format
+            int equalsFormatCount = -1;
+            std::vector<size_t> spdIdxForOut;
+            for (size_t n = 0; n < spdIdx.size(); n++) {
+                auto i = spdIdx[n];
+                int equalsLocalFormatCount = 0;
+                if (getSupportedPrimitiveDescriptors()[i].getConfig().inConfs.size() > getParentEdges().size())
+                    continue;
+                for (size_t j = 0; j < getSupportedPrimitiveDescriptors()[i].getConfig().inConfs.size(); j++) {
+                    auto parentEdge = getParentEdgeAt(j);
+                    auto parentPtr = parentEdge->getParent();
+
+                    // We don't take into account constant edges since reorders on them will be executed on load network stage
+                    if (ignoreConstInputs && j > 0 && parentPtr->isConstant()) {
+                        equalsLocalFormatCount++;
+                        continue;
+                    }
+
+                    auto parent_spd = parentPtr->getSelectedPrimitiveDescriptor();
+
+                    if (parent_spd != nullptr && !parent_spd->getConfig().outConfs.empty()) {
+                        int inNum = parentEdge->getInputNum();
+                        if (inNum < 0 || inNum >= parent_spd->getConfig().outConfs.size()) {
+                            inNum = 0;
+                        }
+                        auto curDesc = getSupportedPrimitiveDescriptors()[i].getConfig().inConfs[j].getMemDesc();
+                        auto parentDesc = parent_spd->getConfig().outConfs[inNum].getMemDesc();
+
+                        if (curDesc->isCompatible(*parentDesc)) {
+                            equalsLocalFormatCount++;
+                            DEBUG_LOG(getName(), " pd[", i, "].inConfs[", j, "]"
+                                " is compatible with parent ", parentPtr->getName(),
+                                " outConfs[", inNum, "], equalsLocalFormatCount add to ", equalsLocalFormatCount);
+                        }
+                    }
+                }
+                if (equalsLocalFormatCount > equalsFormatCount) {
+                    equalsFormatCount = equalsLocalFormatCount;
+                    spdIdxForOut.clear();
+                    spdIdxForOut.push_back(i);
+                }
+                else if (equalsLocalFormatCount == equalsFormatCount) {
+                    spdIdxForOut.push_back(i);
+                }
+            }
+            // decide output format
+            // special case for concat
+            equalsFormatCount = -1;
+            int idealIdx = -1;
+            bool changedForConcat = false;
+            for (size_t n = 0; n < spdIdxForOut.size(); n++) {
+                auto i = spdIdxForOut[n];
+                int equalsLocalFormatCount = 0;
+                // select one
+                selectPrimitiveDescriptorByIndex(i);
+                bool childIsConcat = false;
+                for (size_t j = 0; j < getChildEdges().size(); j++) {
+                    auto childEdge = getChildEdgeAt(j);
+                    auto childPtr = childEdge->getChild();
+
+                    if (childPtr->getType() == Type::Concatenation)
+                        childIsConcat = true;
+
+                    childPtr->selectOptimalPrimitiveDescriptor(true);
+                    auto child_spd = childPtr->getSelectedPrimitiveDescriptor();
+                    if (child_spd == nullptr) {
+                        DEBUG_LOG(getName(), " child spd could not get!");
+                        continue;
+                    }
+                    if (!child_spd->getConfig().inConfs.empty()) {
+                        auto curDesc = getSupportedPrimitiveDescriptors()[i].getConfig().outConfs[0].getMemDesc();
+                        auto childDesc = child_spd->getConfig().inConfs[childEdge->getOutputNum()].getMemDesc();
+                        if (curDesc->isCompatible(*childDesc)) {
+                            equalsLocalFormatCount++;
+                            DEBUG_LOG(getName(), " pd[", i, "].outConfs[0]"
+                                " is compatible with child ", childPtr->getName(),
+                                " inConfs[", childEdge->getOutputNum(), "], equalsLocalFormatCount add to ", equalsLocalFormatCount);
+                        }
+                    }
+                }
+                if (equalsLocalFormatCount > equalsFormatCount) {
+                    equalsFormatCount = equalsLocalFormatCount;
+                    idealIdx = static_cast<int>(i);
+                    if (childIsConcat) {
+                        auto curDesc = getSupportedPrimitiveDescriptors()[i].getConfig().outConfs[0].getMemDesc();
+                        if (curDesc->hasLayoutType(LayoutType::nCsp16c)) {
+                            changedForConcat = true;
+                        }
+                    }
+                }
+                else if (equalsLocalFormatCount == equalsFormatCount && childIsConcat && !changedForConcat) {
+                    auto curDesc = getSupportedPrimitiveDescriptors()[i].getConfig().outConfs[0].getMemDesc();
+                    if (curDesc->hasLayoutType(LayoutType::nCsp16c)) {
+                        idealIdx = static_cast<int>(i);
+                        changedForConcat = true;
+                    }
+                }
+            }
+            if (idealIdx != -1) {
+                selectPrimitiveDescriptorByIndex(idealIdx);
+                return;
+            }
+        }
+    }
+
+    Node::selectPreferPrimitiveDescriptor(priority, ignoreConstInputs);
+}
+
 InferenceEngine::Blob::Ptr Convolution::createInternalBlob(InferenceEngine::SizeVector dims, size_t edgeNum, bool isGrouped) {
     const auto constNode = std::dynamic_pointer_cast<Input>(getParentEdgeAt(edgeNum)->getParent());
     if (!constNode) {
@@ -1389,8 +1517,8 @@ void Convolution::prepareParams() {
         primArgs[DNNL_ARG_SRC] = srcMemPtr->GetPrimitive();
         primArgs[DNNL_ARG_WEIGHTS] = wghMemPtr->GetPrimitive();
         primArgs[DNNL_ARG_DST] = dstMemPtr->GetPrimitive();
-        // printf("@@@@@@@@@@@@dst raw = 0x%p, offseted = 0x%p, offset = %zd size = %zd\n", dstMemPtr->GetData(),
-        //     dstMemPtr->GetPtr(), (char*)dstMemPtr->GetPtr() - (char*)dstMemPtr->GetData(), dstMemPtr->GetSize());
+        //printf("@@@@@@@@@@@@dst raw = 0x%p, offseted = 0x%p, offset = %zd size = %zd\n", dstMemPtr->GetData(),
+        //    dstMemPtr->GetPtr(), (char*)dstMemPtr->GetPtr() - (char*)dstMemPtr->GetData(), dstMemPtr->GetSize());
 
         if (withBiases) {
             primArgs[DNNL_ARG_BIAS] = biasMemPtr->GetPrimitive();

@@ -26,7 +26,8 @@ public:
     void createDescriptor(const std::vector<MemoryDescPtr>& inputDesc,
                           const std::vector<MemoryDescPtr>& outputDesc) override;
     void initDescriptor(const NodeConfig& config) override;
-    void selectOptimalPrimitiveDescriptor() override;
+    void selectOptimalPrimitiveDescriptor(bool inParentCall = false) override;
+    void selectPreferPrimitiveDescriptor(const std::vector<impl_desc_type>& priority, bool ignoreConstInputs, bool inParentCall);
     void initSupportedPrimitiveDescriptors() override;
     void filterSupportedPrimitiveDescriptors() override;
     bool created() const override;

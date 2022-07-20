@@ -223,7 +223,7 @@ void Concat::initSupportedPrimitiveDescriptors() {
     }
 }
 
-void Concat::selectOptimalPrimitiveDescriptor() {
+void Concat::selectOptimalPrimitiveDescriptor(bool inParentCall) {
     std::vector<size_t> canSelectPrimitive;
 
     // The double connection marks that some tensor should

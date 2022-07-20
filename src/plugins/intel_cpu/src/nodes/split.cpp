@@ -380,7 +380,7 @@ void Split::initOptimalPrimitiveDescriptor() {
     }
 }
 
-void Split::selectOptimalPrimitiveDescriptor() {
+void Split::selectOptimalPrimitiveDescriptor(bool inParentCall) {
     // Enforce the reference implementation for the planar layout if the implementation is in the impl priorities list.
     // This is needed mostly for the testing purposes, since for the planar layout Split works always in place, we need to enforce
     // the reference implementation when it is selected in a test to test that piece of code.

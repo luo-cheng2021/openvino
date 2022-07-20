@@ -240,7 +240,8 @@ void Node::createPrimitive() {
     }
 }
 
-void Node::selectOptimalPrimitiveDescriptor() {
+void Node::selectOptimalPrimitiveDescriptor(bool inParentCall) {
+    UNUSED(inParentCall);
     selectPreferPrimitiveDescriptor(getPrimitivesPriority(), false);
 }
 

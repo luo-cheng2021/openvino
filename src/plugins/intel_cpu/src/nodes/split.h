@@ -19,7 +19,7 @@ public:
     static bool isSupportedOperation(const std::shared_ptr<const ngraph::Node>& op, std::string& errorMessage) noexcept;
     void getSupportedDescriptors() override;
     void initSupportedPrimitiveDescriptors() override;
-    void selectOptimalPrimitiveDescriptor() override;
+    void selectOptimalPrimitiveDescriptor(bool inParentCall = false) override;
     void execute(dnnl::stream strm) override;
     bool created() const override;
 

@@ -164,7 +164,7 @@ void Snippet::initSupportedPrimitiveDescriptors() {
     supportedPrimitiveDescriptors.emplace_back(initDesc(Planar));
 }
 
-void Snippet::selectOptimalPrimitiveDescriptor() {
+void Snippet::selectOptimalPrimitiveDescriptor(bool inParentCall) {
     selectPreferPrimitiveDescriptor(getPrimitivesPriority(), true);
 }
 
