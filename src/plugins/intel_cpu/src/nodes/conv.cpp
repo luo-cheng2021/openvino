@@ -1254,8 +1254,7 @@ void Convolution::selectPreferPrimitiveDescriptor(const std::vector<impl_desc_ty
                     equalsFormatCount = equalsLocalFormatCount;
                     spdIdxForOut.clear();
                     spdIdxForOut.push_back(i);
-                }
-                else if (equalsLocalFormatCount == equalsFormatCount) {
+                } else if (equalsLocalFormatCount == equalsFormatCount) {
                     spdIdxForOut.push_back(i);
                 }
             }
@@ -1303,8 +1302,7 @@ void Convolution::selectPreferPrimitiveDescriptor(const std::vector<impl_desc_ty
                             changedForConcat = true;
                         }
                     }
-                }
-                else if (equalsLocalFormatCount == equalsFormatCount && childIsConcat && !changedForConcat) {
+                } else if (equalsLocalFormatCount == equalsFormatCount && childIsConcat && !changedForConcat) {
                     auto curDesc = getSupportedPrimitiveDescriptors()[i].getConfig().outConfs[0].getMemDesc();
                     if (curDesc->hasLayoutType(LayoutType::nCsp16c)) {
                         idealIdx = static_cast<int>(i);
