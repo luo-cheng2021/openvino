@@ -524,11 +524,11 @@ void Convolution::getSupportedDescriptors() {
                 out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
                 createDescriptor({ in_candidate }, { out_candidate });
                 if (inputDataType == memory::data_type::f32) {
-                    in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
-                    out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nCsp16c);
-                    createDescriptor({ in_candidate }, { out_candidate });
                     in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nCsp16c);
                     out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
+                    createDescriptor({ in_candidate }, { out_candidate });
+                    in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
+                    out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nCsp16c);
                     createDescriptor({ in_candidate }, { out_candidate });
                 }
                 nspcAdded = true;
@@ -1205,7 +1205,8 @@ bool Convolution::isNspcAvailable() const {
 void Convolution::selectPreferPrimitiveDescriptor(const std::vector<impl_desc_type>& priority, bool ignoreConstInputs, bool inParentCall) {
     if (!inParentCall) {
         std::vector<size_t> spdIdx;
-        const auto it = std::find_if(priority.begin(), priority.end(), [](const impl_desc_type& type) { return (type & brgconv_avx512) == brgconv_avx512; });
+        const auto it = std::find_if(priority.begin(), priority.end(),
+            [](const impl_desc_type& type) { return type == brgconv_avx512 || type == brgconv_avx512_1x1; });
         if (it != priority.end()) {
             for (size_t i = 0; i < getSupportedPrimitiveDescriptors().size(); i++) {
                 impl_desc_type supportedType = getSupportedPrimitiveDescriptors()[i].getImplementationType();
