@@ -236,6 +236,7 @@ protected:
     void InitGraph();
     void InitNodes();
     void InitDescriptors();
+    void OptimizeOutputLayout();
     void InitOptimalPrimitiveDescriptors();
     void InitEdges();
     void Allocate();

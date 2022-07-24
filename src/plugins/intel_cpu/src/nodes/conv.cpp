@@ -1260,22 +1260,27 @@ void Convolution::selectPreferPrimitiveDescriptor(const std::vector<impl_desc_ty
                 }
             }
             // decide output format
-            // special case for concat
             equalsFormatCount = -1;
             int idealIdx = -1;
-            bool changedForConcat = false;
+            bool changedFor16b = false;
             for (size_t n = 0; n < spdIdxForOut.size(); n++) {
                 auto i = spdIdxForOut[n];
                 int equalsLocalFormatCount = 0;
                 // select one
                 selectPrimitiveDescriptorByIndex(i);
-                bool childIsConcat = false;
+                // concat need aBcd16b to be inplace; reduce will be better in aBcd16b
+                bool childIsSpecial = false;
                 for (size_t j = 0; j < getChildEdges().size(); j++) {
                     auto childEdge = getChildEdgeAt(j);
                     auto childPtr = childEdge->getChild();
 
-                    if (childPtr->getType() == Type::Concatenation)
-                        childIsConcat = true;
+                    // if (childPtr->getType() == Type::Concatenation)// || childPtr->getType() == Type::Reduce)
+                    //     childIsSpecial = true;
+
+                    // depthwise
+                    //if (const auto conv = std::dynamic_pointer_cast<Convolution>(childPtr)) {
+                    //    childIsSpecial = conv->isDepthWise();
+                    //}
 
                     childPtr->selectOptimalPrimitiveDescriptor(true);
                     auto child_spd = childPtr->getSelectedPrimitiveDescriptor();
@@ -1297,17 +1302,17 @@ void Convolution::selectPreferPrimitiveDescriptor(const std::vector<impl_desc_ty
                 if (equalsLocalFormatCount > equalsFormatCount) {
                     equalsFormatCount = equalsLocalFormatCount;
                     idealIdx = static_cast<int>(i);
-                    if (childIsConcat) {
+                    if (childIsSpecial) {
                         auto curDesc = getSupportedPrimitiveDescriptors()[i].getConfig().outConfs[0].getMemDesc();
                         if (curDesc->hasLayoutType(LayoutType::nCsp16c)) {
-                            changedForConcat = true;
+                            changedFor16b = true;
                         }
                     }
-                } else if (equalsLocalFormatCount == equalsFormatCount && childIsConcat && !changedForConcat) {
+                } else if (equalsLocalFormatCount == equalsFormatCount && childIsSpecial && !changedFor16b) {
                     auto curDesc = getSupportedPrimitiveDescriptors()[i].getConfig().outConfs[0].getMemDesc();
                     if (curDesc->hasLayoutType(LayoutType::nCsp16c)) {
                         idealIdx = static_cast<int>(i);
-                        changedForConcat = true;
+                        changedFor16b = true;
                     }
                 }
             }

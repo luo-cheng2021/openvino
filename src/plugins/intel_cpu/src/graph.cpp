@@ -49,6 +49,7 @@
 #include <transformations/utils/utils.hpp>
 #include <low_precision/low_precision.hpp>
 #include "memory_desc/dnnl_blocked_memory_desc.h"
+#include "cpu/x64/cpu_isa_traits.hpp"
 
 using namespace dnnl;
 using namespace InferenceEngine;
@@ -419,6 +420,170 @@ void Graph::InitNodes() {
     }
 }
 
+static inline dnnl::memory::format_tag GetTag(bool isBlock, const Shape& shape) {
+    if (shape.getRank() > 5 || shape.getRank() < 3)
+        IE_THROW()<< "Wrong shape, rank should be [3, 5].";
+    if (isBlock) {
+        static dnnl::memory::format_tag tagsBlock[] = {
+            dnnl::memory::format_tag::aBc16b,
+            dnnl::memory::format_tag::aBcd16b,
+            dnnl::memory::format_tag::aBcde16b,
+            dnnl::memory::format_tag::aBcdef16b,
+        };
+        return tagsBlock[shape.getRank() - 3];
+    } else {
+        static dnnl::memory::format_tag tags[] = {
+            dnnl::memory::format_tag::acb,
+            dnnl::memory::format_tag::acdb,
+            dnnl::memory::format_tag::acdeb,
+        };
+        return tags[shape.getRank() - 3];
+    }
+}
+
+static inline LayoutType GetLayoutType(dnnl::memory::format_tag tag) {
+    switch (tag) {
+        case dnnl::memory::format_tag::aBc16b:
+        case dnnl::memory::format_tag::aBcd16b:
+        case dnnl::memory::format_tag::aBcde16b:
+        case dnnl::memory::format_tag::aBcdef16b:
+            return LayoutType::nCsp16c;
+        case dnnl::memory::format_tag::acb:
+        case dnnl::memory::format_tag::acdb:
+        case dnnl::memory::format_tag::acdeb:
+            return LayoutType::nspc;
+        default:
+            return LayoutType::ncsp;
+    }
+}
+
+void Graph::OptimizeOutputLayout() {
+    if (!dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core) || !config.cpuExperimental.count(EXPERIMENTAL_KEY_BRGCONV))
+        return;
+
+    std::set<NodePtr> visitedNode;
+    auto tryLabelBlockLayout = [&](NodePtr& node) {
+        std::stack<NodePtr> visitList;
+        visitList.push(node);
+        while (!visitList.empty()) {
+            auto cur = visitList.top();
+            visitList.pop();
+            if (visitedNode.count(cur))
+                continue;
+            visitedNode.insert(cur);
+            for (size_t j = 0; j < cur->getParentEdges().size(); j++) {
+                auto parentEdge = cur->getParentEdgeAt(j);
+                auto parentPtr = parentEdge->getParent();
+
+                if (!parentPtr || parentPtr->isConstant()) {
+                    continue;
+                }
+
+                if (parentPtr->getType() != Type::Convolution) {
+                    visitList.push(parentPtr);
+                    continue;
+                }
+
+                visitedNode.insert(parentPtr);
+                for (size_t i = 0; i < parentPtr->getSupportedPrimitiveDescriptors().size(); i++) {
+                    const auto& spd = parentPtr->getSupportedPrimitiveDescriptors()[i];
+                    const auto& curDesc = spd.getConfig().outConfs[0].getMemDesc();
+                    if (curDesc->hasLayoutType(LayoutType::nCsp16c) && (spd.getImplementationType() & brgconv)) {
+                        if (parentPtr->outputMemoryFormatsFilter.empty())
+                            parentPtr->outputMemoryFormatsFilter.push_back(GetTag(true, curDesc->getShape()));
+                        break;
+                    }
+                }
+            }
+        }
+    };
+
+    std::map<NodePtr, std::shared_ptr<LayoutType>> visitedNodeLayout;
+    auto tryLabelSameLayout = [&](NodePtr& node) {
+        std::stack<NodePtr> visitList;
+        visitList.push(node);
+        // save all parents layout already labeled
+        std::set<LayoutType> layouts;
+        // all conv parents
+        std::set<NodePtr> convParents;
+        // use ncsp to init unkown layout(we only use nCsp16c and nspc)
+        // layout will recompute
+        auto layout = std::make_shared<LayoutType>(LayoutType::ncsp);
+        // visisted nodes will be added to global only if the label success
+        std::map<NodePtr, std::shared_ptr<LayoutType>> curVisitedNodeLayout;
+        // visited current node
+        visitedNodeLayout[node] = layout;
+        // 1, find all conv parents 2, find labeled layout
+        while (!visitList.empty()) {
+            auto cur = visitList.top();
+            visitList.pop();
+            for (size_t j = 0; j < cur->getParentEdges().size(); j++) {
+                auto parentEdge = cur->getParentEdgeAt(j);
+                auto parentPtr = parentEdge->getParent();
+
+                if (!parentPtr || parentPtr->isConstant()) {
+                    continue;
+                }
+
+                if (visitedNodeLayout.count(parentPtr)) {
+                    layouts.insert(*visitedNodeLayout[parentPtr]);
+                    continue;
+                }
+                if (curVisitedNodeLayout.count(parentPtr)) {
+                    continue;
+                }
+                curVisitedNodeLayout[parentPtr] = layout;
+                // recursive to indirect parent
+                if (parentPtr->getType() != Type::Convolution) {
+                    visitList.push(parentPtr);
+                    continue;
+                }
+
+                convParents.insert(parentPtr);
+            }
+        }
+
+        bool outputFilterEmpty = true;
+        for (auto& parent : convParents) {
+            if (!parent->outputMemoryFormatsFilter.empty()) {
+                outputFilterEmpty = false;
+                layouts.insert(GetLayoutType(parent->outputMemoryFormatsFilter[0]));
+            }
+        }
+        // 1, no layout set, prefer nspc(may be defer decide?) 2, broadcast the only layout
+        if (outputFilterEmpty)
+            *layout = LayoutType::nspc;
+        else if (layouts.size() == 1 && *layouts.begin() != LayoutType::ncsp)
+            *layout = *layouts.begin();
+        if (*layout != LayoutType::ncsp) {
+            for (auto& parent : convParents) {
+                const auto& spd = parent->getSupportedPrimitiveDescriptors()[0];
+                const auto& curDesc = spd.getConfig().outConfs[0].getMemDesc();
+                const auto tag = GetTag(*layout == LayoutType::nCsp16c, curDesc->getShape());
+                if (parent->outputMemoryFormatsFilter.empty() && (spd.getImplementationType() & brgconv))
+                    parent->outputMemoryFormatsFilter.push_back(tag);
+            }
+            visitedNodeLayout.insert(curVisitedNodeLayout.begin(), curVisitedNodeLayout.end());
+        }
+    };
+
+    // label for block layout
+    for (auto &node : graphNodes) {
+        if (one_of(node->getType(), Type::Concatenation,
+                                    Type::Reduce,
+                                    Type::MatMul)) {
+            tryLabelBlockLayout(node);
+        }
+    }
+
+    // label for same layout
+    for (auto &node : graphNodes) {
+        if (one_of(node->getType(), Type::Subgraph)) {
+            tryLabelSameLayout(node);
+        }
+    }
+}
+
 void Graph::InitDescriptors() {
     OV_ITT_SCOPE_CHAIN(FIRST_INFERENCE, taskChain, itt::domains::intel_cpu_LT, "InitDescriptors", "Prepare");
 
@@ -434,9 +599,6 @@ void Graph::InitDescriptors() {
         OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.initSupportedPrimitiveDescriptors);
         node->initSupportedPrimitiveDescriptors();
 
-        OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
-        node->filterSupportedPrimitiveDescriptors();
-
 #ifdef CPU_DEBUG_CAPS
         DEBUG_LOG("==================");
         for (auto & pd : node->getSupportedPrimitiveDescriptors())
@@ -444,6 +606,13 @@ void Graph::InitDescriptors() {
                       " ", node->getName(),
                       "  SupportedPrimitiveDescriptor:\n", pd);
 #endif
+    }
+
+    OptimizeOutputLayout();
+
+    for (auto &node : graphNodes) {
+        OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
+        node->filterSupportedPrimitiveDescriptors();
     }
 
     for (auto &node : graphNodes) {
