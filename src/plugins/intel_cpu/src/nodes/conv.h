@@ -65,6 +65,8 @@ public:
 
     void setDynamicBatchLim(int lim) override;
 
+    void setShouldTryBrgconv(bool should) { shouldTryBrgconv = should; }
+
 protected:
     InferenceEngine::Precision fusedEltwisePrecision(const NodePtr& fusingNode) const;
     void redefineOutputMemory(const std::vector<VectorDims> &newOutputShapes) override;

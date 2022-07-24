@@ -25,6 +25,7 @@
 #include "nodes/input.h"
 #include <nodes/reorder.h>
 #include "nodes/convert.h"
+#include "nodes/conv.h"
 
 #include <ie_algorithm.hpp>
 #include <blob_factory.hpp>
@@ -49,6 +50,7 @@
 #include <transformations/utils/utils.hpp>
 #include <low_precision/low_precision.hpp>
 #include "memory_desc/dnnl_blocked_memory_desc.h"
+#include "cpu/x64/cpu_isa_traits.hpp"
 
 using namespace dnnl;
 using namespace InferenceEngine;
@@ -417,9 +419,132 @@ void Graph::InitNodes() {
     }
 }
 
+static inline dnnl::memory::format_tag GetTag(bool isBlock, const Shape& shape) {
+    if (shape.getRank() > 5 || shape.getRank() < 3)
+        IE_THROW()<< "Wrong shape, rank should be [3, 5].";
+    if (isBlock) {
+        static dnnl::memory::format_tag tagsBlock[] = {
+            dnnl::memory::format_tag::aBc16b,
+            dnnl::memory::format_tag::aBcd16b,
+            dnnl::memory::format_tag::aBcde16b,
+            dnnl::memory::format_tag::aBcdef16b,
+        };
+        return tagsBlock[shape.getRank() - 3];
+    } else {
+        static dnnl::memory::format_tag tags[] = {
+            dnnl::memory::format_tag::acb,
+            dnnl::memory::format_tag::acdb,
+            dnnl::memory::format_tag::acdeb,
+        };
+        return tags[shape.getRank() - 3];
+    }
+}
+
+static inline LayoutType GetLayoutType(dnnl::memory::format_tag tag) {
+    switch (tag) {
+        case dnnl::memory::format_tag::aBc16b:
+        case dnnl::memory::format_tag::aBcd16b:
+        case dnnl::memory::format_tag::aBcde16b:
+        case dnnl::memory::format_tag::aBcdef16b:
+            return LayoutType::nCsp16c;
+        case dnnl::memory::format_tag::acb:
+        case dnnl::memory::format_tag::acdb:
+        case dnnl::memory::format_tag::acdeb:
+            return LayoutType::nspc;
+        default:
+            return LayoutType::ncsp;
+    }
+}
+
+void Graph::OptimizeLayout() {
+    if (!dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core))
+        return;
+
+    auto estimateConvTick = [] (NodePtr& node) -> uint64_t {
+        if (node->isDynamicNode())
+            return 0;
+        uint64_t tick;
+        auto conv = std::dynamic_pointer_cast<node::Convolution>(node);
+        const auto shapeData = conv->getInputShapeAtPort(0);
+        const auto dimWeight = conv->getWeightDims();
+        const auto shapeOut = conv->getOutputShapeAtPort(0);
+        if (conv->getGroupNum() == 1) {
+            // fma number = output number * input channel number * filter number
+            tick = shapeOut.getElementsCount() * shapeData.getStaticDims()[1];
+            for (auto i = 2; i < dimWeight.size(); i++)
+                tick *= dimWeight[i];
+        } else {
+            // fma number = sum all group((output spatial * output channel / group) * input channel number / group * filter number)
+            const auto group = conv->getGroupNum();
+            tick = shapeOut.getElementsCount() / group * shapeData.getStaticDims()[1] / group;
+            for (auto i = 3; i < dimWeight.size(); i++)
+                tick *= dimWeight[i];
+        }
+        // each tick can do 16 in parralel
+        tick /= 16;
+        return tick;
+    };
+
+    auto estimateConcatTick = [] (NodePtr& node) -> uint64_t {
+        if (node->isDynamicNode())
+            return 0;
+        uint64_t tick;
+        const auto shapeOut = node->getOutputShapeAtPort(0);
+        // tick number = memory elements / 4 * 2(read + write)
+        //  heuristics: each tick can process 4 floats
+        tick = shapeOut.getElementsCount() / 4 * 2;
+        // magic number, maybe read data from one core's cache penalty
+        tick *= 2;
+        return tick;
+    };
+
+    auto removeBrg = [] (NodePtr& node) {
+        auto conv = std::dynamic_pointer_cast<node::Convolution>(node);
+        conv->setShouldTryBrgconv(false);
+    };
+
+    auto suitableConcat = [] (NodePtr& node) {
+        if (node->getType() != Type::Concatenation)
+            return false;
+        if (node->isDynamicNode())
+            return false;
+        for (auto i = 0; i < node->getParentEdges().size(); i++) {
+            const auto& dims = node->getInputShapeAtPort(i).getDims();
+            if (dims.size() < 3 || dims[1] % 16 != 0)
+                return false;
+        }
+        return true;
+    };
+
+    // estimated ticks
+    uint64_t convTicks = 0, concatTicks = 0;
+    for (auto &node : graphNodes) {
+        if (node->getType() == Type::Convolution) {
+            convTicks += estimateConvTick(node);
+        }
+
+        if (suitableConcat(node)) {
+            concatTicks += estimateConcatTick(node);
+        }
+    }
+
+    // 5% drop will be a problem
+    if (concatTicks > convTicks / 20) {
+        for (auto &node : graphNodes) {
+            if (node->getType() == Type::Convolution) {
+                removeBrg(node);
+            }
+        }
+        std::cout << "##############should use block, concat: " << concatTicks << " conv: " << convTicks << std::endl;
+    } else {
+        std::cout << "@@@@@@@@@@@@@@should use nhwc, concat: " << concatTicks << " conv: " << convTicks << std::endl;
+    }
+}
+
 void Graph::InitDescriptors() {
     OV_ITT_SCOPE_CHAIN(FIRST_INFERENCE, taskChain, itt::domains::intel_cpu_LT, "InitDescriptors", "Prepare");
 
+    OptimizeLayout();
     for (auto &node : graphNodes) {
         if (node->getType() == Type::Input && _normalizePreprocMap.find(node->getName()) != _normalizePreprocMap.end()) {
             auto *inputNode = dynamic_cast<node::Input *>(node.get());
@@ -432,9 +557,6 @@ void Graph::InitDescriptors() {
         OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.initSupportedPrimitiveDescriptors);
         node->initSupportedPrimitiveDescriptors();
 
-        OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
-        node->filterSupportedPrimitiveDescriptors();
-
 #ifdef CPU_DEBUG_CAPS
         DEBUG_LOG("==================");
         for (auto & pd : node->getSupportedPrimitiveDescriptors())
@@ -442,6 +564,11 @@ void Graph::InitDescriptors() {
                       " ", node->getName(),
                       "  SupportedPrimitiveDescriptor:\n", pd);
 #endif
+    }
+
+    for (auto &node : graphNodes) {
+        OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
+        node->filterSupportedPrimitiveDescriptors();
     }
 
     for (auto &node : graphNodes) {
