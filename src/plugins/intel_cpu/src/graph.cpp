@@ -458,7 +458,7 @@ static inline LayoutType GetLayoutType(dnnl::memory::format_tag tag) {
 }
 
 void Graph::OptimizeOutputLayout() {
-    if (!dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core) || !config.cpuExperimental.count(EXPERIMENTAL_KEY_BRGCONV))
+    if (!dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core) || !config.cpuExperimental.count("brgconcat"))
         return;
 
     std::set<NodePtr> visitedNode;
@@ -484,16 +484,23 @@ void Graph::OptimizeOutputLayout() {
                     continue;
                 }
 
-                visitedNode.insert(parentPtr);
+                bool hasBlock = false;
                 for (size_t i = 0; i < parentPtr->getSupportedPrimitiveDescriptors().size(); i++) {
                     const auto& spd = parentPtr->getSupportedPrimitiveDescriptors()[i];
                     const auto& curDesc = spd.getConfig().outConfs[0].getMemDesc();
-                    if (curDesc->hasLayoutType(LayoutType::nCsp16c) && (spd.getImplementationType() & brgconv)) {
-                        if (parentPtr->outputMemoryFormatsFilter.empty())
-                            parentPtr->outputMemoryFormatsFilter.push_back(GetTag(true, curDesc->getShape()));
-                        break;
+                    if (!(spd.getImplementationType() & ref)) {
+                        if (curDesc->hasLayoutType(LayoutType::nCsp16c)) {
+                            hasBlock = true;
+                            if (parentPtr->outputMemoryFormatsFilter.empty())
+                                parentPtr->outputMemoryFormatsFilter.push_back(GetTag(true, curDesc->getShape()));
+                            break;
+                        }
                     }
                 }
+                if (!hasBlock)
+                    visitList.push(parentPtr);
+                else
+                    visitedNode.insert(parentPtr);
             }
         }
     };
@@ -538,8 +545,19 @@ void Graph::OptimizeOutputLayout() {
                     visitList.push(parentPtr);
                     continue;
                 }
-
-                convParents.insert(parentPtr);
+                bool hasBrg = false;
+                for (size_t i = 0; i < parentPtr->getSupportedPrimitiveDescriptors().size(); i++) {
+                    const auto& spd = parentPtr->getSupportedPrimitiveDescriptors()[i];
+                    const auto& curDesc = spd.getConfig().outConfs[0].getMemDesc();
+                    if (spd.getImplementationType() & brgconv) {
+                        hasBrg = true;
+                        break;
+                    }
+                }
+                if (!hasBrg)
+                    visitList.push(parentPtr);
+                else
+                    convParents.insert(parentPtr);
             }
         }
 
@@ -567,11 +585,22 @@ void Graph::OptimizeOutputLayout() {
         }
     };
 
+    auto suitableConcat = [] (NodePtr& node) {
+        if (node->getType() != Type::Concatenation)
+            return false;
+        if (node->isDynamicNode())
+            return false;
+        for (auto i = 0; i < node->getParentEdges().size(); i++) {
+            const auto& dims = node->getInputShapeAtPort(i).getDims();
+            if (dims.size() < 3 || dims[1] % 16 != 0)
+                return false;
+        }
+        return true;
+    };
+
     // label for block layout
     for (auto &node : graphNodes) {
-        if (one_of(node->getType(), Type::Concatenation,
-                                    Type::Reduce,
-                                    Type::MatMul)) {
+        if (suitableConcat(node)) {
             tryLabelBlockLayout(node);
         }
     }

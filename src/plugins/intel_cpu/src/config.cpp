@@ -133,8 +133,8 @@ void Config::readProperties(const std::map<std::string, std::string> &prop) {
                         continue;
                     }
                 } else {
-                    IE_THROW() << "Wrong value for property key " << PluginConfigParams::KEY_CPU_EXPERIMENTAL
-                        << ". Expected only " << EXPERIMENTAL_KEY_BRGCONV;
+                    // IE_THROW() << "Wrong value for property key " << PluginConfigParams::KEY_CPU_EXPERIMENTAL
+                    //     << ". Expected only " << EXPERIMENTAL_KEY_BRGCONV;
                 }
                 newConfig.insert(element);
             }

@@ -520,18 +520,20 @@ void Convolution::getSupportedDescriptors() {
             bool nspcAdded = false;
             acceptedFormat |= cpuExperimental.count(EXPERIMENTAL_KEY_BRGCONV) && inputDataType == memory::data_type::f32;
             if (acceptedFormat && impl::cpu::x64::mayiuse(impl::cpu::x64::avx512_core)) {
-                in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
-                out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
-                createDescriptor({ in_candidate }, { out_candidate });
-                if (inputDataType == memory::data_type::f32) {
-                    in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nCsp16c);
+                if (!cpuExperimental.count("forceblock")) {
+                    in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
                     out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
                     createDescriptor({ in_candidate }, { out_candidate });
-                    in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
-                    out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nCsp16c);
-                    createDescriptor({ in_candidate }, { out_candidate });
+                    if (inputDataType == memory::data_type::f32) {
+                        in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nCsp16c);
+                        out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
+                        createDescriptor({ in_candidate }, { out_candidate });
+                        in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
+                        out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nCsp16c);
+                        createDescriptor({ in_candidate }, { out_candidate });
+                    }
+                    nspcAdded = true;
                 }
-                nspcAdded = true;
             }
 
             if (IC == 1 && groupOC == 1) {
@@ -694,7 +696,11 @@ void Convolution::setPostOps(dnnl::primitive_attr &attr, const VectorDims &dims,
 }
 
 void Convolution::selectOptimalPrimitiveDescriptor(bool inParentCall) {
-    selectPreferPrimitiveDescriptor(getPrimitivesPriority(), true, inParentCall);
+    if (cpuExperimental.count("brgconcat")) {
+        selectPreferPrimitiveDescriptor(getPrimitivesPriority(), true, inParentCall);
+    } else {
+        Node::selectPreferPrimitiveDescriptor(getPrimitivesPriority(), true);
+    }
 }
 
 void Convolution::initSupportedPrimitiveDescriptors() {
