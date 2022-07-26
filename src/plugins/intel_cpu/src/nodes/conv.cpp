@@ -789,7 +789,7 @@ void Convolution::initSupportedPrimitiveDescriptors() {
                     const auto weightDesc = std::dynamic_pointer_cast<BlockedMemoryDesc>(config.inConfs[1].getMemDesc());
                     if (weightDesc->isDefined() && weightDesc->getPrecision() == Precision::FP32) {
                         const auto dims = weightDesc->getBlockDims();
-                        auto weightSize = IC * dims[4] * sizeof(float);
+                        auto weightSize = IC * dims[weightDims.size()] * sizeof(float);
                         for (auto i = 2; i < weightDims.size(); i++) {
                             weightSize *= weightDims[i];
                         }
@@ -1021,7 +1021,7 @@ void Convolution::initDescriptor(const NodeConfig& config) {
                     const auto weightDesc = std::dynamic_pointer_cast<BlockedMemoryDesc>(cfg.inConfs[1].getMemDesc());
                     if (weightDesc->isDefined() && weightDesc->getPrecision() == Precision::FP32) {
                         const auto dims = weightDesc->getBlockDims();
-                        auto weightSize = IC * dims[4] * sizeof(float);
+                        auto weightSize = IC * dims[weightDims.size()] * sizeof(float);
                         for (auto i = 2; i < weightDims.size(); i++) {
                             weightSize *= weightDims[i];
                         }
