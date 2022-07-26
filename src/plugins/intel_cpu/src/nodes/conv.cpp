@@ -284,6 +284,8 @@ Convolution::Convolution(const std::shared_ptr<ngraph::Node>& op, const dnnl::en
     // 1, support amx
     // 2, static shape(dynamic shape may change weights layout if the input shape changes and cause performance issue: 86948)
     shouldTryBrgconv = dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core_amx) && !isDynamicNode();
+    char* p = getenv("USE_BRG");
+    shouldTryBrgconv = p && p[0] == '1';
 }
 
 bool Convolution::canBeExecutedInInt8() const {
