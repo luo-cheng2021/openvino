@@ -524,14 +524,14 @@ void Convolution::getSupportedDescriptors() {
                     in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
                     out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
                     createDescriptor({ in_candidate }, { out_candidate });
-                    if (inputDataType == memory::data_type::f32) {
-                        in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nCsp16c);
-                        out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
-                        createDescriptor({ in_candidate }, { out_candidate });
-                        in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
-                        out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nCsp16c);
-                        createDescriptor({ in_candidate }, { out_candidate });
-                    }
+                    // if (inputDataType == memory::data_type::f32) {
+                    //     in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nCsp16c);
+                    //     out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nspc);
+                    //     createDescriptor({ in_candidate }, { out_candidate });
+                    //     in_candidate = std::make_shared<DnnlBlockedMemoryDesc>(inputShape, inputDataType, nspc);
+                    //     out_candidate = std::make_shared<DnnlBlockedMemoryDesc>(outputShape, outputDataType, nCsp16c);
+                    //     createDescriptor({ in_candidate }, { out_candidate });
+                    // }
                     nspcAdded = true;
                 }
             }
@@ -784,8 +784,23 @@ void Convolution::initSupportedPrimitiveDescriptors() {
                 impl_desc_type impl_type = parse_impl_name(itpd.impl_info_str());
                 if (impl_type & jit)
                     containJitImpl = true;
+                bool valid = true;
+                if ((impl_type & brgconv_avx512) == brgconv_avx512) {
+                    const auto weightDesc = std::dynamic_pointer_cast<BlockedMemoryDesc>(config.inConfs[1].getMemDesc());
+                    if (weightDesc->isDefined() && weightDesc->getPrecision() == Precision::FP32) {
+                        const auto dims = weightDesc->getBlockDims();
+                        auto weightSize = IC * dims[4] * sizeof(float);
+                        for (auto i = 2; i < weightDims.size(); i++) {
+                            weightSize *= weightDims[i];
+                        }
+                        const size_t l2CacheSize = dnnl::utils::get_cache_size(2, true);
+                        if (weightSize >= l2CacheSize)
+                            valid = false;
+                    }
+                }
 
-                supportedPrimitiveDescriptors.emplace_back(config, impl_type);
+                if (valid)
+                    supportedPrimitiveDescriptors.emplace_back(config, impl_type);
                 if (!itpd.next_impl())
                     break;
             }
@@ -1001,6 +1016,26 @@ void Convolution::initDescriptor(const NodeConfig& config) {
                 impl_desc_type impl_type = parse_impl_name(itpd.impl_info_str());
                 if (impl_type & jit)
                     containJitImpl = true;
+                bool valid = true;
+                if ((impl_type & brgconv_avx512) == brgconv_avx512) {
+                    const auto weightDesc = std::dynamic_pointer_cast<BlockedMemoryDesc>(cfg.inConfs[1].getMemDesc());
+                    if (weightDesc->isDefined() && weightDesc->getPrecision() == Precision::FP32) {
+                        const auto dims = weightDesc->getBlockDims();
+                        auto weightSize = IC * dims[4] * sizeof(float);
+                        for (auto i = 2; i < weightDims.size(); i++) {
+                            weightSize *= weightDims[i];
+                        }
+                        const size_t l2CacheSize = dnnl::utils::get_cache_size(2, true);
+                        if (weightSize >= l2CacheSize)
+                            valid = false;
+                    }
+                }
+
+                if (!valid) {
+                    if (!itpd.next_impl())
+                        break;
+                    continue;
+                }
 
                 if (selected_count == selectedPrimitiveDescriptorIndex) {
                     if (impl_type != selectedPD->getImplementationType()) {
