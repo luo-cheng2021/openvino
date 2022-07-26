@@ -13,6 +13,7 @@
 // clang-format off
 #include "openvino/openvino.hpp"
 #include "openvino/pass/serialize.hpp"
+#include "openvino/runtime/intel_cpu/properties.hpp"
 
 #include "gna/gna_config.hpp"
 #include "gpu/gpu_config.hpp"
@@ -262,6 +263,7 @@ int main(int argc, char* argv[]) {
         // Update config per device according to command line parameters
         for (auto& device : devices) {
             auto& device_config = config[device];
+            device_config.emplace(ov::intel_cpu::denormals_optimization(true));
 
             // high-level performance modes
             auto ov_perf_hint = get_performance_hint(device, core);
