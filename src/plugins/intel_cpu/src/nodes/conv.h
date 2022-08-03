@@ -138,7 +138,7 @@ private:
     const size_t Y_AXIS = 1;
 
     bool isWino = false;
-    // if we have amx support and shape is static or user specified we will try brgconv
+    // if shape is static or user specified we will try brgconv
     bool shouldTryBrgconv = false;
     AttrPtr pAttr;
     bool autoPadding = false;
