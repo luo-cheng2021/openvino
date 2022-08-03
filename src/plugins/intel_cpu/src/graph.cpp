@@ -529,7 +529,7 @@ void Graph::OptimizeLayout() {
     }
 
     // 5% drop will be a problem
-    if (concatTicks > convTicks / 20) {
+    if (convTicks > 0 && concatTicks > convTicks / 20) {
         for (auto &node : graphNodes) {
             if (node->getType() == Type::Convolution) {
                 removeBrg(node);
@@ -544,7 +544,7 @@ void Graph::OptimizeLayout() {
 void Graph::InitDescriptors() {
     OV_ITT_SCOPE_CHAIN(FIRST_INFERENCE, taskChain, itt::domains::intel_cpu_LT, "InitDescriptors", "Prepare");
 
-    OptimizeLayout();
+    //OptimizeLayout();
     for (auto &node : graphNodes) {
         if (node->getType() == Type::Input && _normalizePreprocMap.find(node->getName()) != _normalizePreprocMap.end()) {
             auto *inputNode = dynamic_cast<node::Input *>(node.get());
