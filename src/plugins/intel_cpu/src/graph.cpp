@@ -482,19 +482,39 @@ void Graph::OptimizeLayout() {
         }
         // each tick can do 16 in parralel
         tick /= 16;
+        std::cout << "conv " << node->getName() << " " << tick << "\n";
         return tick;
     };
 
     auto estimateConcatTick = [] (NodePtr& node) -> uint64_t {
         if (node->isDynamicNode())
             return 0;
-        uint64_t tick;
-        const auto shapeOut = node->getOutputShapeAtPort(0);
-        // tick number = memory elements / 4 * 2(read + write)
-        //  heuristics: each tick can process 4 floats
-        tick = shapeOut.getElementsCount() / 4 * 2;
+        uint64_t tick = 0;
+        for (auto i = 0; i < node->getParentEdges().size(); i++) {
+            const auto& edge = node->getParentEdgeAt(i);
+            const auto& parent = edge->getParent();
+            // shufflenet-v2-x0.5 has 'split-concat' and it could not be inplace
+            if (parent->getType() == Type::Split)
+                continue;
+            // densenet-201 has 'concat-concat' and it could not be inplace
+            if (parent->getType() == Type::Concatenation) {
+                continue;
+            }
+            // mixnet-l has dw conv and it could not be inplace
+            // if (parent->getType() == Type::Convolution) {
+            //     auto conv = std::dynamic_pointer_cast<node::Convolution>(parent);
+            //     if (conv->isDepthWise())
+            //         continue;
+            // }
+            const auto& shapeIn = node->getInputShapeAtPort(i);
+            // tick number = memory elements / 4 * 2(read + write)
+            //  heuristics: each tick can process 4 floats
+            tick += shapeIn.getElementsCount() / 4 * 2;
+        }
         // magic number, maybe read data from one core's cache penalty
         tick *= 2;
+        std::cout << "concat " << node->getName() << " " << tick << "\n";
+
         return tick;
     };
 
@@ -535,7 +555,7 @@ void Graph::OptimizeLayout() {
                 removeBrg(node);
             }
         }
-        std::cout << "##############should use block, concat: " << concatTicks << " conv: " << convTicks << std::endl;
+        std::cout << "##############should use block, concat: " << concatTicks << " conv: " << convTicks << " " << 1.0 * concatTicks / convTicks  << std::endl;
     } else {
         std::cout << "@@@@@@@@@@@@@@should use nhwc, concat: " << concatTicks << " conv: " << convTicks << std::endl;
     }
@@ -544,7 +564,7 @@ void Graph::OptimizeLayout() {
 void Graph::InitDescriptors() {
     OV_ITT_SCOPE_CHAIN(FIRST_INFERENCE, taskChain, itt::domains::intel_cpu_LT, "InitDescriptors", "Prepare");
 
-    //OptimizeLayout();
+    OptimizeLayout();
     for (auto &node : graphNodes) {
         if (node->getType() == Type::Input && _normalizePreprocMap.find(node->getName()) != _normalizePreprocMap.end()) {
             auto *inputNode = dynamic_cast<node::Input *>(node.get());
