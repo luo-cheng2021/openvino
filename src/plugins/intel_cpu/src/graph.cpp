@@ -526,7 +526,8 @@ void Graph::ChooseLayout() {
                 // in nCsp16c some input can do inplace
                 if (isBlock) {
                     const auto& dims = shapeIn.getDims();
-                    if (dims.size() >= 3 && dims[1] % 16 == 0) {
+                    // densenet-201 conv->concat, conv has many children which can not be in place
+                    if (dims.size() >= 3 && dims[1] % 16 == 0 && parent->getChildEdgesAtPort(edge->getInputNum()).size() == 1) {
                         // shufflenet-v2-x0.5 has 'split-concat' and it could not be inplace
                         // densenet-201 has 'concat-concat' and it could not be inplace
                         if (parent->getType() != Type::Split && parent->getType() != Type::Concatenation) {
@@ -688,7 +689,7 @@ void Graph::ChooseLayout() {
     // nChw16c estimated computation
     Computation nchwCompute = estimateComputation(true);
     // select best layout, prefer nhwc
-    if (nhwcCompute.getTotal() <= nchwCompute.getTotal() * 21 / 20) {
+    if (nhwcCompute.getTotal() <= nchwCompute.getTotal() * 201 / 200) {
         // should use nhwc
         handleSPD(SPDAction::SPDAction_Restore);
         setBrgFilter(true);
