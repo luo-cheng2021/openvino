@@ -677,7 +677,6 @@ void Graph::ChooseLayout() {
     selectSPD();
 
     if (!dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core) || config.enforceBF16 || isQuantizedFlag) {
-        printf("xxxxxxx\n");
         return;
     }
     // estimated nhwc computation
@@ -695,7 +694,7 @@ void Graph::ChooseLayout() {
         setBrgFilter(true);
         selectSPD();
     }
-    printf("xxxxxxx, %s, %lld, %lld, %.3f, (conv/reorder/concat/def), %lld, %lld, %lld, %lld, /, %lld, %lld, %lld, %lld\n",
+    printf("xxxxxxx, %s, %ld, %ld, %.3f, (conv/reorder/concat/def), %ld, %ld, %ld, %ld, /, %ld, %ld, %ld, %ld\n",
         nhwcCompute.getTotal() <= (nchwCompute.getTotal() * 21 / 20) ? "nhwc" : "block",
         nhwcCompute.getTotal(), nchwCompute.getTotal(), static_cast<float>(nhwcCompute.getTotal()) / nchwCompute.getTotal(),
         nhwcCompute.compute, nhwcCompute.reorder, nhwcCompute.concat, nhwcCompute.default_op,
