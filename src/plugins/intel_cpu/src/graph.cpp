@@ -456,6 +456,253 @@ static inline LayoutType GetLayoutType(dnnl::memory::format_tag tag) {
     }
 }
 
+void Graph::ChooseLayout() {
+    auto selectSPD = [&] () {
+        for (auto &node : graphNodes) {
+            OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
+            node->filterSupportedPrimitiveDescriptors();
+        }
+
+        for (auto &node : graphNodes) {
+            OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.selectOptimalPrimitiveDescriptor);
+            node->selectOptimalPrimitiveDescriptor();
+        }
+    };
+
+    struct Computation {
+        uint64_t reorder = 0;
+        uint64_t concat = 0;
+        uint64_t default_op = 0;
+        uint64_t compute = 0;
+        bool operator <= (const Computation& other) {
+            return reorder + concat + default_op + compute <=
+                other.reorder + other.concat + other.default_op + other.compute;
+        }
+        uint64_t getTotal() {
+            return reorder + concat + default_op + compute;
+        }
+    };
+    // estimated computation
+    auto estimateComputation = [&] (bool isBlock = false) -> Computation {
+        auto estimateConvTick = [&] (NodePtr& node) -> uint64_t {
+            if (node->isDynamicNode())
+                return 0;
+            uint64_t tick;
+            auto conv = std::dynamic_pointer_cast<node::Convolution>(node);
+            const auto shapeData = conv->getInputShapeAtPort(0);
+            const auto dimWeight = conv->getWeightDims();
+            const auto shapeOut = conv->getOutputShapeAtPort(0);
+            if (conv->getGroupNum() == 1) {
+                // fma number = output number * input channel number * filter number
+                auto inputChannel = shapeData.getStaticDims()[1];
+                if (isBlock) {
+                    // jit block kernel always align to 16 if > 3. if <= 3 will use nchw
+                    if (inputChannel > 3)
+                        inputChannel = (inputChannel + 15) / 16 * 16;
+                }
+                tick = shapeOut.getElementsCount() * inputChannel;
+                for (auto i = 2; i < dimWeight.size(); i++)
+                    tick *= dimWeight[i];
+            } else {
+                // fma number = sum all group((output spatial * output channel / group) * input channel number / group * filter number)
+                const auto group = conv->getGroupNum();
+                tick = shapeOut.getElementsCount() / group * shapeData.getStaticDims()[1] / group;
+                for (auto i = 3; i < dimWeight.size(); i++)
+                    tick *= dimWeight[i];
+            }
+            // each tick can do 16 in parralel
+            tick /= 16;
+            //std::cout << "conv " << node->getName() << " " << tick << "\n";
+            return tick;
+        };
+        auto estimateConcatTick = [&] (NodePtr& node) -> uint64_t {
+            if (node->isDynamicNode())
+                return 0;
+            uint64_t tick = 0;
+            for (auto i = 0; i < node->getParentEdges().size(); i++) {
+                const auto& edge = node->getParentEdgeAt(i);
+                const auto& parent = edge->getParent();
+                const auto& shapeIn = node->getInputShapeAtPort(i);
+                // in nCsp16c some input can do inplace
+                if (isBlock) {
+                    const auto& dims = shapeIn.getDims();
+                    if (dims.size() >= 3 && dims[1] % 16 == 0) {
+                        // shufflenet-v2-x0.5 has 'split-concat' and it could not be inplace
+                        // densenet-201 has 'concat-concat' and it could not be inplace
+                        if (parent->getType() != Type::Split && parent->getType() != Type::Concatenation) {
+                            // mixnet-l has dw conv and it could not be inplace
+                            if (parent->getType() == Type::Convolution) {
+                                auto conv = std::dynamic_pointer_cast<node::Convolution>(parent);
+                                if (!conv->isDepthWise())
+                                    continue;
+                            } else {
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // tick number = memory elements / 4 * 2(read + write)
+                //  heuristics: each tick can process 4 floats
+                tick += shapeIn.getElementsCount() / 4 * 2;
+            }
+            // magic number, maybe read data from one core's cache penalty
+            tick *= 2;
+            //std::cout << "concat " << node->getName() << " " << tick << "\n";
+
+            return tick;
+        };
+        auto estimateDefaultNodeTick = [] (NodePtr& node) -> uint64_t {
+            if (node->isDynamicNode())
+                return 0;
+            // consider as memory bound op
+            uint64_t tick = 0;
+            for (auto i = 0; i < node->getParentEdges().size(); i++) {
+                const auto& edge = node->getParentEdgeAt(i);
+                const auto& parent = edge->getParent();
+                const auto& shapeIn = node->getInputShapeAtPort(i);
+                // tick number = memory elements / 4 (read)
+                //  heuristics: each tick can process 4 floats
+                tick += shapeIn.getElementsCount() / 4;
+            }
+            const auto shapeOut = node->getOutputShapeAtPort(0);
+            tick += shapeOut.getElementsCount() / 4;
+
+            return tick;
+        };
+        auto estimatePossibleReorderTick = [&] (NodePtr& node) -> uint64_t {
+            if (node->isDynamicNode())
+                return 0;
+            uint64_t tick = 0;
+            bool isSpecialConcat = node->getType() == Type::Concatenation && isBlock;
+
+            for (auto i = 0; i < node->getParentEdges().size(); i++) {
+                const auto& edge = node->getParentEdgeAt(i);
+                const auto& parent = edge->getParent();
+                if (parent->isConstant())
+                    continue;
+
+                auto status = edge->needReorder();
+                if (status == Edge::ReorderStatus::Regular) {
+                    const auto& shapeIn = node->getInputShapeAtPort(i);
+                    if (isSpecialConcat) {
+                        // simple check if concat in block format there should no reorder
+                        const auto& dims = shapeIn.getDims();
+                        if (dims.size() >= 3 && dims[1] % 16 == 0) {
+                            continue;
+                        }
+                    }
+                    // tick number = memory elements / 4 * 2(read + write)
+                    //  heuristics: each tick can process 4 floats
+                    tick += shapeIn.getElementsCount() / 4 * 2;
+                }
+            }
+            // magic number, maybe read data from one core's cache penalty
+            tick *= 2;
+            //std::cout << "reoder " << node->getName() << " " << tick << "\n";
+
+            return tick;
+        };
+        Computation computation;
+        int reoder_num = 0;
+        for (auto &node : graphNodes) {
+            const auto type = node->getType();
+            if (node->isConstant() || type == Type::Input || type == Type::Output) {
+                continue;
+            }
+            const auto reorderTick = estimatePossibleReorderTick(node);
+            computation.reorder += reorderTick;
+            reoder_num += reorderTick != 0;
+            if (type == Type::Convolution) {
+                computation.compute += estimateConvTick(node);
+            } else if (type == Type::Concatenation) {
+                computation.concat += estimateConcatTick(node);
+            } else {
+                computation.default_op += estimateDefaultNodeTick(node);
+            }
+        }
+        std::cout << "reoder count = " << reoder_num << std::endl;
+        return computation;
+    };
+    // brgconv filter
+    auto setBrgFilter = [&] (bool enable) {
+        LayoutType layout = enable ? LayoutType::nspc : LayoutType::nCsp16c;
+        for (auto &node : graphNodes) {
+            if (node->getType() != Type::Convolution) {
+                continue;
+            }
+
+            for (size_t i = 0; i < node->getSupportedPrimitiveDescriptors().size(); i++) {
+                const auto& spd = node->getSupportedPrimitiveDescriptors()[i];
+                const auto& curDesc = spd.getConfig().outConfs[0].getMemDesc();
+                if (!(spd.getImplementationType() & ref)) {
+                    if (curDesc->hasLayoutType(layout)) {
+                        auto tag = GetTag(!enable, curDesc->getShape());
+                        if (node->outputMemoryFormatsFilter.empty())
+                            node->outputMemoryFormatsFilter.push_back(tag);
+                        else
+                            node->outputMemoryFormatsFilter[0] = tag;
+                        break;
+                    }
+                }
+            }
+        }
+    };
+
+    // backup or restore spd
+    enum class SPDAction {
+        SPDAction_Backup,
+        SPDAction_Restore,
+        SPDAction_Clear
+    };
+    auto handleSPD = [&] (SPDAction action) {
+        for (auto &node : graphNodes) {
+            OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
+            // backup spd
+            switch (action) {
+                case SPDAction::SPDAction_Backup:
+                    node->backupSPD();
+                    break;
+                case SPDAction::SPDAction_Restore:
+                    node->restoreSPD();
+                    break;
+                default:
+                    node->clearBackupSPD();
+                    break;
+            }
+        }
+    };
+
+    // select default spd, if brgconv is enabled should select nhwc
+    selectSPD();
+
+    if (!dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core) || config.enforceBF16 || isQuantizedFlag) {
+        printf("xxxxxxx\n");
+        return;
+    }
+    // estimated nhwc computation
+    Computation nhwcCompute = estimateComputation(false);
+    // disable brgconv
+    handleSPD(SPDAction::SPDAction_Backup);
+    setBrgFilter(false);
+    selectSPD();
+    // nChw16c estimated computation
+    Computation nchwCompute = estimateComputation(true);
+    // select best layout, prefer nhwc
+    if (nhwcCompute.getTotal() <= nchwCompute.getTotal() * 21 / 20) {
+        // should use nhwc
+        handleSPD(SPDAction::SPDAction_Restore);
+        setBrgFilter(true);
+        selectSPD();
+    }
+    printf("xxxxxxx, %s, %lld, %lld, %.3f, (conv/reorder/concat/def), %lld, %lld, %lld, %lld, /, %lld, %lld, %lld, %lld\n",
+        nhwcCompute.getTotal() <= (nchwCompute.getTotal() * 21 / 20) ? "nhwc" : "block",
+        nhwcCompute.getTotal(), nchwCompute.getTotal(), static_cast<float>(nhwcCompute.getTotal()) / nchwCompute.getTotal(),
+        nhwcCompute.compute, nhwcCompute.reorder, nhwcCompute.concat, nhwcCompute.default_op,
+        nchwCompute.compute, nchwCompute.reorder, nchwCompute.concat, nchwCompute.default_op);
+    handleSPD(SPDAction::SPDAction_Clear);
+}
+
 void Graph::OptimizeLayout() {
     if (!dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core))
         return;
@@ -564,7 +811,7 @@ void Graph::OptimizeLayout() {
 void Graph::InitDescriptors() {
     OV_ITT_SCOPE_CHAIN(FIRST_INFERENCE, taskChain, itt::domains::intel_cpu_LT, "InitDescriptors", "Prepare");
 
-    OptimizeLayout();
+    //OptimizeLayout();
     for (auto &node : graphNodes) {
         if (node->getType() == Type::Input && _normalizePreprocMap.find(node->getName()) != _normalizePreprocMap.end()) {
             auto *inputNode = dynamic_cast<node::Input *>(node.get());
@@ -586,15 +833,7 @@ void Graph::InitDescriptors() {
 #endif
     }
 
-    for (auto &node : graphNodes) {
-        OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
-        node->filterSupportedPrimitiveDescriptors();
-    }
-
-    for (auto &node : graphNodes) {
-        OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.selectOptimalPrimitiveDescriptor);
-        node->selectOptimalPrimitiveDescriptor();
-    }
+    ChooseLayout();
 }
 
 void Graph::InitOptimalPrimitiveDescriptors() {

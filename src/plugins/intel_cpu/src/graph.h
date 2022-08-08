@@ -237,6 +237,8 @@ protected:
     void InitNodes();
     void InitDescriptors();
     void OptimizeLayout();
+    void ChooseLayout();
+
     void InitOptimalPrimitiveDescriptors();
     void InitEdges();
     void Allocate();

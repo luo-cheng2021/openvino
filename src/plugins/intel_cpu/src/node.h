@@ -573,6 +573,18 @@ public:
         rtParamsCache = cache;
     }
 
+    void backupSPD() {
+        supportedPrimitiveDescriptorsBackup = supportedPrimitiveDescriptors;
+    }
+
+    void restoreSPD() {
+        supportedPrimitiveDescriptors = supportedPrimitiveDescriptorsBackup;
+    }
+
+    void clearBackupSPD() {
+        supportedPrimitiveDescriptorsBackup.clear();
+    }
+
 protected:
     bool canFuseSimpleOperation(const NodePtr& node) const;
 
@@ -628,6 +640,8 @@ protected:
     std::vector<InferenceEngine::Blob::Ptr> internalBlobs;
     std::vector<MemoryPtr> internalBlobMemory;
     std::vector<NodeDesc> supportedPrimitiveDescriptors;
+    std::vector<NodeDesc> supportedPrimitiveDescriptorsBackup;  // for layout choose
+
     std::unordered_map<int, dnnl::memory> primArgs;
     std::vector<MemoryPtr> postOpsArgs;
     Primitive prim;
