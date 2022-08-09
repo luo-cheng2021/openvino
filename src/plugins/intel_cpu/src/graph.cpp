@@ -683,14 +683,14 @@ void Graph::ChooseLayout() {
     // nChw16c estimated computation
     Computation nchwCompute = estimateComputation(true);
     // select best layout, prefer nhwc
-    if (nhwcCompute.getTotal() <= nchwCompute.getTotal() * 201 / 200) {
+    if (nhwcCompute.getTotal() <= nchwCompute.getTotal() * 95 / 100) {
         // should use nhwc
         handleSPD(SPDAction::SPDAction_Restore);
         setBrgFilter(true);
         selectSPD();
     }
     printf("xxxxxxx, %s, %ld, %ld, %.3f, /, %d, %d, (conv/reorder/concat/def), %ld, %ld, %ld, %ld, /, %ld, %ld, %ld, %ld\n",
-        nhwcCompute.getTotal() <= (nchwCompute.getTotal() * 21 / 20) ? "nhwc" : "block",
+        nhwcCompute.getTotal() <= (nchwCompute.getTotal() * 95 / 100) ? "nhwc" : "block",
         nhwcCompute.getTotal(), nchwCompute.getTotal(), static_cast<float>(nhwcCompute.getTotal()) / nchwCompute.getTotal(),
         nhwcCompute.reoder_num, nchwCompute.reoder_num,
         nhwcCompute.compute, nhwcCompute.reorder, nhwcCompute.concat, nhwcCompute.default_op,

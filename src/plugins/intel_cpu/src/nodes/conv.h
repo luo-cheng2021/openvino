@@ -29,6 +29,8 @@ public:
     void selectOptimalPrimitiveDescriptor() override;
     void initSupportedPrimitiveDescriptors() override;
     void filterSupportedPrimitiveDescriptors() override;
+    void filterSupportedPrimitiveDescriptors(const std::vector<dnnl::memory::format_tag>& inputMemoryFilter,
+        const std::vector<dnnl::memory::format_tag>& outputMemoryFilter) override;
     bool created() const override;
     bool canBeInPlace() const override {
         return false;
@@ -94,7 +96,8 @@ private:
 
     void addZeroPoints(dnnl::primitive_attr& attr);
     void setPostOps(dnnl::primitive_attr &attr, const VectorDims &dims, bool useLegacyPostOps, bool initWeights = false);
-    void filterSupportedDescriptors();
+    void filterSupportedDescriptors(const std::vector<dnnl::memory::format_tag>& inputMemoryFilter,
+        const std::vector<dnnl::memory::format_tag>& outputMemoryFilter);
     bool isPossibleToSkipInitConfig(DnnlDesriptor &desc) const;
     bool isNspcAvailable() const;
     InferenceEngine::Blob::Ptr createInternalBlob(InferenceEngine::SizeVector dims, size_t edgeNum, bool isGrouped = false);

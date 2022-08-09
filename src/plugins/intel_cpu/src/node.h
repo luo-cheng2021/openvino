@@ -343,7 +343,7 @@ public:
      */
     virtual void filterSupportedPrimitiveDescriptors();
 
-    void filterSupportedPrimitiveDescriptors(const std::vector<dnnl::memory::format_tag>& inputMemoryFilter,
+    virtual void filterSupportedPrimitiveDescriptors(const std::vector<dnnl::memory::format_tag>& inputMemoryFilter,
         const std::vector<dnnl::memory::format_tag>& outputMemoryFilter);
 
     virtual void createPrimitive();
@@ -578,14 +578,17 @@ public:
 
     void backupSPD() {
         supportedPrimitiveDescriptorsBackup = supportedPrimitiveDescriptors;
+        descsBackup = descs;
     }
 
     void restoreSPD() {
         supportedPrimitiveDescriptors = supportedPrimitiveDescriptorsBackup;
+        descs = descsBackup;
     }
 
     void clearBackupSPD() {
         supportedPrimitiveDescriptorsBackup.clear();
+        descsBackup.clear();
     }
 
 protected:
@@ -649,6 +652,7 @@ protected:
     std::vector<MemoryPtr> postOpsArgs;
     Primitive prim;
     std::vector<DnnlDesriptor> descs;
+    std::vector<DnnlDesriptor> descsBackup;
 
     WeightsSharing::Ptr weightCache;
 
