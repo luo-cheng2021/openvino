@@ -343,6 +343,9 @@ public:
      */
     virtual void filterSupportedPrimitiveDescriptors();
 
+    void filterSupportedPrimitiveDescriptors(const std::vector<dnnl::memory::format_tag>& inputMemoryFilter,
+        const std::vector<dnnl::memory::format_tag>& outputMemoryFilter);
+
     virtual void createPrimitive();
 
     virtual void selectOptimalPrimitiveDescriptor();

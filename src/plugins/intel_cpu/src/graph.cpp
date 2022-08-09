@@ -459,11 +459,6 @@ static inline LayoutType GetLayoutType(dnnl::memory::format_tag tag) {
 void Graph::ChooseLayout() {
     auto selectSPD = [&] () {
         for (auto &node : graphNodes) {
-            OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
-            node->filterSupportedPrimitiveDescriptors();
-        }
-
-        for (auto &node : graphNodes) {
             OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.selectOptimalPrimitiveDescriptor);
             node->selectOptimalPrimitiveDescriptor();
         }
@@ -474,6 +469,7 @@ void Graph::ChooseLayout() {
         uint64_t concat = 0;
         uint64_t default_op = 0;
         uint64_t compute = 0;
+        int reoder_num = 0;
         bool operator <= (const Computation& other) {
             return reorder + concat + default_op + compute <=
                 other.reorder + other.concat + other.default_op + other.compute;
@@ -622,7 +618,8 @@ void Graph::ChooseLayout() {
                 computation.default_op += estimateDefaultNodeTick(node);
             }
         }
-        std::cout << "reoder count = " << reoder_num << std::endl;
+        computation.reoder_num = reoder_num;
+        //std::cout << "reoder count = " << reoder_num << std::endl;
         return computation;
     };
     // brgconv filter
@@ -639,10 +636,7 @@ void Graph::ChooseLayout() {
                 if (!(spd.getImplementationType() & ref)) {
                     if (curDesc->hasLayoutType(layout)) {
                         auto tag = GetTag(!enable, curDesc->getShape());
-                        if (node->outputMemoryFormatsFilter.empty())
-                            node->outputMemoryFormatsFilter.push_back(tag);
-                        else
-                            node->outputMemoryFormatsFilter[0] = tag;
+                        node->filterSupportedPrimitiveDescriptors({}, {tag});
                         break;
                     }
                 }
@@ -695,9 +689,10 @@ void Graph::ChooseLayout() {
         setBrgFilter(true);
         selectSPD();
     }
-    printf("xxxxxxx, %s, %ld, %ld, %.3f, (conv/reorder/concat/def), %ld, %ld, %ld, %ld, /, %ld, %ld, %ld, %ld\n",
+    printf("xxxxxxx, %s, %ld, %ld, %.3f, /, %d, %d, (conv/reorder/concat/def), %ld, %ld, %ld, %ld, /, %ld, %ld, %ld, %ld\n",
         nhwcCompute.getTotal() <= (nchwCompute.getTotal() * 21 / 20) ? "nhwc" : "block",
         nhwcCompute.getTotal(), nchwCompute.getTotal(), static_cast<float>(nhwcCompute.getTotal()) / nchwCompute.getTotal(),
+        nhwcCompute.reoder_num, nchwCompute.reoder_num,
         nhwcCompute.compute, nhwcCompute.reorder, nhwcCompute.concat, nhwcCompute.default_op,
         nchwCompute.compute, nchwCompute.reorder, nchwCompute.concat, nchwCompute.default_op);
     handleSPD(SPDAction::SPDAction_Clear);
@@ -823,6 +818,9 @@ void Graph::InitDescriptors() {
 
         OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.initSupportedPrimitiveDescriptors);
         node->initSupportedPrimitiveDescriptors();
+
+        OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.filterSupportedPrimitiveDescriptors);
+        node->filterSupportedPrimitiveDescriptors();
 
 #ifdef CPU_DEBUG_CAPS
         DEBUG_LOG("==================");
