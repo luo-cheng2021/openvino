@@ -725,6 +725,27 @@ void Node::initDescriptor(const NodeConfig& config) {
     selectedPD->setConfig(rightConfig);
 }
 
+MemoryPtr Node::reorderWeightForSharing(const Memory& src, int src_index, MemoryDescPtr desc) {
+    auto create = [&]() {
+        MemoryPtr _ptr = MemoryPtr(new Memory(engine));
+        _ptr->Create(desc);
+        _ptr->SetData(src);
+        return _ptr;
+    };
+
+    MemoryPtr ptr;
+    if (weightCache != nullptr) {
+        const uint64_t data_hash =
+            weightCache->GetHashFunc().hash(reinterpret_cast<const unsigned char*>(src.GetData()), src.GetSize());
+        const std::string string_hash = name + "_" + std::to_string(src_index) + "_" + std::to_string(src.GetSize()) +
+                                        "_" + std::to_string(data_hash);
+        ptr = *weightCache->findOrCreate(string_hash, create);
+    } else {
+        ptr = create();
+    }
+    return ptr;
+}
+
 void Node::prepareMemory(const std::vector<DnnlMemoryDescPtr>& intDescs) {
     for (size_t i = 0; i < getChildEdges().size(); i++) {
         auto &dstMemPtr = getChildEdgeAt(i)->getMemoryPtr();
@@ -745,35 +766,10 @@ void Node::prepareMemory(const std::vector<DnnlMemoryDescPtr>& intDescs) {
 
     internalBlobMemory.clear();
     for (size_t i = 0; i < internalBlobs.size(); i++) {
-        const auto &internalBlob = internalBlobs[i];
-
-        auto create = [&] () {
-            // TODO [DS]: internal blobs should be removed or rewritten using Memory object
-            auto newDesc = MemoryDescUtils::convertToDnnlBlockedMemoryDesc(internalBlob->getTensorDesc());
-
-            Memory memory{ engine };
-            memory.Create(newDesc, internalBlob->buffer());
-
-            MemoryPtr _ptr = MemoryPtr(new Memory(engine));
-            _ptr->Create(*intDescs[i]);
-            _ptr->SetData(memory);
-
-            return _ptr;
-        };
-
-        MemoryPtr ptr;
-        if (weightCache != nullptr) {
-            const uint64_t data_hash = weightCache->GetHashFunc().hash(
-                    internalBlob->buffer(), internalBlob->byteSize());
-
-            const std::string string_hash = name + "_" + std::to_string(i)
-                                            + "_" + std::to_string(internalBlob->byteSize())
-                                            + "_" + std::to_string(data_hash);
-
-            ptr = *weightCache->findOrCreate(string_hash, create);
-        } else {
-            ptr = create();
-        }
+        Memory memory{engine};
+        memory.Create(MemoryDescUtils::convertToDnnlBlockedMemoryDesc(internalBlobs[i]->getTensorDesc()),
+                      internalBlobs[i]->buffer());
+        auto ptr = reorderWeightForSharing(memory, i, intDescs[i]);
 
         internalBlobMemory.push_back(ptr);
     }

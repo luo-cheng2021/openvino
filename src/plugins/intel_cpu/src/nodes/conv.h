@@ -84,6 +84,7 @@ private:
                                 const dnnl::memory::desc& weightMemDesc,
                                 const dnnl::memory::desc& outMemDesc,
                                 const dnnl::engine& engine);
+            dnnl::memory::desc weights_desc;
     };
 
     void prepareParams() override;

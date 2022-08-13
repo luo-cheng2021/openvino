@@ -747,6 +747,8 @@ protected:
 
     std::shared_ptr<IShapeInfer> shapeInference;
 
+    MemoryPtr reorderWeightForSharing(const Memory& src, int src_index, MemoryDescPtr desc);
+
 private:
     std::vector<EdgeWeakPtr> parentEdges;
     std::vector<EdgeWeakPtr> childEdges;

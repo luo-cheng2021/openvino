@@ -23,9 +23,16 @@ void DnnlExecutor::IntermReorder::exec(dnnl::memory& memSrc, dnnl::memory& memDs
 void DnnlExecutor::exec(std::unordered_map<int, dnnl::memory> primArgs, dnnl::stream strm) {
     for (auto &inReorder : inputReorders) {
         if (primArgs.count(inReorder.first)) {
-            dnnl::memory memDst(inReorder.second.getDstDesc(), strm.get_engine());
-            inReorder.second.exec(primArgs[inReorder.first], memDst, strm);
-            primArgs[inReorder.first] = memDst;
+            auto &memSrc = primArgs[inReorder.first];
+            // caller can provided an memory with satisfied descriptor to optionally skip internal reorder
+            // at execution time, this happens when a group of nodes reusing the same DnnlExecutor instance
+            // but few of them has constant input that can be reordered once for all at `pepareParameter` stage
+            // instead of doing it at every execution stage.
+            if (inReorder.second.getDstDesc() != memSrc.get_desc()) {
+                dnnl::memory memDst(inReorder.second.getDstDesc(), strm.get_engine());
+                inReorder.second.exec(memSrc, memDst, strm);
+                primArgs[inReorder.first] = memDst;
+            }
         } else {
             IE_THROW() << "DnnlExecutor has reorder for input " << inReorder.first << ", but doesn't have source memory";
         }

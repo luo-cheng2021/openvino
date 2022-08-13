@@ -1398,7 +1398,19 @@ void Convolution::prepareParams() {
 
     if (execPtr) {
         primArgs[DNNL_ARG_SRC] = srcMemPtr->GetPrimitive();
-        primArgs[DNNL_ARG_WEIGHTS] = wghMemPtr->GetPrimitive();
+
+        auto wEdgePtr = getParentEdgesAtPort(1)[0];
+        auto requiredWeightDesc = std::dynamic_pointer_cast<ConvolutionExecutor>(execPtr)->weights_desc;
+        auto actualWeightDesc = wghMemPtr->GetPrimitive().get_desc();
+        if (wEdgePtr->getParent()->isConstant() && requiredWeightDesc != actualWeightDesc) {
+            auto wMemPtr = reorderWeightForSharing(*wEdgePtr->getMemoryPtr(),
+                                                    0,
+                                                    DnnlExtensionUtils::makeDescriptor(requiredWeightDesc));
+            primArgs[DNNL_ARG_WEIGHTS] = wMemPtr->GetPrimitive();
+        } else {
+            primArgs[DNNL_ARG_WEIGHTS] = wghMemPtr->GetPrimitive();
+        }
+
         primArgs[DNNL_ARG_DST] = dstMemPtr->GetPrimitive();
 
         if (withBiases) {
@@ -1418,6 +1430,8 @@ Convolution::ConvolutionExecutor::ConvolutionExecutor(const dnnl::convolution_fo
                                                                 const dnnl::memory::desc& outMemDesc,
                                                                 const dnnl::engine& engine) {
     execPrim.reset(new dnnl::convolution_forward(pd));
+
+    weights_desc = pd.weights_desc();
 
     if (inMemDesc != pd.src_desc()) {
         inputReorders.insert({DNNL_ARG_SRC, IntermReorder(inMemDesc, pd.src_desc(), engine)});
