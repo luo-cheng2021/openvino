@@ -1399,18 +1399,15 @@ void Convolution::prepareParams() {
     if (execPtr) {
         primArgs[DNNL_ARG_SRC] = srcMemPtr->GetPrimitive();
 
-        auto wEdgePtr = getParentEdgesAtPort(1)[0];
         auto requiredWeightDesc = std::dynamic_pointer_cast<ConvolutionExecutor>(execPtr)->weights_desc;
-        auto actualWeightDesc = wghMemPtr->GetPrimitive().get_desc();
-        if (wEdgePtr->getParent()->isConstant() && requiredWeightDesc != actualWeightDesc) {
-            auto wMemPtr = reorderWeightForSharing(*wEdgePtr->getMemoryPtr(),
-                                                    0,
-                                                    DnnlExtensionUtils::makeDescriptor(requiredWeightDesc));
-            primArgs[DNNL_ARG_WEIGHTS] = wMemPtr->GetPrimitive();
+        if (getParentEdgesAtPort(1)[0]->getParent()->isConstant() &&
+            requiredWeightDesc != weightMemoryDesc->getDnnlDesc()) {
+            reorderedWeightMemPtr =
+                reorderWeightForSharing(*wghMemPtr, 1, DnnlExtensionUtils::makeDescriptor(requiredWeightDesc));
+            primArgs[DNNL_ARG_WEIGHTS] = reorderedWeightMemPtr->GetPrimitive();
         } else {
             primArgs[DNNL_ARG_WEIGHTS] = wghMemPtr->GetPrimitive();
         }
-
         primArgs[DNNL_ARG_DST] = dstMemPtr->GetPrimitive();
 
         if (withBiases) {
