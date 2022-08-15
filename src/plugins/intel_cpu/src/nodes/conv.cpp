@@ -1570,6 +1570,9 @@ void Convolution::initTryBrgconvFlag() {
             }
         }
     }
+
+    if (std::getenv("USE_BRG"))
+        shouldTryBrgconv = atoi(std::getenv("USE_BRG"));
 }
 
 }   // namespace node
