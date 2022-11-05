@@ -824,6 +824,7 @@ bool FullyConnected::canBeExecutedInConv1x1() const {
         if (outDesc->getDnnlDesc().data.offset0 == 0)
             shouldTry = true;
     }
+    shouldTry = false;
 
     return shouldTry;
 }
