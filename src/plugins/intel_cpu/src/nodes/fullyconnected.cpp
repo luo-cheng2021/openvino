@@ -831,6 +831,90 @@ bool FullyConnected::canBeExecutedInConv1x1() const {
             shouldTry = true;
     }
 
+    if (shouldTry) {
+        const auto srcMemPtr = getParentEdgesAtPort(0)[0]->getMemoryPtr();
+        const auto srcDims = srcMemPtr->getStaticDims();
+        const auto weightMemPtr = getParentEdgesAtPort(1)[0]->getMemoryPtr();
+        const auto weightDims = weightMemPtr->getStaticDims();
+        Dim M, N, K;
+        M = srcDims[inRank - 2];
+        K = srcDims[inRank - 1];
+        N = weightDims[0];
+
+        if (!(M >= 49 && M <= 3136 &&
+              K >= 96 && K <= 4096 &&
+              N >= 96 && N <= 50257))
+            shouldTry = false;
+        // special case from pp-ocr-rec
+        if (M == 160 && K == 96 && N == 6625)
+            shouldTry = false;
+
+        // TODO
+        if (shouldTry) {
+            static bool flag = true;
+            if (flag) {
+                flag = false;
+                auto p = getenv("models");
+                if (p)
+                    std::cout << "###1x1### " << p << "\n";
+            }
+        }
+        // // M, K, N
+        // static const std::vector<std::vector<Dim>> whitelistShapes = {
+        //     // roberta-base-mrpc/bert-base-cased/onnx
+        //     {128, 768, 3072},
+        //     {128, 3072, 768},
+        //     {128, 768, 768},
+        //     // bert-large-uncased-whole-word-masking-squad-0001
+        //     {384, 1024, 1024},
+        //     {384, 1024, 4096},
+        //     {384, 4096, 1024},
+        //     // swin-tiny-patch4-window7-224
+        //     {3136, 96, 384},
+        //     {49, 3072, 768},
+        //     {49, 768, 3072},
+        //     {784, 192, 768},
+        //     {196, 384, 1536},
+        //     {196, 1536, 384},
+        //     {49, 768, 2304},
+        //     {3136, 384, 96},
+        //     {784, 368, 192},
+        //     {49, 96, 288},
+        //     {49, 384, 1152},
+        //     {49, 192, 576},
+        //     {49, 1536, 768},
+        //     {196, 768, 384},
+        //     {784, 384, 192},
+        //     {49, 768, 768},
+        //     {49, 96, 96},
+        //     {49, 192, 192},
+        //     {49, 384, 384},
+        //     // bert-base-cased/paddle
+        //     {384, 768, 3072},
+        //     {384, 3072, 768},
+        //     {384, 768, 768},
+        //     // wav2vec2-base
+        //     {95, 768, 3072},
+        //     {95, 3072, 768},
+        //     {95, 768, 768},
+        //     {95, 512, 768},
+        //     // GPT2
+        //     {1024, 3072, 768},
+        //     {1024, 768, 3072},
+        //     {1024, 768, 5025},
+        //     {1024, 768, 2304},
+        // };
+        // bool found = false;
+        // for (size_t i = 0; i < whitelistShapes.size(); i++) {
+        //     if (M == whitelistShapes[i][0] && K == whitelistShapes[i][1] &&
+        //         N == whitelistShapes[i][2]) {
+        //         found = true;
+        //         break;
+        //     }
+        // }
+        // shouldTry &= found;
+    }
+
     return shouldTry;
 }
 
