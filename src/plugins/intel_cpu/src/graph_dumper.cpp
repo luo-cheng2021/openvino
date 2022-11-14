@@ -98,11 +98,40 @@ std::map<std::string, std::string> extract_node_metadata(const NodePtr &node) {
     }
     serialization_info[ExecGraphInfoSerialization::OUTPUT_LAYOUTS] = outputLayoutsStr;
 
+    static const char PERF_COUNTER_PP[] = "PrepareParamsTimeMcs";
+    static const char PERF_COUNTER_SI[] = "ShapeInferTimeMcs";
+    static const char PERF_COUNTER_ROM[] = "RedefineOutputMemoryTimeMcs";
+    static const char PERF_COUNTER_EX[] = "ExecuteTimeMcs";
+
     // Performance
     if (node->PerfCounter().avg() != 0) {
         serialization_info[ExecGraphInfoSerialization::PERF_COUNTER] = std::to_string(node->PerfCounter().avg());
     } else {
         serialization_info[ExecGraphInfoSerialization::PERF_COUNTER] = "not_executed";  // it means it was not calculated yet
+    }
+
+    if (node->PerfCounterShapeInfer().avg() != 0) {
+        serialization_info[PERF_COUNTER_SI] = std::to_string(node->PerfCounterShapeInfer().avg());
+    } else {
+        serialization_info[PERF_COUNTER_SI] = "not_executed";  // it means it was not calculated yet
+    }
+
+    if (node->PerfCounterRedefineOutputMemory().avg() != 0) {
+        serialization_info[PERF_COUNTER_ROM] = std::to_string(node->PerfCounterRedefineOutputMemory().avg());
+    } else {
+        serialization_info[PERF_COUNTER_ROM] = "not_executed";  // it means it was not calculated yet
+    }
+
+    if (node->PerfCounterPrepareParams().avg() != 0) {
+        serialization_info[PERF_COUNTER_PP] = std::to_string(node->PerfCounterPrepareParams().avg());
+    } else {
+        serialization_info[PERF_COUNTER_PP] = "not_executed";  // it means it was not calculated yet
+    }
+
+    if (node->PerfCounterExecute().avg() != 0) {
+        serialization_info[PERF_COUNTER_EX] = std::to_string(node->PerfCounterExecute().avg());
+    } else {
+        serialization_info[PERF_COUNTER_EX] = "not_executed";  // it means it was not calculated yet
     }
 
     serialization_info[ExecGraphInfoSerialization::EXECUTION_ORDER] = std::to_string(node->getExecIndex());
