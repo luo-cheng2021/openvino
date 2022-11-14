@@ -329,6 +329,10 @@ public:
     std::string getPrimitiveDescriptorType();
 
     PerfCount &PerfCounter() { return perfCounter; }
+    PerfCount &PerfCounterPrepareParams() { return perfCounterPrepareParams; }
+    PerfCount &PerfCounterShapeInfer() { return perfCounterShapeInfer; }
+    PerfCount &PerfCounterRedefineOutputMemory() { return perfCounterRedefineOutputMemory; }
+    PerfCount &PerfCounterExecute() { return perfCounterExecute; }
 
     virtual void setDynamicBatchLim(int lim);
 
@@ -754,6 +758,10 @@ private:
     std::string typeToStr(Type type);
 
     PerfCount perfCounter;
+    PerfCount perfCounterPrepareParams;
+    PerfCount perfCounterShapeInfer;
+    PerfCount perfCounterRedefineOutputMemory;
+    PerfCount perfCounterExecute;
     PerfCounters profiling;
 
     MultiCachePtr rtParamsCache;

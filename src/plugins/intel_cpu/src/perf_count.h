@@ -55,3 +55,15 @@ public:
 
 #define GET_PERF(_node) std::unique_ptr<PerfHelper>(new PerfHelper(_node->PerfCounter()))
 #define PERF(_node, _need) auto pc = _need ? GET_PERF(_node) : nullptr;
+
+#define GET_PERF_PP(_node) std::unique_ptr<PerfHelper>(new PerfHelper(_node->PerfCounterPrepareParams()))
+#define PERF_PP(_node, _need) auto pc = _need ? GET_PERF_PP(_node) : nullptr;
+
+#define GET_PERF_SI(_node) std::unique_ptr<PerfHelper>(new PerfHelper(_node->PerfCounterShapeInfer()))
+#define PERF_SI(_node, _need) auto pc = _need ? GET_PERF_SI(_node) : nullptr;
+
+#define GET_PERF_ROM(_node) std::unique_ptr<PerfHelper>(new PerfHelper(_node->PerfCounterRedefineOutputMemory()))
+#define PERF_ROM(_node, _need) auto pc = _need ? GET_PERF_ROM(_node) : nullptr;
+
+#define GET_PERF_EX(_node) std::unique_ptr<PerfHelper>(new PerfHelper(_node->PerfCounterExecute()))
+#define PERF_EX(_node, _need) auto pc = _need ? GET_PERF_EX(_node) : nullptr;
