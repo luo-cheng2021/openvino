@@ -843,13 +843,7 @@ bool FullyConnected::canBeExecutedInConv1x1() const {
 
         if (!(M >= 49 && M <= 3136 &&
               K >= 96 && K <= 4096 &&
-              N >= 96 && N <= 4096))
-            retVal = false;
-        // special case from pp-ocr-rec
-        if (M == 160 && K == 96 && N == 6625)
-            retVal = false;
-        // special case from forward-tacotron-duration-prediction
-        if (M == 166 && K == 256 && N == 256)
+              N >= 96 && N <= K * 4))
             retVal = false;
     }
 
