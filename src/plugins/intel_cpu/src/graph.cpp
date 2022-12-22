@@ -1096,7 +1096,7 @@ void Graph::InferDynamic(InferRequestBase* request) {
 
     std::function<void(size_t)> updateNodes;
 
-#if (IE_THREAD == IE_THREAD_TBB || IE_THREAD == IE_THREAD_TBB_AUTO)
+#if 0 //|| (IE_THREAD == IE_THREAD_TBB || IE_THREAD == IE_THREAD_TBB_AUTO)
     std::atomic<size_t> prepareCounter(0);
     std::vector<std::atomic<uint8_t>> waveFrontCount(executableGraphNodes.size());
     waveFrontCount.front().store(1);
