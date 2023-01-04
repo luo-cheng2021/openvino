@@ -1560,8 +1560,11 @@ void Graph::EnforceBF16() {
     searchForNodesToSkip = [&](const NodePtr& node, std::unordered_set<NodePtr>& skipNodes) -> void {
         for (size_t i = 0; i < node->getParentEdges().size(); i++) {
             const auto& parent = node->getParentEdgeAt(i)->getParent();
-
-            /* list of node types that must be forced to be executed in BF16 precision
+            //if (!(node->getOriginalInputPrecisionAtPort(i) == Precision::FP32 ||
+            //     node->getOriginalInputPrecisionAtPort(i) == Precision::BF16)) {
+            //       continue;
+            //}
+	    /* list of node types that must be forced to be executed in BF16 precision
              * because of performance gains */
             if (one_of(parent->getType(),
                     Type::Convolution,    // conv nets
@@ -1584,10 +1587,10 @@ void Graph::EnforceBF16() {
      * Experiments show zero peformance impact on average */
     std::unordered_set<NodePtr> nodesToSkip;
     // starting from output nodes
-    for (const auto& entry : outputNodesMap) {
-        const auto& node = entry.second;
-        searchForNodesToSkip(node, nodesToSkip);
-    }
+    //for (const auto& entry : outputNodesMap) {
+    //    const auto& node = entry.second;
+    //    searchForNodesToSkip(node, nodesToSkip);
+    //}
 
     for (const auto& node : graphNodes) {
         if (nodesToSkip.count(node) && !node->enforceBF16evenForGraphTail)
