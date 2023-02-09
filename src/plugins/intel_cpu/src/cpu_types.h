@@ -111,7 +111,8 @@ enum class Type {
     PriorBoxClustered,
     Interaction,
     MHA,
-    Unique
+    Unique,
+    GPTNeoxAttn,
 };
 
 enum class Algorithm {

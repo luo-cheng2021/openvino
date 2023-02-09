@@ -92,6 +92,7 @@
 #include "nodes/interaction.h"
 #include "nodes/mha.h"
 #include "nodes/unique.hpp"
+#include "nodes/gpt_neox_attn.h"
 
 namespace ov {
 namespace intel_cpu {
@@ -196,6 +197,7 @@ Node::NodesFactory::NodesFactory()
     INTEL_CPU_NODE(Interaction, Type::Interaction);
     INTEL_CPU_NODE(MHA, Type::MHA);
     INTEL_CPU_NODE(Unique, Type::Unique);
+    INTEL_CPU_NODE(GPTNeoxAttn, Type::GPTNeoxAttn);
 }
 
 #undef INTEL_CPU_NODE
