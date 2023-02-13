@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "mha_gpt.h"
 
 namespace ov {
 namespace intel_cpu {
@@ -44,6 +45,15 @@ private:
     int vocabSize = 50304;
     int maxSeqLen = 400;
     int curLayerNum = 0;
+    float normalFactor = 0.0f;
+
+    int64_t dataTypeSize = 1;
+    int64_t layerOffsetInPastKey = 0;
+    int64_t layerOffsetInPastValue = 0;
+    int rotaryNdims = 0;
+    MemoryPtr scratchMem;
+    size_t scratchSize = 0;
+    std::unordered_map<size_t, std::shared_ptr<gpt::MHAGPT>> mhaGPTs;
 
     static constexpr size_t IN_QKV           = 0;
     static constexpr size_t IN_PAST_KEYS     = 1;
