@@ -45,7 +45,7 @@ namespace gpt {
 //            \     /
 //             MatMul1: [batch, num_heads, query_seq_len, head_size]
 //               |
-//            Transpose1(only for 1x300): [batch, query_seq_len, num_heads, head_size]
+//            Transpose1(only for 1x300): [batch, query_seq_len, num_heads * head_size]
 // usage:
 // MHAGPT mha;
 // MHAGPT::CreateParam create_param = {...};
@@ -77,7 +77,7 @@ public:
     };
     MHAGPT();
     static int query_scratch_size(const CreateParam& param);
-    void create(const CreateParam& param, uint8_t* scratch_buffer);
+    void create(const CreateParam& param);
 
     //void close();
     void exec(const ExecParam& param);
