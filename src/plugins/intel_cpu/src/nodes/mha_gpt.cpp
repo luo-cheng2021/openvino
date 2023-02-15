@@ -39,6 +39,7 @@ struct jit_mul_add_softmax_compile_params {
     bool broadcast_scales0;
     bool with_scales1;
     bool broadcast_scales1;
+    size_t tail_size;
 };
 
 struct jit_mul_add_softmax_call_args {
@@ -164,6 +165,7 @@ private:
         mov(reg_add_in1, ptr[reg_params + GET_OFF(p_add_in1)]);
         mov(reg_out, ptr[reg_params + GET_OFF(p_out)]);
         mov(reg_buffer, ptr[reg_params + GET_OFF(p_buffer)]);
+        mov(reg_work_amount, ptr[reg_params + GET_OFF(work_amount)]);
 
         Xbyak::Label mul_add_max_loop_label;
         Xbyak::Label mul_add_max_end_label;
@@ -171,14 +173,10 @@ private:
         Xbyak::Label sub_exp_reduce_end_label;
         Xbyak::Label mul_loop_label;
         Xbyak::Label mul_end_label;
-        Xbyak::Label mul_add_max_end_tail_label;
-        Xbyak::Label sub_exp_reduce_end_tail_label;
-        Xbyak::Label mul_end_tail_label;
 
-        //size_t tail_size = jcp_.work_amount % vec_size;
+        size_t tail_size = jcp_.tail_size;
 
         mov(reg_buffer_aux, reg_buffer);
-        mov(reg_work_amount, ptr[reg_params + GET_OFF(work_amount)]);
         mov(reg_work_amount_aux, reg_work_amount);
         uni_vpxor(get_vmm_max(0), get_vmm_max(0), get_vmm_max(0));
 
@@ -206,10 +204,6 @@ private:
             uni_vbroadcastss(vmm_scales, Xmm(vmm_scales.getIdx()));
         }
 
-        mov(reg_tmp, dnnl::impl::float2int(-FLT_MAX));
-        vmovq(xmm_tmp, reg_tmp);
-        vbroadcastss(vmm_float_min, xmm_tmp);
-
         L(mul_add_max_loop_label);
         {
             cmp(reg_work_amount_aux, vec_size);
@@ -222,7 +216,10 @@ private:
             jmp(mul_add_max_loop_label, T_NEAR);
         }
         L(mul_add_max_end_label);
-        // max value
+        if (tail_size) {
+            mul_add_max(tail_size);
+        }
+
         sub(rsp, sizeof(float) * vec_size);
         uni_vmovups(ptr[rsp], get_vmm_max(0));
         uni_vpxor(get_vmm_max(0), get_vmm_max(0), get_vmm_max(0));
@@ -231,15 +228,8 @@ private:
             vmovq(xmm_tmp, reg_tmp);
             uni_vmaxps(get_xmm_max(0), get_xmm_max(0), xmm_tmp);
         }
-        add(rsp, sizeof(float) * vec_size);
-        // tail will update max value
-        {
-            cmp(reg_work_amount_aux, 0);
-            je(mul_add_max_end_tail_label, T_NEAR);
-            mul_add_max(vec_size, true);
-        }
-        L(mul_add_max_end_tail_label);
         uni_vbroadcastss(get_vmm_max(0), get_xmm_max(0));
+        add(rsp, sizeof(float) * vec_size);
 
         uni_vpxor(get_vmm_denom(0), get_vmm_denom(0), get_vmm_denom(0));
         mov(reg_work_amount_aux, reg_work_amount);
@@ -249,14 +239,17 @@ private:
             cmp(reg_work_amount_aux, vec_size);
             jl(sub_exp_reduce_end_label, T_NEAR);
 
-            sub_exp_reduce(vec_size, false);
+            sub_exp_reduce(vec_size);
 
             sub(reg_work_amount_aux, vec_size);
 
             jmp(sub_exp_reduce_loop_label, T_NEAR);
         }
         L(sub_exp_reduce_end_label);
-        // exp sum
+        if (tail_size) {
+            sub_exp_reduce(tail_size);
+        }
+
         sub(rsp, sizeof(float) * vec_size);
         uni_vmovups(ptr[rsp], get_vmm_denom(0));
         uni_vpxor(get_vmm_aux(0), get_vmm_aux(0), get_vmm_aux(0));
@@ -265,15 +258,8 @@ private:
             vmovq(xmm_tmp, reg_tmp);
             uni_vaddps(get_xmm_aux(0), get_xmm_aux(0), xmm_tmp);
         }
-        add(rsp, sizeof(float) * vec_size);
-        // tail will update exp sum
-        {
-            cmp(reg_work_amount_aux, 0);
-            je(sub_exp_reduce_end_tail_label, T_NEAR);
-            sub_exp_reduce(vec_size, true);
-        }
-        L(sub_exp_reduce_end_tail_label);
         vbroadcastss(get_vmm_aux(0), get_xmm_aux(0));
+        add(rsp, sizeof(float) * vec_size);
 
         mov(reg_tmp, dnnl::impl::float2int(1.0f));
         vmovq(xmm_tmp, reg_tmp);
@@ -294,19 +280,16 @@ private:
             cmp(reg_work_amount_aux, vec_size);
             jl(mul_end_label, T_NEAR);
 
-            mul_loop(vec_size, false);
+            mul_loop(vec_size);
 
             sub(reg_work_amount_aux, vec_size);
 
             jmp(mul_loop_label, T_NEAR);
         }
         L(mul_end_label);
-        {
-            cmp(reg_work_amount_aux, 0);
-            je(mul_end_tail_label, T_NEAR);
-            mul_loop(vec_size, true);
+        if (tail_size) {
+            mul_loop(tail_size);
         }
-        L(mul_end_tail_label);
 
         this->postamble();
 
@@ -318,162 +301,86 @@ private:
         exp_emitter->emit_data();
     }
 
-    void mul_add_max(size_t step, bool is_tail = false) {
-        if (!is_tail) {
-            load(get_vmm_in(0), reg_in0, jcp_.src_prc, step, is_tail);
-            load(get_vmm_in(2), reg_add_in1, Precision::FP32, step, is_tail);
+    void mul_add_max(size_t step) {
+        bool is_tail = step < vec_size;
 
-            if (jcp_.with_scales0) {
-                if (!jcp_.broadcast_scales0) {
+        load(get_vmm_in(0), reg_in0, jcp_.src_prc, step, is_tail);
+        load(get_vmm_in(2), reg_add_in1, Precision::FP32, step, is_tail);
+
+        if (jcp_.with_scales0) {
+            if (!jcp_.broadcast_scales0) {
+                load(vmm_scales, reg_scales, Precision::FP32, step, is_tail);
+                add(reg_scales,  sizeof(float) * step);
+            }
+            uni_vmulps(get_vmm_in(0), get_vmm_in(0), vmm_scales);
+            uni_vmaxps(get_vmm_in(0), get_vmm_in(0), vmm_crop_low);
+            uni_vminps(get_vmm_in(0), get_vmm_in(0), vmm_crop_high);
+        }
+
+        if (jcp_.with_mul_scales) {
+            if (jcp_.is_mul_first) {
+                uni_vmulps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(1));
+                uni_vaddps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(2));
+            } else {
+                uni_vaddps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(2));
+                uni_vmulps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(1));
+            }
+        } else {
+            uni_vaddps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(2));
+        }
+
+        uni_vmaxps(get_vmm_max(0), get_vmm_max(0), get_vmm_in(0));
+
+        store(reg_buffer_aux, get_vmm_in(0), Precision::FP32, step);
+
+        if (!is_tail) {
+            add(reg_in0, jcp_.src_prc.size() * step);
+            add(reg_add_in1, sizeof(float) * step);
+            add(reg_buffer_aux, sizeof(float) * step);
+        }
+    }
+
+    void sub_exp_reduce(size_t step) {
+        bool is_tail = step < vec_size;
+
+        load(get_vmm_in(0), reg_buffer_aux, Precision::FP32, step, is_tail);
+
+        uni_vsubps(get_vmm_in(0), get_vmm_in(0), get_vmm_max(0));
+
+        auto vmm_exp_idx = static_cast<size_t>(get_vmm_in(0).getIdx());
+        exp_emitter->emit_code({vmm_exp_idx}, {vmm_exp_idx}, pool_aux_vmm_idxs, pool_aux_gpr_idxs);
+
+        uni_vaddps(get_vmm_denom(0), get_vmm_denom(0), get_vmm_in(0));
+
+        store(reg_buffer_aux, get_vmm_in(0), Precision::FP32, step);
+
+        if (!is_tail) {
+            add(reg_buffer_aux, sizeof(float) * step);
+        }
+    }
+
+    void mul_loop(size_t step) {
+        bool is_tail = step < vec_size;
+
+        load(get_vmm_in(0), reg_buffer, Precision::FP32, step, is_tail);
+
+        uni_vmulps(get_vmm_in(0), get_vmm_in(0), get_vmm_denom(0));
+
+        if (jcp_.src_prc == Precision::I32) {
+            if (jcp_.with_scales1) {
+                if (!jcp_.broadcast_scales1) {
                     load(vmm_scales, reg_scales, Precision::FP32, step, is_tail);
                     add(reg_scales,  sizeof(float) * step);
                 }
                 uni_vmulps(get_vmm_in(0), get_vmm_in(0), vmm_scales);
-                uni_vmaxps(get_vmm_in(0), get_vmm_in(0), vmm_crop_low);
-                uni_vminps(get_vmm_in(0), get_vmm_in(0), vmm_crop_high);
-            }
-
-            if (jcp_.with_mul_scales) {
-                if (jcp_.is_mul_first) {
-                    uni_vmulps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(1));
-                    uni_vaddps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(2));
-                } else {
-                    uni_vaddps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(2));
-                    uni_vmulps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(1));
-                }
-            } else {
-                uni_vaddps(get_vmm_in(0), get_vmm_in(0), get_vmm_in(2));
-            }
-
-            uni_vmaxps(get_vmm_max(0), get_vmm_max(0), get_vmm_in(0));
-
-            store(reg_buffer_aux, get_vmm_in(0), Precision::FP32, step);
-
-            add(reg_in0, jcp_.src_prc.size() * step);
-            add(reg_add_in1, sizeof(float) * step);
-            add(reg_buffer_aux, sizeof(float) * step);
-        } else {
-            Xbyak::Label mul_add_max_label;
-            L(mul_add_max_label); {
-                load(get_vmm_in(0), reg_in0, jcp_.src_prc, 1, is_tail);
-                load(get_vmm_in(2), reg_add_in1, Precision::FP32, 1, is_tail);
-
-                if (jcp_.with_scales0) {
-                    if (!jcp_.broadcast_scales0) {
-                        load(vmm_scales, reg_scales, Precision::FP32, 1, is_tail);
-                        add(reg_scales,  sizeof(float) * 1);
-                    }
-                    uni_vmulss(Xmm(get_vmm_in(0)), get_vmm_in(0), vmm_scales);
-                    uni_vmaxss(Xmm(get_vmm_in(0)), get_vmm_in(0), vmm_crop_low);
-                    uni_vminss(Xmm(get_vmm_in(0)), get_vmm_in(0), vmm_crop_high);
-                }
-
-                if (jcp_.with_mul_scales) {
-                    if (jcp_.is_mul_first) {
-                        uni_vmulss(Xmm(get_vmm_in(0)), get_vmm_in(0), get_vmm_in(1));
-                        uni_vaddss(Xmm(get_vmm_in(0)), get_vmm_in(0), get_vmm_in(2));
-                    } else {
-                        uni_vaddss(Xmm(get_vmm_in(0)), get_vmm_in(0), get_vmm_in(2));
-                        uni_vmulss(Xmm(get_vmm_in(0)), get_vmm_in(0), get_vmm_in(1));
-                    }
-                } else {
-                    uni_vaddss(Xmm(get_vmm_in(0)), get_vmm_in(0), get_vmm_in(2));
-                }
-
-                uni_vmaxss(Xmm(get_vmm_max(0)), get_vmm_max(0), get_vmm_in(0));
-
-                store(reg_buffer_aux, get_vmm_in(0), Precision::FP32, 1);
-
-                add(reg_in0, jcp_.src_prc.size() * 1);
-                add(reg_add_in1, sizeof(float) * 1);
-                add(reg_buffer_aux, sizeof(float) * 1);
-                sub(reg_work_amount_aux, 1);
-                jne(mul_add_max_label, T_NEAR);
             }
         }
-    }
 
-    void sub_exp_reduce(size_t step, bool is_tail) {
+        store(reg_out, get_vmm_in(0), jcp_.dst_prc, step);
+
         if (!is_tail) {
-            load(get_vmm_in(0), reg_buffer_aux, Precision::FP32, step, is_tail);
-
-            uni_vsubps(get_vmm_in(0), get_vmm_in(0), get_vmm_max(0));
-
-            auto vmm_exp_idx = static_cast<size_t>(get_vmm_in(0).getIdx());
-            exp_emitter->emit_code({vmm_exp_idx}, {vmm_exp_idx}, pool_aux_vmm_idxs, pool_aux_gpr_idxs);
-
-            uni_vaddps(get_vmm_denom(0), get_vmm_denom(0), get_vmm_in(0));
-
-            store(reg_buffer_aux, get_vmm_in(0), Precision::FP32, step);
-
-            add(reg_buffer_aux, sizeof(float) * step);
-        } else {
-            Xbyak::Label sub_exp_reduce_label;
-            L(sub_exp_reduce_label); {
-                load(get_vmm_in(0), reg_buffer_aux, Precision::FP32, 1, is_tail);
-
-                uni_vsubss(Xmm(get_vmm_in(0)), get_vmm_in(0), get_vmm_max(0));
-
-                auto vmm_exp_idx = static_cast<size_t>(get_vmm_in(0).getIdx());
-                exp_emitter->emit_code({vmm_exp_idx}, {vmm_exp_idx}, pool_aux_vmm_idxs, pool_aux_gpr_idxs);
-
-                uni_vaddss(Xmm(get_vmm_denom(0)), get_vmm_denom(0), get_vmm_in(0));
-
-                store(reg_buffer_aux, get_vmm_in(0), Precision::FP32, 1);
-
-                add(reg_buffer_aux, sizeof(float) * 1);
-                sub(reg_work_amount_aux, 1);
-                jne(sub_exp_reduce_label, T_NEAR);
-            }
-        }
-    }
-
-    void mul_loop(size_t step, bool is_tail) {
-        if (!is_tail) {
-            load(get_vmm_in(0), reg_buffer, Precision::FP32, step, is_tail);
-
-            uni_vmulps(get_vmm_in(0), get_vmm_in(0), get_vmm_denom(0));
-
-            if (jcp_.src_prc == Precision::I32) {
-                if (jcp_.with_scales1) {
-                    if (!jcp_.broadcast_scales1) {
-                        load(vmm_scales, reg_scales, Precision::FP32, step, is_tail);
-                        add(reg_scales,  sizeof(float) * step);
-                    }
-                    uni_vmulps(get_vmm_in(0), get_vmm_in(0), vmm_scales);
-                }
-            }
-
-            // TODO: current case will not overflow, if max seq len is larger than 16 in bf16 will be ok
-            // should rewrite to satisfy fp32
-            store(reg_out, get_vmm_in(0), jcp_.dst_prc, step);
-
             add(reg_buffer, sizeof(float) * step);
             add(reg_out, jcp_.dst_prc.size() * step);
-        } else {
-            Xbyak::Label mul_loop_label;
-            L(mul_loop_label); {
-                load(get_vmm_in(0), reg_buffer, Precision::FP32, 1, is_tail);
-
-                uni_vmulss(Xmm(get_vmm_in(0)), get_vmm_in(0), get_vmm_denom(0));
-
-                if (jcp_.src_prc == Precision::I32) {
-                    if (jcp_.with_scales1) {
-                        if (!jcp_.broadcast_scales1) {
-                            load(vmm_scales, reg_scales, Precision::FP32, 1, is_tail);
-                            add(reg_scales,  sizeof(float) * 1);
-                        }
-                        uni_vmulss(Xmm(get_vmm_in(0)), get_vmm_in(0), vmm_scales);
-                    }
-                }
-
-                store(reg_out, get_vmm_in(0), jcp_.dst_prc, 1);
-
-                add(reg_buffer, sizeof(float) * 1);
-                add(reg_out, jcp_.dst_prc.size() * 1);
-                sub(reg_work_amount_aux, 1);
-                jne(mul_loop_label, T_NEAR);
-            }
         }
 #undef GET_OFF
     }
@@ -526,7 +433,6 @@ private:
     Xmm xmm_tmp = Xmm(0);
 
     Vmm vmm_scales = Vmm(0);
-    Vmm vmm_float_min = Vmm(11);
     Vmm vmm_crop_low = Vmm(14);
     Vmm vmm_crop_high = Vmm(15);
 
@@ -867,6 +773,9 @@ private:
 struct MHAGPT::Impl {
     void create(const CreateParam& param);
     void exec(const ExecParam& param);
+    impl_desc_type get_impl_type() const {
+        return _impl_desc_type;
+    }
 
     CreateParam _create_param;
     impl_desc_type _impl_desc_type;
@@ -889,7 +798,7 @@ struct MHAGPT::Impl {
         size_t K, size_t K_blk, size_t K_tail, size_t LDA, dnnl_data_type_t dt_in0) const;
     void init_brgemm_copy_b(std::unique_ptr<dnnl::impl::cpu::x64::matmul::jit_brgemm_matmul_copy_b_t>& brgCopyKernel,
         size_t N, size_t N_blk, size_t N_tail, size_t LDB, size_t K, bool is_with_amx, dnnl_data_type_t dt_in0,
-        dnnl_data_type_t dt_in1, dnnl::impl::format_tag_t wei_tag) const;
+        dnnl_data_type_t dt_in1) const;
 
     void callBrgemm(brgemmCtx& ctx, std::unique_ptr<dnnl::impl::cpu::x64::brgemm_kernel_t>& brgKernel,
                     const void* pin0, const void* pin1, void* pout, void* wsp) const;
@@ -921,9 +830,9 @@ struct MHAGPT::Impl {
     VectorDims dimsMatMul1Out;
 
     size_t batch0, batch1;
-    size_t M, M_blk, M_tail;
-    size_t K0, K0_blk, K0_tail, N0, N0_blk, N0_tail;
-    size_t K1, K1_blk, K1_tail, N1, N1_blk, N1_tail;
+    size_t M_q_seq_len, M_blk, M_tail;
+    size_t K0_head_size, K0_blk, K0_tail, N0_key_seq_len, N0_blk, N0_tail;
+    size_t K1_key_seq_len, K1_blk, K1_tail, N1_head_size, N1_blk, N1_tail;
 
     size_t bufferMatMul0In0Size;
     size_t bufferMatMul0In1Size;
@@ -962,10 +871,13 @@ struct MHAGPT::Impl {
     std::unique_ptr<dnnl::impl::cpu::x64::brgemm_kernel_t> brgKernels1[MHA_BRGEMM_KERNELS_NUM];
     std::unique_ptr<dnnl::impl::cpu::x64::matmul::jit_brgemm_matmul_copy_b_t> brgCopyBKernel1;
 
-    std::unique_ptr<jit_uni_mul_add_softmax_kernel> mulAddSoftmaxKernel;
+    //std::unique_ptr<jit_uni_mul_add_softmax_kernel> mulAddSoftmaxKernel;
+    std::vector<std::shared_ptr<jit_uni_mul_add_softmax_kernel>> mulAddSoftmaxKernel;
     std::unique_ptr<jit_uni_convert_reorder_kernel> convertReorderKernel;
-    //std::unique_ptr<jit_uni_convert_transpose_kernel> convertTransposeKernel;
+    std::unique_ptr<jit_uni_convert_transpose_kernel> convertTransposeKernel;
     // copy from mha.h/cpp end
+
+    size_t vec_size = 1;
 };
 
 void MHAGPT::Impl::init_brgemm(brgemmCtx& ctx, std::unique_ptr<brgemm_kernel_t>& brgKernel, bool use_amx) const {
@@ -1018,12 +930,12 @@ void MHAGPT::Impl::init_brgemm_copy_a(std::unique_ptr<jit_brgemm_matmul_copy_a_t
 }
 
 void MHAGPT::Impl::init_brgemm_copy_b(std::unique_ptr<jit_brgemm_matmul_copy_b_t>& brgCopyKernel, size_t N, size_t N_blk, size_t N_tail, size_t LDB, size_t K,
-        bool is_with_amx, dnnl_data_type_t dt_in0, dnnl_data_type_t dt_in1, dnnl::impl::format_tag_t wei_tag) const {
+        bool is_with_amx, dnnl_data_type_t dt_in0, dnnl_data_type_t dt_in1) const {
     brgemm_matmul_conf_t brgCopyKernelConf;
     brgCopyKernelConf.src_dt = dt_in0;
     brgCopyKernelConf.wei_dt = dt_in1;
     brgCopyKernelConf.wei_n_blk = N_blk;
-    brgCopyKernelConf.wei_tag = wei_tag;
+    brgCopyKernelConf.wei_tag = dnnl_abcd;
     brgCopyKernelConf.copy_B_wei_stride = 0;
     brgCopyKernelConf.LDB = LDB;
     brgCopyKernelConf.N = N;
@@ -1079,23 +991,23 @@ void MHAGPT::Impl::create(const CreateParam& param) {
     batch0 = dimsMatMul0Out[0];
     batch1 = dimsMatMul0Out[1];
 
-    M = dimsMatMul0In0[2];
+    M_q_seq_len = dimsMatMul0In0[2];
     M_blk = matmulOptimalM;
-    M_tail = M % M_blk;
+    M_tail = M_q_seq_len % M_blk;
 
-    N0 = dimsMatMul0In1[3];
-    K0 = dimsMatMul0In0[3];
+    N0_key_seq_len = dimsMatMul0In1[3];
+    K0_head_size = dimsMatMul0In0[3];
 
     auto brg0Prc = param.qkv_precision;
     brg0VnniFactor = 4 / brg0Prc.size();
-    bool brg0WithAMX = isAMXSupported && brg0Prc != Precision::FP32 && (K0 % brg0VnniFactor == 0) && (N0 % brg0VnniFactor == 0);
+    bool brg0WithAMX = isAMXSupported && brg0Prc != Precision::FP32 && (K0_head_size % brg0VnniFactor == 0) && (N0_key_seq_len % brg0VnniFactor == 0);
 
-    N0_blk = brg0Prc == Precision::FP32 ? N0 :
+    N0_blk = brg0Prc == Precision::FP32 ? N0_key_seq_len :
              brg0Prc == Precision::BF16 ? 32 : 64;
-    N0_tail = N0 % N0_blk;
+    N0_tail = N0_key_seq_len % N0_blk;
     K0_blk = brg0WithAMX ? brg0Prc == Precision::BF16 ? 32 : 64
-                         : K0;
-    K0_tail = K0 % K0_blk;
+                         : K0_head_size;
+    K0_tail = K0_head_size % K0_blk;
 
     accPrecision0 = brg0Prc == Precision::I8 ? Precision::I32 : Precision::FP32;
 
@@ -1106,17 +1018,19 @@ void MHAGPT::Impl::create(const CreateParam& param) {
                 auto& brgemmCtx = brgCtxs0[getBrgIdx(m, k, n)];
 
                 auto M_ = m ? M_tail
-                            : M < M_blk ? 0 : M_blk;
-                auto N_ = n ? N0_tail : N0 - N0_tail;
-                auto K_ = k ? K0_tail : K0 - K0_tail;
+                            : M_q_seq_len < M_blk ? 0 : M_blk;
+                auto N_ = n ? N0_tail : N0_key_seq_len - N0_tail;
+                auto K_ = k ? K0_tail : K0_head_size - K0_tail;
                 auto beta = k && brgCtxs0[getBrgIdx(m, 0, n)].K != 0 ? 1.0f : 0.0f;
-
+                // q:      [batch, num_heads, query_seq_len, head_size]
+                // k':     [batch, num_heads, head_size, key_seq_len]
+                // q * k': [batch, num_heads, query_seq_len, key_seq_len]
                 brgemmCtx.M = M_;
                 brgemmCtx.N = N_;
                 brgemmCtx.K = K_;
-                brgemmCtx.LDA = K0;
-                brgemmCtx.LDB = rnd_up(N0, N0_blk);
-                brgemmCtx.LDC = N0;
+                brgemmCtx.LDA = K0_head_size;
+                brgemmCtx.LDB = rnd_up(N0_key_seq_len, N0_blk);
+                brgemmCtx.LDC = N0_key_seq_len;
                 brgemmCtx.dt_in0 = static_cast<dnnl_data_type_t>(DnnlExtensionUtils::IEPrecisionToDataType(brg0Prc));
                 brgemmCtx.dt_in1 = static_cast<dnnl_data_type_t>(DnnlExtensionUtils::IEPrecisionToDataType(brg0Prc));
                 brgemmCtx.beta = beta;
@@ -1138,26 +1052,29 @@ void MHAGPT::Impl::create(const CreateParam& param) {
     //     init_brgemm_copy_a(brgCopyAKernel0, K0, K0_blk, K0_tail, brgemmCtx0.LDA, brgemmCtx0.dt_in0);
     // }
 
-    // transpose B matrix, reshape to VNNI if using amx/vnni
-    init_brgemm_copy_b(brgCopyBKernel0, N0, N0_blk, N0_tail, brgemmCtx0.LDB, brgemmCtx0.K,
-        brgemmCtx0.is_with_amx, brgemmCtx0.dt_in0, brgemmCtx0.dt_in1, dnnl_abdc);
-
+    // B matrix, reshape to VNNI if using amx/vnni
+    if (brgemmCtx0.is_with_amx || brg0Prc == Precision::I8 || brg0Prc == Precision::BF16) {
+        // k': [batch, num_heads, head_size, key_seq_len]
+        init_brgemm_copy_b(brgCopyBKernel0, N0_key_seq_len, N0_blk, N0_tail, brgemmCtx0.LDB, brgemmCtx0.K,
+            brgemmCtx0.is_with_amx, brgemmCtx0.dt_in0, brgemmCtx0.dt_in1);
+    }
+    // [batch, num_heads, query_seq_len, head_size]
     dimsMatMul1Out = {dimsMatMul0Out[0], dimsMatMul0Out[1], dimsMatMul0Out[2], dimsMatMul1In1[3]};
 
-    N1 = dimsMatMul1Out[3];
-    K1 = dimsMatMul0Out[3];
+    N1_head_size = dimsMatMul1Out[3];
+    K1_key_seq_len = dimsMatMul0Out[3];
 
     auto brg1PrcIn0 = !fqScales2.empty() ? fqPrc2 : param.qkv_precision;
     auto brg1PrcIn1 = param.qkv_precision;
     brg1VnniFactor = 4 / brg1PrcIn0.size();
-    bool brg1WithAMX = isAMXSupported && brg1PrcIn0 != Precision::FP32 && (K1 % brg1VnniFactor == 0) && (N1 % brg1VnniFactor == 0);
+    bool brg1WithAMX = isAMXSupported && brg1PrcIn0 != Precision::FP32 && (K1_key_seq_len % brg1VnniFactor == 0) && (N1_head_size % brg1VnniFactor == 0);
 
-    N1_blk = brg1PrcIn1 == Precision::FP32 ? N1 :
+    N1_blk = brg1PrcIn1 == Precision::FP32 ? N1_head_size :
              brg1PrcIn1 == Precision::BF16 ? 32 : 64;
-    N1_tail = N1 % N1_blk;
+    N1_tail = N1_head_size % N1_blk;
     K1_blk = brg1WithAMX ? brg1PrcIn0 == Precision::BF16 ? 32 : 64
-                         : K1;
-    K1_tail = K1 % K1_blk;
+                         : K1_key_seq_len;
+    K1_tail = K1_key_seq_len % K1_blk;
 
     accPrecision1 = one_of(brg1PrcIn0, Precision::U8, Precision::I8) ? Precision::I32 : Precision::FP32;
 
@@ -1168,17 +1085,21 @@ void MHAGPT::Impl::create(const CreateParam& param) {
                 auto& brgemmCtx = brgCtxs1[getBrgIdx(m, k, n)];
 
                 auto M_ = m ? M_tail
-                            : M < M_blk ? 0 : M_blk;
-                auto N_ = n ? N1_tail : N1 - N1_tail;
-                auto K_ = k ? K1_tail : K1 - K1_tail;
+                            : M_q_seq_len < M_blk ? 0 : M_blk;
+                auto N_ = n ? N1_tail : N1_head_size - N1_tail;
+                auto K_ = k ? K1_tail : K1_key_seq_len - K1_tail;
 
+                // in0: [batch, num_heads, query_seq_len, key_seq_len]
+                // value: [batch, num_heads, key_seq_len, head_size]
+                // out: [batch, num_heads, query_seq_len, head_size]
+                // transposed out: [batch, query_seq_len, num_heads * head_size]
                 auto beta = k && brgCtxs1[getBrgIdx(m, 0, n)].K != 0 ? 1.0f : 0.0f;
                 brgemmCtx.M = M_;
                 brgemmCtx.N = N_;
                 brgemmCtx.K = K_;
-                brgemmCtx.LDA = K1;
-                brgemmCtx.LDB = brg1PrcIn1 == Precision::FP32 ? N1 : rnd_up(N1, N1_blk);
-                brgemmCtx.LDC = accPrecision1 == param.qkv_precision ? N1 : N1;
+                brgemmCtx.LDA = K1_key_seq_len;
+                brgemmCtx.LDB = brg1PrcIn1 == Precision::FP32 ? N1_head_size : rnd_up(N1_head_size, N1_blk);
+                brgemmCtx.LDC = accPrecision1 == param.qkv_precision ? batch1 * N1_head_size : N1_head_size;
                 brgemmCtx.dt_in0 = static_cast<dnnl_data_type_t>(DnnlExtensionUtils::IEPrecisionToDataType(brg1PrcIn0));
                 brgemmCtx.dt_in1 = static_cast<dnnl_data_type_t>(DnnlExtensionUtils::IEPrecisionToDataType(brg1PrcIn1));
                 brgemmCtx.beta = beta;
@@ -1196,17 +1117,18 @@ void MHAGPT::Impl::create(const CreateParam& param) {
 
     auto& brgemmCtx1 = brgCtxs1[brg1BaseIdx];
     if (brgemmCtx1.is_with_amx || brg1PrcIn1 == Precision::I8 || brg1PrcIn1 == Precision::BF16) {
-        init_brgemm_copy_b(brgCopyBKernel1, N1, N1_blk, N1_tail, brgemmCtx1.LDB, brgemmCtx1.K,
-            brgemmCtx1.is_with_amx, brgemmCtx1.dt_in0, brgemmCtx1.dt_in1, dnnl_abcd);
+        // value: [batch, num_heads, key_seq_len, head_size]
+        init_brgemm_copy_b(brgCopyBKernel1, N1_head_size, N1_blk, N1_tail, brgemmCtx1.LDB, brgemmCtx1.K,
+            brgemmCtx1.is_with_amx, brgemmCtx1.dt_in0, brgemmCtx1.dt_in1);
     }
 
-    bufferMatMul0In0Size = M_blk * rnd_up(K0, K0_blk) * brg0Prc.size();
-    bufferMatMul0In1Size = rnd_up(K0, brg0VnniFactor) * rnd_up(N0, N0_blk) * brg0Prc.size();
-    bufferMatMul0OutSize = brgemmCtx0.M * N0 * accPrecision0.size();
-    bufferMatMul1In1Size = rnd_up(K1, brg1VnniFactor) * rnd_up(N1, N1_blk) * std::max(brg0Prc.size(), brg1PrcIn1.size());
-    bufferMatMul1OutSize = brgemmCtx1.M * N1 * accPrecision1.size();
-    bufferCompensation0Size = rnd_up(N0, N0_blk);
-    bufferCompensation1Size = rnd_up(N1, N1_blk);
+    bufferMatMul0In0Size = M_blk * rnd_up(K0_head_size, K0_blk) * brg0Prc.size();
+    bufferMatMul0In1Size = rnd_up(K0_head_size, brg0VnniFactor) * rnd_up(N0_key_seq_len, N0_blk) * brg0Prc.size();
+    bufferMatMul0OutSize = brgemmCtx0.M * N0_key_seq_len * accPrecision0.size();
+    bufferMatMul1In1Size = rnd_up(K1_key_seq_len, brg1VnniFactor) * rnd_up(N1_head_size, N1_blk) * std::max(brg0Prc.size(), brg1PrcIn1.size());
+    bufferMatMul1OutSize = brgemmCtx1.M * N1_head_size * accPrecision1.size();
+    bufferCompensation0Size = rnd_up(N0_key_seq_len, N0_blk);
+    bufferCompensation1Size = rnd_up(N1_head_size, N1_blk);
 
     if (brgCopyAKernel0) {
         bufferMatMul0In0.resize(numThreads * bufferMatMul0In0Size);
@@ -1227,37 +1149,51 @@ void MHAGPT::Impl::create(const CreateParam& param) {
     }
 
     {
-        jit_mul_add_softmax_compile_params jcp;
-        jcp.src_prc = accPrecision0;
-        jcp.dst_prc = brg1PrcIn0;
-        jcp.with_mul_scales = !mulScales.empty();
-        jcp.is_mul_first = true;
-        jcp.with_scales0 = !fqScales1.empty();
-        jcp.broadcast_scales0 = fqScales1.size() == 1;
-        jcp.with_scales1 = !fqScales2.empty();
-        jcp.broadcast_scales1 = fqScales2.size() == 1;
-
         if (mayiuse(cpu_isa_t::avx512_core)) {
-            mulAddSoftmaxKernel.reset(new jit_mul_add_softmax_kernel<cpu_isa_t::avx512_core>(jcp));
+            vec_size = dnnl::impl::cpu::x64::cpu_isa_traits<cpu_isa_t::avx512_core>::vlen / sizeof(float);
         } else if (mayiuse(cpu_isa_t::avx2)) {
-            mulAddSoftmaxKernel.reset(new jit_mul_add_softmax_kernel<cpu_isa_t::avx2>(jcp));
+            vec_size = dnnl::impl::cpu::x64::cpu_isa_traits<cpu_isa_t::avx512_core>::vlen / sizeof(float);
         } else if (mayiuse(cpu_isa_t::sse41)) {
-            mulAddSoftmaxKernel.reset(new jit_mul_add_softmax_kernel<cpu_isa_t::sse41>(jcp));
+            vec_size = dnnl::impl::cpu::x64::cpu_isa_traits<cpu_isa_t::avx512_core>::vlen / sizeof(float);
         } else {
             THROW_ERROR << "cannot create jit eltwise kernel";
         }
+        mulAddSoftmaxKernel.resize(vec_size);
+
+        for (auto i = 0; i < vec_size; i++) {
+            jit_mul_add_softmax_compile_params jcp;
+            jcp.src_prc = accPrecision0;
+            jcp.dst_prc = brg1PrcIn0;
+            jcp.with_mul_scales = !mulScales.empty();
+            jcp.is_mul_first = true;
+            jcp.with_scales0 = !fqScales1.empty();
+            jcp.broadcast_scales0 = fqScales1.size() == 1;
+            jcp.with_scales1 = !fqScales2.empty();
+            jcp.broadcast_scales1 = fqScales2.size() == 1;
+            jcp.tail_size = i;
+
+            if (mayiuse(cpu_isa_t::avx512_core)) {
+                mulAddSoftmaxKernel[i].reset(new jit_mul_add_softmax_kernel<cpu_isa_t::avx512_core>(jcp));
+            } else if (mayiuse(cpu_isa_t::avx2)) {
+                mulAddSoftmaxKernel[i].reset(new jit_mul_add_softmax_kernel<cpu_isa_t::avx2>(jcp));
+            } else if (mayiuse(cpu_isa_t::sse41)) {
+                mulAddSoftmaxKernel[i].reset(new jit_mul_add_softmax_kernel<cpu_isa_t::sse41>(jcp));
+            }
+        }
     }
 
-    // acc precision for matmul1 may be different from output precision
+    // acc precision convert: for matmul1 may be different from output precision
     if (accPrecision1 != param.qkv_precision) {
+        // matmul1: [batch, num_heads, query_seq_len, head_size]
+        // attn_output: [batch, query_seq_len, num_heads * head_size]
         jit_convert_reorder_compile_params jcp;
         jcp.src_prc = accPrecision1;
         jcp.dst_prc = param.qkv_precision;
-        jcp.inner_work_amount = N1;     // head size(feature)
+        jcp.inner_work_amount = N1_head_size;     // head size(feature)
         jcp.with_scales = !fqScales3.empty();
         jcp.broadcast_scales = fqScales3.size() == 1;
-        jcp.src_stride = N1;
-        jcp.dst_stride = batch1 * N1;   // num_heads * head_size
+        jcp.src_stride = N1_head_size;
+        jcp.dst_stride = batch1 * N1_head_size;   // num_heads * head_size
 
         if (mayiuse(cpu_isa_t::avx512_core)) {
             convertReorderKernel.reset(new jit_convert_reorder_kernel<cpu_isa_t::avx512_core>(jcp));
@@ -1270,11 +1206,40 @@ void MHAGPT::Impl::create(const CreateParam& param) {
         }
     }
 
-    if (mulAddSoftmaxKernel)
-        mulAddSoftmaxKernel->create_ker();
+    // k: [batch, num_heads, key_seq_len, head_size]
+    // k': [batch, num_heads, head_size, key_seq_len]
+    if (!fqScales0.empty()) {
+        jit_convert_transpose_compile_params jcp;
+        jcp.src_prc = brg0Prc;
+        jcp.dst_prc = brg0Prc;
+        jcp.inner_work_amount = N0_key_seq_len;
+        jcp.outter_work_amount = K0_head_size;
+        jcp.with_scales = !fqScales0.empty();
+        jcp.broadcast_scales = fqScales0.size() == 1;
+        jcp.inner_src_stride = K0_head_size;          // head_size
+        jcp.outter_src_stride = N0_key_seq_len * K0_head_size;    // head_size * key_seq_len
+        jcp.outter_dst_stride = N0_key_seq_len;
+
+        if (mayiuse(cpu_isa_t::avx512_core)) {
+            convertTransposeKernel.reset(new jit_convert_transpose_kernel<cpu_isa_t::avx512_core>(jcp));
+        } else if (mayiuse(cpu_isa_t::avx2)) {
+            convertTransposeKernel.reset(new jit_convert_transpose_kernel<cpu_isa_t::avx2>(jcp));
+        } else if (mayiuse(cpu_isa_t::sse41)) {
+            convertTransposeKernel.reset(new jit_convert_transpose_kernel<cpu_isa_t::sse41>(jcp));
+        } else {
+            THROW_ERROR << "cannot create jit eltwise kernel";
+        }
+    }
+
+    for (auto i = 0; i < vec_size; i++) {
+        mulAddSoftmaxKernel[i]->create_ker();
+    }
 
     if (convertReorderKernel)
         convertReorderKernel->create_ker();
+
+    if (convertTransposeKernel)
+        convertTransposeKernel->create_ker();
 
     if (brgemmCtx0.is_with_amx || brgemmCtx1.is_with_amx) {
         _impl_desc_type = jit_avx512_amx;
@@ -1292,6 +1257,8 @@ void MHAGPT::Impl::create(const CreateParam& param) {
 template<typename srcT, typename dstT>
 static void reorder2D(const srcT* pin, dstT* pout, const std::vector<size_t>& dimsOut,
                const std::vector<size_t>& stridesOut, const std::vector<size_t>& stridesIn) {
+                // k: [batch, num_heads, key_seq_len, head_size]
+            // k': [batch, num_heads, head_size, key_seq_len]
     for (int i0 = 0; i0 < dimsOut[0]; i0++) {
         for (int i1 = 0; i1 < dimsOut[1]; i1++) {
             pout[i0 * stridesOut[0] + i1 * stridesOut[1]] = static_cast<dstT>(pin[i0 * stridesIn[0] + i1 * stridesIn[1]]);
@@ -1334,20 +1301,22 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
         auto bufferMatMul1In1_local = reinterpret_cast<uint8_t*>(bufferMatMul1In1.data() + threadNum * bufferMatMul1In1Size);
         auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.data() + threadNum * bufferMatMul1OutSize);
 
-        // auto pTranspose1Out_aux = brgCopyBKernel0 ? bufferMatMul1In1_local
-        //                                           : bufferMatMul0In1_local;
+        auto pTranspose1Out_aux = brgCopyBKernel0 ? bufferMatMul1In1_local
+                                                  : bufferMatMul0In1_local;
 
-        // if (convertTransposeKernel) {
-        //     jit_convert_transpose_call_args call_args;
-        //     call_args.p_in = pKIn0_aux;
-        //     call_args.p_out = pTranspose1Out_aux;
-        //     call_args.p_scales = fqScales0.data();
+        if (convertTransposeKernel) {
+            jit_convert_transpose_call_args call_args;
+            call_args.p_in = pKIn0_aux;
+            call_args.p_out = pTranspose1Out_aux;
+            call_args.p_scales = fqScales0.data();
 
-        //     (*convertTransposeKernel)(&call_args);
-        // } else {
-        //     reorder2D(reinterpret_cast<const in1_type*>(pKIn0_aux), reinterpret_cast<in1_type*>(pTranspose1Out_aux), {K0, N0}, {N0, 1},
-        //               {strTranspose1In0[3], strTranspose1In0[1]});
-        // }
+            (*convertTransposeKernel)(&call_args);
+        } else {
+            // k: [batch, num_heads, key_seq_len, head_size]
+            // k': [batch, num_heads, head_size, key_seq_len]
+            reorder2D(reinterpret_cast<const in1_type*>(pKIn0_aux), reinterpret_cast<in1_type*>(pTranspose1Out_aux),
+                {K0_head_size, N0_key_seq_len}, {N0_key_seq_len, 1}, {1, K0_head_size});
+        }
 
         auto bufferCompensation0_aux = !bufferCompensation0.empty()
             ? bufferCompensation0.data() + threadNum * bufferCompensation0Size
@@ -1358,17 +1327,17 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
 
         auto wsp_local = !wsp.empty() ? wsp.data() + threadNum * wsp_size_per_thread : nullptr;
 
-        // k layout: [batch, num_heads, key_seq_len, head_size]->[batch, num_heads, head_size, key_seq_len]
+        // k': [batch, num_heads, head_size, key_seq_len]
         //   N0 == key_seq_len
-        auto pMatMul0In1 = pKIn0_aux;
+        auto pMatMul0In1 = reinterpret_cast<uint8_t*>(pTranspose1Out_aux);
         if (brgCopyBKernel0) {
-            for (size_t nb = 0; nb < div_up(N0, N0_blk); nb++) {
-                auto pCopyKernel0In = pMatMul0In1 + nb * N0_blk * _create_param.head_size * _create_param.qkv_precision.size();
+            for (size_t nb = 0; nb < div_up(N0_key_seq_len, N0_blk); nb++) {
+                auto pCopyKernel0In = pMatMul0In1 + nb * N0_blk * _create_param.qkv_precision.size();
                 auto pCopyKernel0Out = bufferMatMul0In1_local + nb * N0_blk * brg0VnniFactor * _create_param.qkv_precision.size();
 
                 auto ctx = jit_brgemm_matmul_copy_b_t::ctx_t();
 
-                const bool is_N_tail = (N0 - nb * N0_blk < N0_blk);
+                const bool is_N_tail = (N0_key_seq_len - nb * N0_blk < N0_blk);
                 ctx.current_N_blk = is_N_tail ? N0_tail : N0_blk;
                 ctx.src = pCopyKernel0In;
                 ctx.tr_src = pCopyKernel0Out;
@@ -1376,7 +1345,7 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
                 ctx.zp_a_compensation_ptr = nullptr;
                 ctx.zp_a_neg_value_ptr = nullptr;
                 ctx.current_K_start = 0;
-                ctx.current_K_iters = K0;
+                ctx.current_K_iters = K0_head_size;
 
                 (*brgCopyBKernel0)(&ctx);
             }
@@ -1388,13 +1357,13 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
         //   N1 == head_size
         auto pMatMul1In1 = pVIn0_aux;
         if (brgCopyBKernel1) {
-            for (size_t nb = 0; nb < div_up(N1, N1_blk); nb++) {
+            for (size_t nb = 0; nb < div_up(N1_head_size, N1_blk); nb++) {
                 auto pCopyKernel1In = pMatMul1In1 + nb * N1_blk * _create_param.qkv_precision.size();
                 auto pCopyKernel1Out = reinterpret_cast<uint8_t*>(bufferMatMul1In1_local) + nb * N1_blk * brg1VnniFactor * _create_param.qkv_precision.size();
 
                 auto ctx = jit_brgemm_matmul_copy_b_t::ctx_t();
 
-                const bool is_N_tail = (N1 - nb * N1_blk < N1_blk);
+                const bool is_N_tail = (N1_head_size - nb * N1_blk < N1_blk);
                 ctx.current_N_blk = is_N_tail ? N1_tail : N1_blk;
                 ctx.src = pCopyKernel1In;
                 ctx.tr_src = pCopyKernel1Out;
@@ -1402,7 +1371,7 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
                 ctx.zp_a_compensation_ptr = nullptr;
                 ctx.zp_a_neg_value_ptr = nullptr;
                 ctx.current_K_start = 0;
-                ctx.current_K_iters = K1;
+                ctx.current_K_iters = K1_key_seq_len;
 
                 (*brgCopyBKernel1)(&ctx);
             }
@@ -1410,11 +1379,11 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
             pMatMul1In1 = reinterpret_cast<uint8_t*>(bufferMatMul1In1_local);
         }
 
-        for (size_t mb = 0; mb < div_up(M, M_blk); mb++) {
-            const bool is_M_tail = (M - mb * M_blk < M_blk);
+        for (size_t mb = 0; mb < div_up(M_q_seq_len, M_blk); mb++) {
+            const bool is_M_tail = (M_q_seq_len - mb * M_blk < M_blk);
             auto cur_M_blk = is_M_tail ? M_tail : M_blk;
             // q layout: [batch, num_heads, query_seq_len, head_size]
-            auto pMatMul0In0 = pQIn0_aux + (mb * M_blk * K0) * _create_param.qkv_precision.size();
+            auto pMatMul0In0 = pQIn0_aux + (mb * M_blk * K0_head_size) * _create_param.qkv_precision.size();
 
             // TODO: matrix A copy should be performed to enable AMX matmuls for arbitrary shapes
             // if (brgCopyAKernel0) {
@@ -1470,30 +1439,30 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
             auto valid_softmax_items = _create_param.first_valid_softmax_items;
             for (size_t m = 0; m < cur_M_blk; m++) {
                 jit_mul_add_softmax_call_args call_args;
-                call_args.p_in0 = pMatMul0Out + m * N0 * accPrecision0.size();
+                call_args.p_in0 = pMatMul0Out + m * N0_key_seq_len * accPrecision0.size();
                 call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
                 call_args.p_add_in1 = pAddIn1_aux;
-                call_args.p_out = pMatMul0Out + m * N0 * _create_param.qkv_precision.size();
-                call_args.p_buffer = pMatMul0Out + m * N0 * accPrecision0.size();
+                call_args.p_out = pMatMul0Out + m * N0_key_seq_len * _create_param.qkv_precision.size();
+                call_args.p_buffer = pMatMul0Out + m * N0_key_seq_len * accPrecision0.size();
                 call_args.p_scales0 = fqScales1.data();
                 call_args.p_scales1 = fqScales2.data();
                 call_args.work_amount = valid_softmax_items;
 
-                (*mulAddSoftmaxKernel)(&call_args);
+                (*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
                 // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
                 if (_create_param.need_select_transpose) {
-                    void *invalidPtr = pMatMul0Out + (m * N0 + valid_softmax_items) * _create_param.qkv_precision.size();
-                    memset(invalidPtr, 0, (N0 - valid_softmax_items) * _create_param.qkv_precision.size());
-                    valid_softmax_items = std::min(valid_softmax_items + 1, N0);
+                    void *invalidPtr = pMatMul0Out + (m * N0_key_seq_len + valid_softmax_items) * _create_param.qkv_precision.size();
+                    memset(invalidPtr, 0, (N0_key_seq_len - valid_softmax_items) * _create_param.qkv_precision.size());
+                    valid_softmax_items = std::min(valid_softmax_items + 1, N0_key_seq_len);
                 }
             }
 
             auto pMatMul1In0 = bufferMatMul0Out_local;
             // transposed shape: [bs, seq_len, num_attention_heads, attn_head_size]
-            auto pOut_aux = pout + (i0 * param.batch_stride_in_kv + i1 * N1) * outPrcSize;
+            auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
 
             auto pMatMul1Out = _create_param.qkv_precision == Precision::FP32
-                ? pOut_aux + (mb * M_blk * batch1 * N1) * outPrcSize
+                ? pOut_aux + (mb * M_blk * batch1 * N1_head_size) * outPrcSize
                 : bufferMatMul1Out_local;
 
             size_t brgIdx1 = getBrgIdx(0, 0, 0);
@@ -1520,9 +1489,11 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
             }
 
             if (convertReorderKernel) {
+                // matmul1: [batch, num_heads, query_seq_len, head_size]
+                // attn_output: [batch, query_seq_len, num_heads * head_size]
                 jit_convert_reorder_call_args call_args;
                 call_args.p_in = pMatMul1Out;
-                call_args.p_out = pOut_aux + (mb * M_blk * batch1 * N1) * outPrcSize;
+                call_args.p_out = pOut_aux + (mb * M_blk * batch1 * N1_head_size) * outPrcSize;
                 call_args.p_scales = fqScales3.data();
                 call_args.outter_work_amount = cur_M_blk;
 
@@ -1558,6 +1529,10 @@ void MHAGPT::create(const CreateParam& param) {
 
 void MHAGPT::exec(const ExecParam& param) {
     impl->exec(param);
+}
+
+impl_desc_type MHAGPT::get_impl_type() {
+    return impl->get_impl_type();
 }
 
 }   // namespace gpt

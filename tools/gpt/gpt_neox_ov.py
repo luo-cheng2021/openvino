@@ -7,6 +7,8 @@ from openvino.runtime import opset10 as opset
 from openvino.runtime.passes import Manager
 import numpy as np
 import sys, os
+import argparse
+
 def const(data, itype):
     if isinstance(data, list):
         shape = [len(data)]
@@ -48,9 +50,20 @@ VOCAB_SIZE = 50304
 MAX_SEQ_LEN = 400
 FakeConstDict = {
     'model.gpt_neox.embed_in.weight': np.zeros((VOCAB_SIZE, HIDDEN_SIZE), dtype=np.float32),
-    'model.gpt_neox.embed_out.weight': np.zeros((HIDDEN_SIZE, VOCAB_SIZE), dtype=np.float32),
-    'model.gpt_neox.layers.attention.query_key_value.bias': [
-        np.zeros((HIDDEN_SIZE * 3,), dtype=np.float32)
+    'model.embed_out.weight': np.zeros((HIDDEN_SIZE, VOCAB_SIZE), dtype=np.float32),
+    'model.gpt_neox.final_layer_norm.bias': np.zeros((HIDDEN_SIZE,), dtype=np.float32),
+    'model.gpt_neox.final_layer_norm.weight': np.zeros((HIDDEN_SIZE,), dtype=np.float32),
+    'model.gpt_neox.layers.input_layernorm.bias': [
+        np.zeros((HIDDEN_SIZE,), dtype=np.float32)
+    ] * LAYER_NUM,
+    'model.gpt_neox.layers.input_layernorm.weight': [
+        np.zeros((HIDDEN_SIZE,), dtype=np.float32)
+    ] * LAYER_NUM,
+    'model.gpt_neox.layers.post_attention_layernorm.bias': [
+        np.zeros((HIDDEN_SIZE,), dtype=np.float32)
+    ] * LAYER_NUM,
+    'model.gpt_neox.layers.post_attention_layernorm.weight': [
+        np.zeros((HIDDEN_SIZE,), dtype=np.float32)
     ] * LAYER_NUM,
     'model.gpt_neox.layers.attention.query_key_value.weight': [
         np.zeros((HIDDEN_SIZE, HIDDEN_SIZE * 3), dtype=np.float32)
@@ -75,12 +88,17 @@ FakeConstDict = {
     ] * LAYER_NUM,
 }
 def layer(hidden_states, past_key_values, past_keys_num, layer_idx, ConstDict):
-    input_layernorm = opset.mvn(hidden_states, axes=[1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/attention/layer_norm')
+    input_layernorm_mvn = opset.mvn(hidden_states, axes=[1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mvn')
+    input_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.bias')
+    input_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.weight')
+    input_layernorm_mul = opset.multiply(input_layernorm_mvn, input_layernorm_weight, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mul')
+    input_layernorm = opset.add(input_layernorm_mul, input_layernorm_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/add')
+
     ######### attention part begin
     query_key_value_bias = opset.constant(ConstDict['model.gpt_neox.layers.attention.query_key_value.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.attention.query_key_value.bias')
     query_key_value_weights = opset.constant(ConstDict['model.gpt_neox.layers.attention.query_key_value.weight'][layer_idx], Type.f32, name='model.gpt_neox.layers.attention.query_key_value.weight')
     qkv_ = opset.matmul(input_layernorm, query_key_value_weights, transpose_a=False, transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/MatMul') #wildcard [?,?,7680]
-    qkv = opset.add(query_key_value_bias, qkv_, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/Add') #wildcard [?,?,7680]
+    qkv = opset.add(qkv_, query_key_value_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/Add') #wildcard [?,?,7680]
 
     # custom op
     attn_output = opset.gpt_neox_attn(qkv, past_key_values, past_keys_num,
@@ -91,22 +109,27 @@ def layer(hidden_states, past_key_values, past_keys_num, layer_idx, ConstDict):
     dense_weight = opset.constant(ConstDict['model.gpt_neox.layers.attention.dense.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.attention.dense.weight')
     dense_ = opset.matmul(attn_output, dense_weight, transpose_a=False,transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/attention/dense/MatMul') #wildcard [?,?,HIDDEN_SIZE]
     dense_bias = opset.constant(ConstDict['model.gpt_neox.layers.attention.dense.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.attention.dense.bias')
-    dense = opset.add(dense_bias, dense_, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/dense/Add') #wildcard [?,?,HIDDEN_SIZE]
+    dense = opset.add(dense_, dense_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/dense/Add') #wildcard [?,?,HIDDEN_SIZE]
     attn_output = dense
     ######### attention part end
     # use_parallel_residual
-    post_attention_layernorm = opset.mvn(attn_output, axes=[1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm')
+    post_attention_layernorm_mvn = opset.mvn(attn_output, axes=[1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/mvn')
+    post_attention_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.post_attention_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.post_attention_layernorm.bias')
+    post_attention_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.post_attention_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.post_attention_layernorm.weight')
+    post_attention_layernorm_mul = opset.multiply(post_attention_layernorm_mvn, post_attention_layernorm_weight, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/mul')
+    post_attention_layernorm = opset.add(post_attention_layernorm_mul, post_attention_layernorm_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/add')
+
     # mlp
     def mlp(states):
         dense_h_to_4h_bias = opset.constant(ConstDict['model.gpt_neox.layers.mlp.dense_h_to_4h.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.mlp.dense_h_to_4h.bias')
         dense_h_to_4h_weight = opset.constant(ConstDict['model.gpt_neox.layers.mlp.dense_h_to_4h.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.mlp.dense_h_to_4h.weight')
-        dense_h_to_4h_ = opset.matmul(states,dense_h_to_4h_weight, transpose_a=False,transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/MatMul') #wildcard [?,?,INTERMEDIATE_SIZE]
-        dense_h_to_4h = opset.add(dense_h_to_4h_bias,dense_h_to_4h_, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/Add') #wildcard [?,?,INTERMEDIATE_SIZE]
+        dense_h_to_4h_ = opset.matmul(states, dense_h_to_4h_weight, transpose_a=False,transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/MatMul') #wildcard [?,?,INTERMEDIATE_SIZE]
+        dense_h_to_4h = opset.add(dense_h_to_4h_, dense_h_to_4h_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/Add') #wildcard [?,?,INTERMEDIATE_SIZE]
         gelu = opset.gelu(dense_h_to_4h, approximation_mode='erf', name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/Gelu')
         dense_4h_to_h_bias = opset.constant(ConstDict['model.gpt_neox.layers.mlp.dense_4h_to_h.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.mlp.dense_4h_to_h.bias')
         dense_4h_to_h_weight = opset.constant(ConstDict['model.gpt_neox.layers.mlp.dense_4h_to_h.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.mlp.dense_4h_to_h.weight')
-        dense_4h_to_h_ = opset.matmul(gelu,dense_4h_to_h_weight, transpose_a=False,transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_4h_to_h/MatMul') #wildcard [?,?,HIDDEN_SIZE]
-        dense_4h_to_h = opset.add(dense_4h_to_h_bias,dense_4h_to_h_, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_4h_to_h/Add') #wildcard [?,?,HIDDEN_SIZE]
+        dense_4h_to_h_ = opset.matmul(gelu, dense_4h_to_h_weight, transpose_a=False,transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_4h_to_h/MatMul') #wildcard [?,?,HIDDEN_SIZE]
+        dense_4h_to_h = opset.add(dense_4h_to_h_, dense_4h_to_h_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_4h_to_h/Add') #wildcard [?,?,HIDDEN_SIZE]
         return dense_4h_to_h
 
     mlp_output = mlp(post_attention_layernorm)
@@ -130,14 +153,86 @@ def create_model(arg):
     for i in range(LAYER_NUM):
         hidden_states = layer(hidden_states, past_key_values, past_keys_num, i, ConstDict)
     # final_layer_norm
-    final_layer_norm = opset.mvn(hidden_states, axes=[1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name='/model/gpt_neox/final_layer_norm')
+    final_layer_norm_mvn = opset.mvn(hidden_states, axes=[1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name='/model/gpt_neox/final_layer_norm/mvn')
+    final_layer_norm_bias = opset.constant(ConstDict['model.gpt_neox.final_layer_norm.bias'], Type.f32)
+    final_layer_norm_weight = opset.constant(ConstDict['model.gpt_neox.final_layer_norm.weight'], Type.f32)
+    final_layer_norm_mul = opset.multiply(final_layer_norm_mvn, final_layer_norm_weight, auto_broadcast='numpy', name='/model/gpt_neox/final_layer_norm/mul')
+    final_layer_norm = opset.add(final_layer_norm_mul, final_layer_norm_bias, auto_broadcast='numpy', name='/model/gpt_neox/final_layer_norm/add')
     # embed_out
-    embed_out_weight = opset.constant(ConstDict['model.gpt_neox.embed_out.weight'], Type.f32)
-    embed_out = opset.matmul(final_layer_norm,embed_out_weight, transpose_a=False,transpose_b=False, name='logits') #wildcard [?,?,VOCAB_SIZE]
+    embed_out_weight = opset.constant(ConstDict['model.embed_out.weight'], Type.f32)
+    embed_out = opset.matmul(final_layer_norm, embed_out_weight, transpose_a=False,transpose_b=False, name='logits') #wildcard [?,?,VOCAB_SIZE]
     embed_out_result = opset.result(embed_out, name='logits/sink_port_0') # [?,?,VOCAB_SIZE]
     return Model([embed_out_result], [input_ids, past_key_values, past_keys_num])
 
+def get_params_from_model(path):
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    import torch
+    tokenizer = AutoTokenizer.from_pretrained(path)
+    model = AutoModelForCausalLM.from_pretrained(path).to('cpu').eval()
+    tokenizer.pad_token = tokenizer.eos_token
+    global LAYER_NUM, HEAD_NUM, SIZE_PER_HEAD, HIDDEN_SIZE, INTERMEDIATE_SIZE, LAYER_NORM_EPS, MAX_POSITION_EMBEDDINGS, ROTARY_EMB_BASE, ROTARY_PCT, USE_PARALLEL_RESIDUAL, VOCAB_SIZE, MAX_SEQ_LEN
+    LAYER_NUM = model.config.num_hidden_layers
+    HEAD_NUM = model.config.num_attention_heads
+    SIZE_PER_HEAD = model.config.hidden_size // model.config.num_attention_heads
+    HIDDEN_SIZE = HEAD_NUM * SIZE_PER_HEAD
+    INTERMEDIATE_SIZE = model.config.intermediate_size
+    LAYER_NORM_EPS = model.config.layer_norm_eps
+    MAX_POSITION_EMBEDDINGS = model.config.max_position_embeddings
+    ROTARY_EMB_BASE = model.config.rotary_emb_base
+    ROTARY_PCT = model.config.rotary_pct
+    USE_PARALLEL_RESIDUAL = model.config.use_parallel_residual
+    VOCAB_SIZE = model.config.vocab_size
+    MAX_SEQ_LEN = 400
+    ConstDict = {
+        'model.gpt_neox.embed_in.weight': model.gpt_neox.embed_in.weight.detach().numpy(),
+        'model.embed_out.weight': model.embed_out.weight.detach().numpy().transpose(),
+        'model.gpt_neox.final_layer_norm.bias': model.gpt_neox.final_layer_norm.bias.detach().numpy(),
+        'model.gpt_neox.final_layer_norm.weight': model.gpt_neox.final_layer_norm.weight.detach().numpy(),
+        'model.gpt_neox.layers.input_layernorm.bias': [
+            l.input_layernorm.bias.detach().numpy() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.input_layernorm.weight': [
+            l.input_layernorm.weight.detach().numpy() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.post_attention_layernorm.bias': [
+            l.post_attention_layernorm.bias.detach().numpy() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.post_attention_layernorm.weight': [
+            l.post_attention_layernorm.weight.detach().numpy() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.attention.query_key_value.bias': [
+            l.attention.query_key_value.bias.detach().numpy() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.attention.query_key_value.weight': [
+            l.attention.query_key_value.weight.detach().numpy().transpose() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.attention.dense.bias': [
+            l.attention.dense.bias.detach().numpy() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.attention.dense.weight': [
+            l.attention.dense.weight.detach().numpy().transpose() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.mlp.dense_h_to_4h.bias': [
+            l.mlp.dense_h_to_4h.bias.detach().numpy() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.mlp.dense_h_to_4h.weight': [
+            l.mlp.dense_h_to_4h.weight.detach().numpy().transpose() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.mlp.dense_4h_to_h.bias': [
+            l.mlp.dense_4h_to_h.bias.detach().numpy() for l in model.gpt_neox.layers
+        ],
+        'model.gpt_neox.layers.mlp.dense_4h_to_h.weight': [
+            l.mlp.dense_4h_to_h.weight.detach().numpy().transpose() for l in model.gpt_neox.layers
+        ],
+    }
+    return ConstDict
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser("")
+    parser.add_argument("org_model_path")
+    args = parser.parse_args()
+
+    dicts = get_params_from_model(args.org_model_path)
     # # org_model_path = "/home/luocheng/models/gpt2_test/origin.xml"
     # # core = Core()
     # # # example of introducing custome (OP) extension
@@ -147,8 +242,8 @@ if __name__ == "__main__":
     # # model = core.read_model(org_model_path)
     # # print("====", org_model_path)
     # # show_io(model)
-    model2 = create_model(FakeConstDict)
+    model2 = create_model(dicts)
+    # model2 = create_model(FakeConstDict)
     print("====", "new model")
     show_io(model2)
     serialize(model2, "./hacked/gpt_neox.xml")
-

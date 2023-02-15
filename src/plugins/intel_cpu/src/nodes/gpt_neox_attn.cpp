@@ -73,8 +73,8 @@ private:
             if (half_rotary_ndims % vec_size != 0) {
                 rotary_last_half(half_rotary_ndims % vec_size);
             }
-            add(reg_q_src, jcp_.hidden_size * 3 * jcp_.src_prc.size());
-            add(reg_k_src, jcp_.hidden_size * 3 * jcp_.src_prc.size());
+            add(reg_q_src, jcp_.size_per_head * 3 * jcp_.src_prc.size());
+            add(reg_k_src, jcp_.size_per_head * 3 * jcp_.src_prc.size());
             add(reg_q_dst, jcp_.q_seq_len * jcp_.size_per_head * jcp_.src_prc.size());
             add(reg_k_dst, jcp_.max_seq_len * jcp_.size_per_head * jcp_.src_prc.size());
         }
@@ -201,7 +201,7 @@ private:
     Reg64 reg_q_dst_aux = rax;
     Reg64 reg_k_dst_aux = rbx;
     Reg64 reg_cos_aux = rsi;
-    Reg64 reg_sin_aux = rdi;
+    Reg64 reg_sin_aux = rbp;
     Reg64 reg_tmp = rdx;
 
     Reg64 reg_params = abi_param1;
@@ -273,7 +273,7 @@ void GPTNeoxAttn::prepareParams() {
     const auto seq_len = qkv_dims[1];
 
     // k/v offsets in past keys, past keys' shape: [layerNum, 2, batch, headNum, maxSeqLen, sizePerHead]
-    layerOffsetInPastKey = dataTypeSize * (layerNum * 2 * batch * headNum * maxSeqLen * sizePerHead);
+    layerOffsetInPastKey = dataTypeSize * (curLayerNum * 2 * batch * headNum * maxSeqLen * sizePerHead);
     layerOffsetInPastValue = layerOffsetInPastKey + dataTypeSize * (1 * batch * headNum * maxSeqLen * sizePerHead);
 
     // init rotary embeddings
@@ -369,8 +369,8 @@ void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
 //                     q_dst_seq[i] = q_src[i] * cos[i] + q_src[i - halfRotaryNdims] * sin[i];
 //                     k_dst_seq[i] = k_src[i] * cos[i] + k_src[i - halfRotaryNdims] * sin[i];
 //                 }
-//                 q_src += hiddenSize * 3 * dataTypeSize;
-//                 k_src += hiddenSize * 3 * dataTypeSize;
+//                 q_src += sizePerHead * 3 * dataTypeSize;
+//                 k_src += sizePerHead * 3 * dataTypeSize;
 //                 q_dst_seq += q_seq_len * sizePerHead * dataTypeSize;
 //                 k_dst_seq += maxSeqLen * sizePerHead * dataTypeSize;
 //             }
@@ -488,6 +488,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
         };
         mha = std::make_shared<gpt::MHAGPT>();
         mha->create(param);
+        getSelectedPrimitiveDescriptor()->setImplementationType(mha->get_impl_type());
     }
     auto head_stride_in_kv = sizePerHead * maxSeqLen;
     auto batch_stride_in_kv = head_stride_in_kv * headNum;
@@ -500,9 +501,10 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
         queryTranspose.data(), past_keys + layerOffsetInPastKey, past_keys + layerOffsetInPastValue,
         &attnMasks[0][0],
         dst_data,
-        sizePerHead, sizePerHead * headNum,
-        head_stride_in_kv, batch_stride_in_kv,
-        attnMasks[0].size(),
+        sizePerHead, sizePerHead * headNum,     // q stride
+        head_stride_in_kv, batch_stride_in_kv,  // kv stride
+        attnMasks[0].size(),                    // attn_mask stride
+        sizePerHead, hiddenSize * seq_len,      // output stride
     };
 
     mha->exec(param);
