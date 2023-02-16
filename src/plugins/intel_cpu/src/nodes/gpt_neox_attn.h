@@ -78,21 +78,15 @@ private:
     size_t headNum = 32;
     size_t sizePerHead = 80;
     size_t hiddenSize = 32 * 80;
-    size_t intermediateSize = 10240;
-    float layerNormEps = 1e-5;
     size_t maxPositionEmbeddings = 2048;
     size_t rotaryEmbBase = 10000;
     float rotaryPct = 0.25;
-    bool useParallelResidual = true;
     size_t vocabSize = 50304;
     size_t maxSeqLen = 400;
-    size_t curLayerNum = 0;
     float normalFactor = 0.0f;
 
     InferenceEngine::Precision dataPrecision;
     int64_t dataTypeSize = 1;
-    int64_t layerOffsetInPastKey = 0;
-    int64_t layerOffsetInPastValue = 0;
     int rotaryNdims = 0;
     // mha kernels, key = batch(high 32bit) + value length(low 32bit, including current and past)
     std::unordered_map<size_t, std::shared_ptr<gpt::MHAGPT>> mhaGPTs;
@@ -101,10 +95,10 @@ private:
     std::vector<std::vector<float>> sinCached;
     std::vector<uint8_t> queryTranspose;
     std::unique_ptr<jit_uni_rotary_kernel> rotaryKernel;
+    std::vector<uint8_t> pastKeyValues;
 
     static constexpr size_t IN_QKV           = 0;
-    static constexpr size_t IN_PAST_KEYS     = 1;
-    static constexpr size_t IN_PAST_KEYS_NUM = 2;
+    static constexpr size_t IN_PAST_KEYS_NUM = 1;
 };
 
 }   // namespace node

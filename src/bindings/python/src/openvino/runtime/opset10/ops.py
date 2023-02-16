@@ -176,42 +176,31 @@ def unique(
 @nameable_op
 def gpt_neox_attn(
     qkv: NodeInput,
-    past_keys: NodeInput,
     past_keys_num: NodeInput,
     layer_num,
     head_num,
     size_per_head,
     hidden_size,
-    intermediate_size,
-    layer_norm_eps,
     max_position_embeddings,
     rotary_emb_base,
     rotary_pct,
-    use_parallel_residual,
-    vocab_size,
     max_seq_len,
-    cur_layer_num,
     name: Optional[str] = None,
 ) -> Node:
     """ TODO
     :param name:                (Optional) A name for the output node. Default value: None.
     :return: Node representing gpt_neox_attn operation.
     """
-    inputs = as_nodes(qkv, past_keys, past_keys_num)
+    inputs = as_nodes(qkv, past_keys_num)
 
     attributes = {
         "layer_num": layer_num,
         "head_num": head_num,
         "size_per_head": size_per_head,
         "hidden_size": hidden_size,
-        "intermediate_size": intermediate_size,
-        "layer_norm_eps": layer_norm_eps,
         "max_position_embeddings": max_position_embeddings,
         "rotary_emb_base": rotary_emb_base,
         "rotary_pct": rotary_pct,
-        "use_parallel_residual": use_parallel_residual,
-        "vocab_size": vocab_size,
         "max_seq_len": max_seq_len,
-        "cur_layer_num": cur_layer_num,
     }
     return _get_node_factory_opset10().create("GPTNeoxAttn", inputs, attributes)

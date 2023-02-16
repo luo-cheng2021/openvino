@@ -22,20 +22,15 @@ public:
     ///
     /// \param      data   Input tensor.
     ///
-    GPTNeoxAttn(const Output<Node>& qkv, const Output<Node>& past_keys, const Output<Node>& past_keys_num,
+    GPTNeoxAttn(const Output<Node>& qkv, const Output<Node>& past_keys_num,
         int layer_num = 32,
         int head_num = 32,
         int size_per_head = 80,
         int hidden_size = 32 * 80,
-        int intermediate_size = 10240,
-        float layer_norm_eps = 1e-5,
         int max_position_embeddings = 2048,
         int rotary_emb_base = 10000,
         float rotary_pct = 0.25,
-        bool use_parallel_residual = true,
-        int vocab_size = 50304,
-        int max_seq_len = 400,
-        int cur_layer_num = 0);
+        int max_seq_len = 400);
 
     bool visit_attributes(AttributeVisitor& visitor) override;
     void validate_and_infer_types() override;
@@ -45,15 +40,10 @@ public:
     int m_head_num = 32;
     int m_size_per_head = 80;
     int m_hidden_size = 32 * 80;
-    int m_intermediate_size = 10240;
-    float m_layer_norm_eps = 1e-5;
     int m_max_position_embeddings = 2048;
     int m_rotary_emb_base = 10000;
     float m_rotary_pct = 0.25;
-    bool m_use_parallel_residual = true;
-    int m_vocab_size = 50304;
     int m_max_seq_len = 400;
-    int m_cur_layer_num = 0;
 };
 }  // namespace v10
 }  // namespace op

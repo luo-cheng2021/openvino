@@ -238,15 +238,10 @@ GPTNeoxAttn::GPTNeoxAttn(const std::shared_ptr<ov::Node>& op, const GraphContext
     headNum = attn_op->m_head_num;
     sizePerHead = attn_op->m_size_per_head;
     hiddenSize = attn_op->m_hidden_size;
-    intermediateSize = attn_op->m_intermediate_size;
-    layerNormEps = attn_op->m_layer_norm_eps;
     maxPositionEmbeddings = attn_op->m_max_position_embeddings;
     rotaryEmbBase = attn_op->m_rotary_emb_base;
     rotaryPct = attn_op->m_rotary_pct;
-    useParallelResidual = attn_op->m_use_parallel_residual;
-    vocabSize = attn_op->m_vocab_size;
     maxSeqLen = attn_op->m_max_seq_len;
-    curLayerNum = attn_op->m_cur_layer_num;
     normalFactor = 1.0f / sqrtf(static_cast<float>(sizePerHead));
 
     rotaryNdims = static_cast<int>(sizePerHead * rotaryPct);
@@ -257,7 +252,6 @@ void GPTNeoxAttn::initSupportedPrimitiveDescriptors() {
     dataTypeSize = dataPrecision.size();
 
     addSupportedPrimDesc({{LayoutType::ncsp, dataPrecision},
-                          {LayoutType::ncsp, dataPrecision},
                           {LayoutType::ncsp, Precision::I32}},
                          {{LayoutType::ncsp, dataPrecision}},
                           impl_desc_type::ref_any);
@@ -272,10 +266,6 @@ void GPTNeoxAttn::prepareParams() {
     const auto batch = qkv_dims[0];
     const auto seq_len = qkv_dims[1];
 
-    // k/v offsets in past keys, past keys' shape: [layerNum, 2, batch, headNum, maxSeqLen, sizePerHead]
-    layerOffsetInPastKey = dataTypeSize * (curLayerNum * 2 * batch * headNum * maxSeqLen * sizePerHead);
-    layerOffsetInPastValue = layerOffsetInPastKey + dataTypeSize * (1 * batch * headNum * maxSeqLen * sizePerHead);
-
     // init rotary embeddings
     initRotery(maxPositionEmbeddings);
     // attention_mask shape: [batch, seq_len/maxSeqLen], real length = seq_len + past_key[-2]
@@ -287,6 +277,11 @@ void GPTNeoxAttn::prepareParams() {
     if (queryTranspose.size() < batch * seq_len * hiddenSize * dataTypeSize) {
         queryTranspose.resize(batch * seq_len * hiddenSize * dataTypeSize);
     }
+    // memory for key/value past buffers, shape: [2, batch, headNum, maxSeqLen, sizePerHead]
+    if (pastKeyValues.size() < 2 * batch * headNum * maxSeqLen * sizePerHead * dataTypeSize) {
+        pastKeyValues.resize(2 * batch * headNum * maxSeqLen * sizePerHead * dataTypeSize);
+    }
+
     {
         jit_rotary_compile_params jcp;
         jcp.src_prc = dataPrecision;
@@ -442,14 +437,15 @@ static void MemcpyStride(void* dst, void* src, size_t copy_head_size, size_t hea
 void GPTNeoxAttn::execute(dnnl::stream strm) {
     // [batch, seq_len, (num_heads * 3 * head_size)]
     auto* qkv = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
-    // [layer_num, 2, batch, num_heads, seq_len, head_size]
-    auto* past_keys = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_PAST_KEYS)->getMemoryPtr()->GetPtr());
+    // [2, batch, num_heads, maxSeqLen, head_size]
+    auto* past_keys = pastKeyValues.data();
     const int* past_keys_num = reinterpret_cast<const int*>(getParentEdgeAt(IN_PAST_KEYS_NUM)->getMemoryPtr()->GetPtr());
     auto* dst_data = reinterpret_cast<uint8_t*>(getChildEdgeAt(0)->getMemoryPtr()->GetPtr());
     const auto& qkv_dims = getParentEdgeAt(IN_QKV)->getMemoryPtr()->getStaticDims();
     const auto batch = qkv_dims[0];
     const auto seq_len = qkv_dims[1];
     const auto new_seq_offset = static_cast<size_t>(past_keys_num[0]);
+    auto layer_offset_pastvalue = pastKeyValues.size() / 2;
 
     // the sentence is longer than maxSeqLen
     if (seq_len + new_seq_offset > cosCached.size()) {
@@ -462,8 +458,8 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     auto query = qkv;                       // qkv[..., : self.head_size].permute(0, 2, 1, 3)
     auto key = qkv + sizePerHead;           // qkv[..., self.head_size : 2 * self.head_size].permute(0, 2, 1, 3)
     auto value = qkv + 2 * sizePerHead;     // qkv[..., 2 * self.head_size :].permute(0, 2, 1, 3)
-    auto new_past_key_ptr = past_keys + layerOffsetInPastKey + dataTypeSize * new_seq_offset * sizePerHead;
-    auto new_past_value_ptr = past_keys + layerOffsetInPastValue + dataTypeSize * new_seq_offset * sizePerHead;
+    auto new_past_key_ptr = past_keys + dataTypeSize * new_seq_offset * sizePerHead;
+    auto new_past_value_ptr = new_past_key_ptr + layer_offset_pastvalue;
     // first token will write to pastKeys offset 0
     bool first_token = new_seq_offset == 0;
     // transpose + rotary embbeding:
@@ -498,7 +494,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     // attention_mask: [batch, 1, 1, key_seq_len]
     // attn_output: [batch, query_seq_len, num_heads * head_size]
     gpt::MHAGPT::ExecParam param = {
-        queryTranspose.data(), past_keys + layerOffsetInPastKey, past_keys + layerOffsetInPastValue,
+        queryTranspose.data(), past_keys, past_keys + layer_offset_pastvalue,
         &attnMasks[0][0],
         dst_data,
         sizePerHead, sizePerHead * headNum,     // q stride
