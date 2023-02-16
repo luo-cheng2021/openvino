@@ -31,7 +31,7 @@ namespace gpt {
 //          |       /
 //       Multiply: [batch, num_heads, query_seq_len, key_seq_len]
 //          |
-//          |   causal_mask: [batch, num_heads, query_seq_len, key_seq_len]
+//          |   causal_mask: [1, 1, query_seq_len, key_seq_len]
 //          |       /
 //       Select(only for 1x300): [batch, num_heads, query_seq_len, key_seq_len]
 //          |

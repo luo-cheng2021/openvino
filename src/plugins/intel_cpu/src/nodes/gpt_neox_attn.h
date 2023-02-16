@@ -90,12 +90,12 @@ private:
     int rotaryNdims = 0;
     // mha kernels, key = batch(high 32bit) + value length(low 32bit, including current and past)
     std::unordered_map<size_t, std::shared_ptr<gpt::MHAGPT>> mhaGPTs;
-    std::vector<std::vector<float>> attnMasks;
-    std::vector<std::vector<float>> cosCached;
-    std::vector<std::vector<float>> sinCached;
+    std::vector<float> attnMasks;
+    std::vector<float> cosCached;
+    std::vector<float> sinCached;
     std::vector<uint8_t> queryTranspose;
     std::unique_ptr<jit_uni_rotary_kernel> rotaryKernel;
-    std::vector<uint8_t> pastKeyValues;
+    size_t pastKVBufferSize = 0;
 
     static constexpr size_t IN_QKV           = 0;
     static constexpr size_t IN_PAST_KEYS_NUM = 1;

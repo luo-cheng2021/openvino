@@ -212,6 +212,26 @@ private:
     const std::vector<size_t> pool_aux_vmm_idxs = { 6 };
 };
 
+class GlobalContext {
+public:
+    static GlobalContext& getInstance() {
+        static GlobalContext instance;
+        return instance;
+    }
+
+    std::vector<uint8_t>& getOrCreateStore(const std::string& key, size_t new_size) {
+        auto& store = simpleStore[key];
+        if (store.size() < new_size) {
+            std::vector<uint8_t> new_store(new_size);
+            memcpy(new_store.data(), store.data(), store.size());
+            store = std::move(new_store);
+        }
+        return store;
+    }
+
+private:
+    std::unordered_map<std::string, std::vector<uint8_t>> simpleStore;
+};
 
 bool GPTNeoxAttn::isSupportedOperation(const std::shared_ptr<const ov::Node>& op, std::string& errorMessage) noexcept {
     try {
@@ -269,18 +289,13 @@ void GPTNeoxAttn::prepareParams() {
     // init rotary embeddings
     initRotery(maxPositionEmbeddings);
     // attention_mask shape: [batch, seq_len/maxSeqLen], real length = seq_len + past_key[-2]
-    attnMasks.resize(batch);
-    for (size_t i = 0; i < batch; i++) {
-        attnMasks[i].resize(maxSeqLen, 0.f);
-    }
+    attnMasks.resize(batch * maxSeqLen, 0.0f);
     // memory for query transpose destination
     if (queryTranspose.size() < batch * seq_len * hiddenSize * dataTypeSize) {
         queryTranspose.resize(batch * seq_len * hiddenSize * dataTypeSize);
     }
-    // memory for key/value past buffers, shape: [2, batch, headNum, maxSeqLen, sizePerHead]
-    if (pastKeyValues.size() < 2 * batch * headNum * maxSeqLen * sizePerHead * dataTypeSize) {
-        pastKeyValues.resize(2 * batch * headNum * maxSeqLen * sizePerHead * dataTypeSize);
-    }
+    // memory size for key/value past buffers, shape: [2, batch, headNum, maxSeqLen, sizePerHead]
+    pastKVBufferSize = 2 * batch * headNum * maxSeqLen * sizePerHead * dataTypeSize;
 
     {
         jit_rotary_compile_params jcp;
@@ -319,27 +334,24 @@ void GPTNeoxAttn::initRotery(size_t max_seq_len) {
     for (size_t i = 0; i < max_seq_len; i++) {
         t.push_back(static_cast<float>(i));
     }
-    cosCached.resize(max_seq_len * 2);
-    sinCached.resize(max_seq_len * 2);
-    for (size_t i = 0; i < cosCached.size(); i++) {
-        cosCached[i].resize(rotaryNdims / 2 * 2);
-        sinCached[i].resize(rotaryNdims / 2 * 2);
-        for (size_t j = 0; j < rotaryNdims / 2; j++) {
-            cosCached[i][j] = cosf(t[i] * inv_freq[j]);
-            cosCached[i][j * 2] = cosf(t[i] * inv_freq[j]);
-            sinCached[i][j] = sinf(t[i] * inv_freq[j]);
-            sinCached[i][j * 2] = sinf(t[i] * inv_freq[j]);
+    auto width = rotaryNdims / 2 * 2;
+    auto height = max_seq_len * 2;
+    cosCached.resize(height * width);
+    sinCached.resize(height * width);
+    for (size_t i = 0; i < height; i++) {
+        for (size_t j = 0; j < width / 2; j++) {
+            cosCached[i * width + j] = cosf(t[i] * inv_freq[j]);
+            cosCached[i * width + j * 2] = cosf(t[i] * inv_freq[j]);
+            sinCached[i * width + j] = sinf(t[i] * inv_freq[j]);
+            sinCached[i * width + j * 2] = sinf(t[i] * inv_freq[j]);
         }
     }
 }
 
 void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
-    std::vector<std::vector<float>> new_attn_masks;
-    new_attn_masks.resize(batch);
-    for (size_t i = 0; i < batch; i++) {
-        new_attn_masks[i].resize(max_seq_len * 2, 0.f);
-        memcpy(&new_attn_masks[i][0], &attnMasks[i][0], attnMasks[i].size() * sizeof(float));
-    }
+    std::vector<float> new_attn_masks;
+    new_attn_masks.resize(batch * max_seq_len * 2, 0.0f);
+    memcpy(&new_attn_masks[0], &attnMasks[0], attnMasks.size() * sizeof(float));
     attnMasks = std::move(new_attn_masks);
 }
 
@@ -437,15 +449,18 @@ static void MemcpyStride(void* dst, void* src, size_t copy_head_size, size_t hea
 void GPTNeoxAttn::execute(dnnl::stream strm) {
     // [batch, seq_len, (num_heads * 3 * head_size)]
     auto* qkv = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
-    // [2, batch, num_heads, maxSeqLen, head_size]
-    auto* past_keys = pastKeyValues.data();
     const int* past_keys_num = reinterpret_cast<const int*>(getParentEdgeAt(IN_PAST_KEYS_NUM)->getMemoryPtr()->GetPtr());
     auto* dst_data = reinterpret_cast<uint8_t*>(getChildEdgeAt(0)->getMemoryPtr()->GetPtr());
     const auto& qkv_dims = getParentEdgeAt(IN_QKV)->getMemoryPtr()->getStaticDims();
     const auto batch = qkv_dims[0];
     const auto seq_len = qkv_dims[1];
-    const auto new_seq_offset = static_cast<size_t>(past_keys_num[0]);
-    auto layer_offset_pastvalue = pastKeyValues.size() / 2;
+    // lower 16 bit means the number of past keys, higher 16 bit means the model id
+    const auto new_seq_offset = static_cast<size_t>(past_keys_num[0]) & 0xffff;
+    assert(new_seq_offset < maxSeqLen);
+    // usage: each 1x300 sub model and 1x1 sub model will share the same model id
+    const auto model_id = static_cast<size_t>(past_keys_num[0]) >> 16;
+    // [2, batch, num_heads, maxSeqLen, head_size]
+    auto* past_keys = GlobalContext::getInstance().getOrCreateStore(getName() + std::to_string(model_id), pastKVBufferSize).data();
 
     // the sentence is longer than maxSeqLen
     if (seq_len + new_seq_offset > cosCached.size()) {
@@ -459,14 +474,14 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     auto key = qkv + sizePerHead;           // qkv[..., self.head_size : 2 * self.head_size].permute(0, 2, 1, 3)
     auto value = qkv + 2 * sizePerHead;     // qkv[..., 2 * self.head_size :].permute(0, 2, 1, 3)
     auto new_past_key_ptr = past_keys + dataTypeSize * new_seq_offset * sizePerHead;
-    auto new_past_value_ptr = new_past_key_ptr + layer_offset_pastvalue;
+    auto new_past_value_ptr = new_past_key_ptr + pastKVBufferSize / 2;
     // first token will write to pastKeys offset 0
     bool first_token = new_seq_offset == 0;
     // transpose + rotary embbeding:
     // transpose: [batch, seq_len, num_attention_heads, 3 * head_size] -->
     //          3 [batch, num_attention_heads, seq_len, head_size]
     // rotary embbeding: part of key will write to past_key, part of query will write to tempory buffer
-    applyRotaryPosEmb(query, key, queryTranspose.data(), new_past_key_ptr, &cosCached[0][0], &sinCached[0][0], batch, seq_len, new_seq_offset);
+    applyRotaryPosEmb(query, key, queryTranspose.data(), new_past_key_ptr, &cosCached[0], &sinCached[0], batch, seq_len, new_seq_offset);
     // query pass part(temp buffer): query = torch.cat((query, query_pass), dim=-1)
     MemcpyStride(queryTranspose.data() + rotaryNdims * dataTypeSize, query + rotaryNdims * dataTypeSize, sizePerHead - rotaryNdims, sizePerHead, headNum,
         seq_len, seq_len, batch, dataTypeSize);
@@ -494,12 +509,12 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     // attention_mask: [batch, 1, 1, key_seq_len]
     // attn_output: [batch, query_seq_len, num_heads * head_size]
     gpt::MHAGPT::ExecParam param = {
-        queryTranspose.data(), past_keys, past_keys + layer_offset_pastvalue,
-        &attnMasks[0][0],
+        queryTranspose.data(), past_keys, past_keys + pastKVBufferSize / 2,
+        &attnMasks[0],
         dst_data,
         sizePerHead, sizePerHead * headNum,     // q stride
         head_stride_in_kv, batch_stride_in_kv,  // kv stride
-        attnMasks[0].size(),                    // attn_mask stride
+        maxSeqLen,                              // attn_mask stride
         sizePerHead, hiddenSize * seq_len,      // output stride
     };
 
