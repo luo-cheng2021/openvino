@@ -1000,7 +1000,7 @@ void MHAGPT::Impl::create(const CreateParam& param) {
 
     auto brg0Prc = param.qkv_precision;
     brg0VnniFactor = 4 / brg0Prc.size();
-    bool brg0WithAMX = isAMXSupported && brg0Prc != Precision::FP32 && (K0_head_size % brg0VnniFactor == 0) && (N0_key_seq_len % brg0VnniFactor == 0);
+    bool brg0WithAMX = isAMXSupported && brg0Prc != Precision::FP32 && (K0_head_size % brg0VnniFactor == 0);// && (N0_key_seq_len % brg0VnniFactor == 0);
 
     N0_blk = brg0Prc == Precision::FP32 ? N0_key_seq_len :
              brg0Prc == Precision::BF16 ? 32 : 64;
@@ -1257,8 +1257,6 @@ void MHAGPT::Impl::create(const CreateParam& param) {
 template<typename srcT, typename dstT>
 static void reorder2D(const srcT* pin, dstT* pout, const std::vector<size_t>& dimsOut,
                const std::vector<size_t>& stridesOut, const std::vector<size_t>& stridesIn) {
-                // k: [batch, num_heads, key_seq_len, head_size]
-            // k': [batch, num_heads, head_size, key_seq_len]
     for (int i0 = 0; i0 < dimsOut[0]; i0++) {
         for (int i1 = 0; i1 < dimsOut[1]; i1++) {
             pout[i0 * stridesOut[0] + i1 * stridesOut[1]] = static_cast<dstT>(pin[i0 * stridesIn[0] + i1 * stridesIn[1]]);
@@ -1286,7 +1284,6 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
     uint8_t* pout = param.attn_output;
 
     auto outPrcSize = _create_param.qkv_precision.size();
-
     parallel_for2d(dimsMatMul0Out[0], dimsMatMul0Out[1], [&](size_t i0, size_t i1) {
         size_t threadNum = parallel_get_thread_num();
 
@@ -1436,7 +1433,7 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
 
             auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : mulScales.data());
             // loop along K dimension
-            auto valid_softmax_items = _create_param.first_valid_softmax_items;
+            auto valid_softmax_items = _create_param.first_valid_softmax_items + mb * M_blk;
             for (size_t m = 0; m < cur_M_blk; m++) {
                 jit_mul_add_softmax_call_args call_args;
                 call_args.p_in0 = pMatMul0Out + m * N0_key_seq_len * accPrecision0.size();

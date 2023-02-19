@@ -49,9 +49,9 @@ private:
         mov(reg_k_dst, ptr[reg_params + GET_OFF(k_dst)]);
 
         uni_vpxor(vmm_q_src, vmm_q_src, vmm_q_src);
-        uni_vpxor(vmm_k_src, vmm_k_src, vmm_q_src);
-        uni_vpxor(vmm_cos, vmm_cos, vmm_q_src);
-        uni_vpxor(vmm_sin, vmm_sin, vmm_q_src);
+        uni_vpxor(vmm_k_src, vmm_k_src, vmm_k_src);
+        uni_vpxor(vmm_cos, vmm_cos, vmm_cos);
+        uni_vpxor(vmm_sin, vmm_sin, vmm_sin);
 
         auto half_rotary_ndims = jcp_.rotary_ndims / 2;
         for (size_t k = 0; k < jcp_.head_num; k++) {
@@ -328,10 +328,10 @@ void GPTNeoxAttn::prepareParams() {
 void GPTNeoxAttn::initRotery(size_t max_seq_len) {
     std::vector<float> inv_freq;
     for (size_t i = 0; i < rotaryNdims; i += 2) {
-        inv_freq.push_back(1.0f / (powf(rotaryEmbBase, i / rotaryNdims)));
+        inv_freq.push_back(1.0f / (powf(rotaryEmbBase, static_cast<float>(i) / rotaryNdims)));
     }
     std::vector<float> t;
-    for (size_t i = 0; i < max_seq_len; i++) {
+    for (size_t i = 0; i < max_seq_len * 2; i++) {
         t.push_back(static_cast<float>(i));
     }
     auto width = rotaryNdims / 2 * 2;
@@ -341,9 +341,9 @@ void GPTNeoxAttn::initRotery(size_t max_seq_len) {
     for (size_t i = 0; i < height; i++) {
         for (size_t j = 0; j < width / 2; j++) {
             cosCached[i * width + j] = cosf(t[i] * inv_freq[j]);
-            cosCached[i * width + j * 2] = cosf(t[i] * inv_freq[j]);
+            cosCached[i * width + j + width / 2] = cosf(t[i] * inv_freq[j]);
             sinCached[i * width + j] = sinf(t[i] * inv_freq[j]);
-            sinCached[i * width + j * 2] = sinf(t[i] * inv_freq[j]);
+            sinCached[i * width + j + width / 2] = sinf(t[i] * inv_freq[j]);
         }
     }
 }
@@ -470,9 +470,9 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
 
     // [batch, seq_len, (num_heads * 3 * head_size)]
     //   --> [batch, seq_len, num_heads, 3 * head_size]
-    auto query = qkv;                       // qkv[..., : self.head_size].permute(0, 2, 1, 3)
-    auto key = qkv + sizePerHead;           // qkv[..., self.head_size : 2 * self.head_size].permute(0, 2, 1, 3)
-    auto value = qkv + 2 * sizePerHead;     // qkv[..., 2 * self.head_size :].permute(0, 2, 1, 3)
+    auto query = qkv;                                      // qkv[..., : self.head_size].permute(0, 2, 1, 3)
+    auto key = qkv + sizePerHead * dataTypeSize;           // qkv[..., self.head_size : 2 * self.head_size].permute(0, 2, 1, 3)
+    auto value = qkv + 2 * sizePerHead * dataTypeSize;     // qkv[..., 2 * self.head_size :].permute(0, 2, 1, 3)
     auto new_past_key_ptr = past_keys + dataTypeSize * new_seq_offset * sizePerHead;
     auto new_past_value_ptr = new_past_key_ptr + pastKVBufferSize / 2;
     // first token will write to pastKeys offset 0
@@ -495,12 +495,15 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     auto& mha = mhaGPTs[(static_cast<size_t>(batch) << 32) + static_cast<size_t>(new_seq_offset + seq_len)];
     if (!mha) {
         gpt::MHAGPT::CreateParam param = {
-            batch, headNum, seq_len, sizePerHead, new_seq_offset + 1, normalFactor, dataPrecision, first_token, new_seq_offset + 1
+            batch, headNum, seq_len, sizePerHead,
+            new_seq_offset + seq_len, normalFactor, dataPrecision, first_token, new_seq_offset + 1
         };
         mha = std::make_shared<gpt::MHAGPT>();
         mha->create(param);
         getSelectedPrimitiveDescriptor()->setImplementationType(mha->get_impl_type());
     }
+    auto head_stride_in_q = sizePerHead * seq_len;
+    auto batch_stride_in_q = head_stride_in_q * headNum;
     auto head_stride_in_kv = sizePerHead * maxSeqLen;
     auto batch_stride_in_kv = head_stride_in_kv * headNum;
     // q: [batch, num_heads, query_seq_len, head_size]
@@ -512,7 +515,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
         queryTranspose.data(), past_keys, past_keys + pastKVBufferSize / 2,
         &attnMasks[0],
         dst_data,
-        sizePerHead, sizePerHead * headNum,     // q stride
+        head_stride_in_q, batch_stride_in_q,    // q stride
         head_stride_in_kv, batch_stride_in_kv,  // kv stride
         maxSeqLen,                              // attn_mask stride
         sizePerHead, hiddenSize * seq_len,      // output stride

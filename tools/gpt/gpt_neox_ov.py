@@ -114,7 +114,7 @@ def layer(hidden_states, past_keys_num, layer_idx, ConstDict):
     ######### attention part end
     # use_parallel_residual
     assert(USE_PARALLEL_RESIDUAL == True)
-    post_attention_layernorm_mvn = opset.mvn(attn_output, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/mvn')
+    post_attention_layernorm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/mvn')
     post_attention_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.post_attention_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.post_attention_layernorm.bias')
     post_attention_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.post_attention_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.post_attention_layernorm.weight')
     post_attention_layernorm_mul = opset.multiply(post_attention_layernorm_mvn, post_attention_layernorm_weight, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/mul')
