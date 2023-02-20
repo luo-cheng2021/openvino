@@ -181,9 +181,10 @@ void Engine::ApplyPerformanceHints(std::map<std::string, std::string> &config, c
         default:
             isaSpecificThreshold = 1.0f;
         }
+        isaSpecificThreshold = 4.0f;
         // the more "capable" the CPU in general, the more streams we may want to keep to keep it utilized
         const float memThresholdAssumeLimitedForISA = ov::MemBandwidthPressure::LIMITED/isaSpecificThreshold;
-        const float L2_cache_size = dnnl::utils::get_cache_size(2 /*level*/, true /*per core */);
+        const float L2_cache_size = 2 * 1024 * 1024; // dnnl::utils::get_cache_size(2 /*level*/, true /*per core */);
         ov::MemBandwidthPressure networkToleranceForLowCache = ov::MemBandwidthPressureTolerance(
             ngraphFunc,
             L2_cache_size, memThresholdAssumeLimitedForISA);
@@ -211,6 +212,10 @@ void Engine::ApplyPerformanceHints(std::map<std::string, std::string> &config, c
                                          engConfig.streamExecutorConfig._enable_hyper_thread);
             streams_info.num_streams = std::max(default_streams.num_streams, streams_info.num_streams);
         }
+        std::cout << "max_mem_tolerance " << networkToleranceForLowCache.max_mem_tolerance <<
+            " memThresholdAssumeLimitedForISA " << memThresholdAssumeLimitedForISA <<
+            " num_streams " << streams_info.num_streams << " ratio_compute_convs " << networkToleranceForLowCache.ratio_compute_convs <<
+            " ratio_compute_deconvs " << networkToleranceForLowCache.ratio_compute_deconvs << " xxxyzend\n";
         auto num_requests = config.find(CONFIG_KEY(PERFORMANCE_HINT_NUM_REQUESTS));
         if (num_requests != config.end()) {  // arrived with config to the LoadNetwork (and thus higher pri)
             auto val = PerfHintsConfig::CheckPerformanceHintRequestValue(num_requests->second);
@@ -275,13 +280,13 @@ Engine::StreamCfg Engine::GetNumStreams(InferenceEngine::IStreamsExecutor::Threa
                                         int stream_mode,
                                         const bool enable_hyper_thread) const {
     const int sockets = static_cast<int>(getAvailableNUMANodes().size());
-    const int num_cores =
-        thread_binding_type == InferenceEngine::IStreamsExecutor::ThreadBindingType::HYBRID_AWARE
-            ? parallel_get_max_threads()
-            : (sockets == 1 ? (enable_hyper_thread ? parallel_get_max_threads() : getNumberOfCPUCores())
-                            : getNumberOfCPUCores());
-    const int num_cores_phy = getNumberOfCPUCores();
-    const int num_big_cores_phy = getNumberOfCPUCores(true);
+    const int num_cores = 56;
+        // thread_binding_type == InferenceEngine::IStreamsExecutor::ThreadBindingType::HYBRID_AWARE
+        //     ? parallel_get_max_threads()
+        //     : (sockets == 1 ? (enable_hyper_thread ? parallel_get_max_threads() : getNumberOfCPUCores())
+        //                     : getNumberOfCPUCores());
+    const int num_cores_phy = 56; //getNumberOfCPUCores();
+    const int num_big_cores_phy = 56; //getNumberOfCPUCores(true);
     const int num_small_cores = num_cores_phy - num_big_cores_phy;
     const int num_big_cores = num_cores > num_cores_phy ? num_big_cores_phy * 2 : num_big_cores_phy;
     StreamCfg stream_cfg = {0};
