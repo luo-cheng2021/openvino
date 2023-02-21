@@ -11,6 +11,7 @@
 #include <cpu/x64/jit_generator.hpp>
 #include "emitters/jit_dnnl_emitters.hpp"
 #include "emitters/jit_load_store_emitters.hpp"
+#include <fenv.h>
 
 using namespace InferenceEngine;
 using namespace ov::intel_cpu;
@@ -447,7 +448,27 @@ static void MemcpyStride(void* dst, void* src, size_t copy_head_size, size_t hea
 }
 
 void GPTNeoxAttn::execute(dnnl::stream strm) {
+    feenableexcept(FE_INVALID | FE_DIVBYZERO);
+
     // [batch, seq_len, (num_heads * 3 * head_size)]
+    // {
+    //     auto* qkv = reinterpret_cast<float*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
+    //     static int layer = 0;
+    //     char name[256];
+    //     snprintf(name, sizeof(name), "ov_%d.txt", layer++);
+    //     FILE* f = ::fopen(name, "w");
+    //     int n = 1;
+    //     for (size_t i = 0; i < 300; i++) {
+    //         for (size_t j = 0; j < headNum * 3 * sizePerHead; j++, qkv++) {
+    //             fprintf(f, "%.6f ", qkv[0]);
+    //             if (n++ % 32 == 0) {
+    //                 fputs("\n", f);
+    //                 n = 1;
+    //             }
+    //         }
+    //     }
+    //     fclose(f);
+    // }
     auto* qkv = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
     const int* past_keys_num = reinterpret_cast<const int*>(getParentEdgeAt(IN_PAST_KEYS_NUM)->getMemoryPtr()->GetPtr());
     auto* dst_data = reinterpret_cast<uint8_t*>(getChildEdgeAt(0)->getMemoryPtr()->GetPtr());
@@ -461,6 +482,21 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     const auto model_id = static_cast<size_t>(past_keys_num[0]) >> 16;
     // [2, batch, num_heads, maxSeqLen, head_size]
     auto* past_keys = GlobalContext::getInstance().getOrCreateStore(getName() + std::to_string(model_id), pastKVBufferSize).data();
+    // {
+    //     for (size_t i = 0; i < 2; i++) {
+    //         auto* p = reinterpret_cast<float*>(past_keys) + batch * headNum * maxSeqLen * sizePerHead * i;
+    //         for (size_t j = 0; j < batch; j++) {
+    //             for (size_t k = 0; k < headNum; k++) {
+    //                 for (size_t l = 0; l < maxSeqLen; l++) {
+    //                     for (size_t m = 0; m < sizePerHead; m++) {
+    //                         p[m] = static_cast<float>(l);
+    //                     }
+    //                     p += sizePerHead;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 
     // the sentence is longer than maxSeqLen
     if (seq_len + new_seq_offset > cosCached.size()) {
@@ -482,6 +518,38 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     //          3 [batch, num_attention_heads, seq_len, head_size]
     // rotary embbeding: part of key will write to past_key, part of query will write to tempory buffer
     applyRotaryPosEmb(query, key, queryTranspose.data(), new_past_key_ptr, &cosCached[0], &sinCached[0], batch, seq_len, new_seq_offset);
+    // {
+    //     auto* q = reinterpret_cast<float*>(query) + 3 * 80;
+    //     std::cout << "before rotary xxx:\n";
+    //     for (int j = 0; j < 300; j++) {
+    //         for (int i = 0; i < 10; i++) {
+    //             std::cout << q[i] << " " << q[i + 10] << " ";
+    //         }
+    //         std::cout << "\nk\n";
+    //         for (int i = 0; i < 10; i++) {
+    //             std::cout << q[i + 80] << " " << q[i + 10 + 80] << " ";
+    //         }
+    //         std::cout << "\n";
+    //         q += 3 * 80 * headNum;
+    //     }
+    // }
+    // {
+    //     auto* q = reinterpret_cast<float*>(queryTranspose.data()) + 300 * 80;
+    //     auto* k = reinterpret_cast<float*>(new_past_key_ptr) + 400 * 80;
+    //     std::cout << "after rotary xxx:\n";
+    //     for (int j = 0; j < 300; j++) {
+    //         for (int i = 0; i < 10; i++) {
+    //             std::cout << q[i] << " " << q[i + 10] << " ";
+    //         }
+    //         std::cout << "\nk\n";
+    //         for (int i = 0; i < 10; i++) {
+    //             std::cout << k[i] << " " << k[i + 10] << " ";
+    //         }
+    //         std::cout << "\n";
+    //         q += 80;
+    //         k += 80;
+    //     }
+    // }
     // query pass part(temp buffer): query = torch.cat((query, query_pass), dim=-1)
     MemcpyStride(queryTranspose.data() + rotaryNdims * dataTypeSize, query + rotaryNdims * dataTypeSize, sizePerHead - rotaryNdims, sizePerHead, headNum,
         seq_len, seq_len, batch, dataTypeSize);
@@ -490,9 +558,24 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
         maxSeqLen, batch, dataTypeSize);
     // value(pastKeys): value = torch.cat((past_value, value), dim=-2)
     MemcpyStride(new_past_value_ptr, value, sizePerHead, sizePerHead, headNum, seq_len, maxSeqLen, batch, dataTypeSize);
+    // {
+    //     std::cout << "xxx value:\n";
+    //     auto* p = reinterpret_cast<float*>(new_past_value_ptr);
+    //     // [batch, head_num, query_seq_len, head_size]
+    //     for (int h = 0; h < 2; h++) {
+    //         for (int i = 0; i < 300; i++) {
+    //             for (int j = 0; j < 80; j++) {
+    //                 std::cout << p[j] << " ";
+    //             }
+    //             p += 80;
+    //             std::cout << "\n";
+    //         }
+    //         p += 100 * 80;
+    //     }
+    // }
     // attn_output = _attn(query, key, value)
     // attn_output = _merge_heads(attn_output, self.num_attention_heads, self.head_size)
-    auto& mha = mhaGPTs[(static_cast<size_t>(batch) << 32) + static_cast<size_t>(new_seq_offset + seq_len)];
+    auto& mha = mhaGPTs[(static_cast<size_t>(new_seq_offset) << 32) + static_cast<size_t>(seq_len)];
     if (!mha) {
         gpt::MHAGPT::CreateParam param = {
             batch, headNum, seq_len, sizePerHead,
@@ -522,4 +605,25 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     };
 
     mha->exec(param);
+    // {
+    //     auto* qkv = reinterpret_cast<float*>(dst_data);
+    //     static int layer = 0;
+    //     char name[256];
+    //     if (layer == 17 || layer == 18) {
+    //         snprintf(name, sizeof(name), "ov-r_%d.txt", layer);
+    //         FILE* f = ::fopen(name, "w");
+    //         int n = 1;
+    //         for (size_t i = 0; i < 300; i++) {
+    //             for (size_t j = 0; j < headNum * 3 * sizePerHead; j++, qkv++) {
+    //                 fprintf(f, "%.6f ", qkv[0]);
+    //                 if (n++ % 32 == 0) {
+    //                     fputs("\n", f);
+    //                     n = 1;
+    //                 }
+    //             }
+    //         }
+    //         fclose(f);
+    //     }
+    //     layer++;
+    // }
 }

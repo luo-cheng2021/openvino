@@ -17,6 +17,7 @@
 #include "ngraph_transformations/op/mha.hpp"
 #include "dnnl_extension_utils.h"
 #include <ie_ngraph_utils.hpp>
+#include "ngraph/type/bfloat16.hpp"
 
 using namespace InferenceEngine;
 using namespace InferenceEngine::details;
@@ -178,7 +179,9 @@ private:
 
         mov(reg_buffer_aux, reg_buffer);
         mov(reg_work_amount_aux, reg_work_amount);
-        uni_vpxor(get_vmm_max(0), get_vmm_max(0), get_vmm_max(0));
+        mov(reg_tmp, dnnl::impl::float2int(-FLT_MAX));
+        vmovq(xmm_tmp, reg_tmp);
+        vbroadcastss(get_vmm_max(0), xmm_tmp);
 
         // mul1 input is const and always float
         if (jcp_.with_mul_scales) {
@@ -222,7 +225,9 @@ private:
 
         sub(rsp, sizeof(float) * vec_size);
         uni_vmovups(ptr[rsp], get_vmm_max(0));
-        uni_vpxor(get_vmm_max(0), get_vmm_max(0), get_vmm_max(0));
+        mov(reg_tmp, dnnl::impl::float2int(-FLT_MAX));
+        vmovq(xmm_tmp, reg_tmp);
+        vbroadcastss(get_vmm_max(0), xmm_tmp);
         for (size_t i = 0; i < vec_size; i++) {
             mov(reg_tmp_32, ptr[rsp + i * sizeof(float)]);
             vmovq(xmm_tmp, reg_tmp);
@@ -1284,6 +1289,7 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
     uint8_t* pout = param.attn_output;
 
     auto outPrcSize = _create_param.qkv_precision.size();
+    //std::cout << "xxx \n";
     parallel_for2d(dimsMatMul0Out[0], dimsMatMul0Out[1], [&](size_t i0, size_t i1) {
         size_t threadNum = parallel_get_thread_num();
 
@@ -1430,6 +1436,15 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
                     }
                 }
             }
+            // {
+            //     for (size_t m = 0; m < cur_M_blk; m++) {
+            //         for (size_t n = 0; n < N0_key_seq_len; n++) {
+            //             auto pOut = reinterpret_cast<float*>(pMatMul0Out + (m * N0_key_seq_len + n) * accPrecision0.size());
+            //             std::cout << pOut[0] << " ";
+            //         }
+            //         std::cout << "\n";
+            //     }
+            // }
 
             auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : mulScales.data());
             // loop along K dimension
@@ -1445,7 +1460,26 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
                 call_args.p_scales1 = fqScales2.data();
                 call_args.work_amount = valid_softmax_items;
 
-                (*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
+                //(*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
+                {
+                    float max = -FLT_MAX;
+                    float buf[1024];
+                    const auto* in = reinterpret_cast<const float*>(call_args.p_in0);
+                    auto* out = reinterpret_cast<float*>(call_args.p_out);
+                    for (size_t n = 0; n < valid_softmax_items; n++) {
+                        buf[n] = in[n] * mulScales[0];
+                        max = std::max(buf[n], max);
+                    }
+                    float sum = 0;
+                    for (size_t n = 0; n < valid_softmax_items; n++) {
+                        buf[n] -= max;
+                        buf[n] = std::exp(buf[n]);
+                        sum += buf[n];
+                    }
+                    for (size_t n = 0; n < valid_softmax_items; n++) {
+                        out[n] = buf[n] / sum;
+                    }
+                }
                 // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
                 if (_create_param.need_select_transpose) {
                     void *invalidPtr = pMatMul0Out + (m * N0_key_seq_len + valid_softmax_items) * _create_param.qkv_precision.size();
@@ -1453,6 +1487,15 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
                     valid_softmax_items = std::min(valid_softmax_items + 1, N0_key_seq_len);
                 }
             }
+            // {
+            //     for (size_t m = 0; m < cur_M_blk; m++) {
+            //         for (size_t n = 0; n < N0_key_seq_len; n++) {
+            //             auto pOut = reinterpret_cast<ngraph::bfloat16*>(pMatMul0Out + (m * N0_key_seq_len + n) * _create_param.qkv_precision.size());
+            //             std::cout << pOut[0] << " ";
+            //         }
+            //         std::cout << "\n";
+            //     }
+            // }
 
             auto pMatMul1In0 = bufferMatMul0Out_local;
             // transposed shape: [bs, seq_len, num_attention_heads, attn_head_size]
@@ -1484,7 +1527,15 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
                     }
                 }
             }
-
+            // {
+            //     for (size_t m = 0; m < cur_M_blk; m++) {
+            //         for (size_t n = 0; n < N1_head_size; n++) {
+            //             auto pOut = reinterpret_cast<float*>(pMatMul1Out + (m * N1_head_size + n) * accPrecision1.size());
+            //             std::cout << pOut[0] << " ";
+            //         }
+            //         std::cout << "\n";
+            //     }
+            // }
             if (convertReorderKernel) {
                 // matmul1: [batch, num_heads, query_seq_len, head_size]
                 // attn_output: [batch, query_seq_len, num_heads * head_size]
@@ -1498,6 +1549,27 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
             }
         }
     });
+    // {
+    //     auto *p = reinterpret_cast<bfloat16*>(pout);
+    //     for (int h = 0; h < 32; h++) {
+    //         for (int i = 0; i < 300; i++) {
+    //             for (int j = 0; j < 80; j++) {
+    //                 std::cout << p[j] << " ";
+    //             }
+    //             p += 80;
+    //             std::cout << "\n";
+    //         }
+    //     }
+    // }
+    // {
+    //     for (size_t m = 0; m < cur_M_blk; m++) {
+    //         for (size_t n = 0; n < N1_head_size; n++) {
+    //             auto pOut = reinterpret_cast<ngraph::bfloat16*>(pOut_aux + ((mb * M_blk + m) * batch1 * N1_head_size + n) * outPrcSize);
+    //             std::cout << pOut[0] << " ";
+    //         }
+    //         std::cout << "\n";
+    //     }
+    // }
 }
 
 void MHAGPT::Impl::exec(const ExecParam& param) {

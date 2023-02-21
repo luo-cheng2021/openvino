@@ -88,7 +88,7 @@ private:
     InferenceEngine::Precision dataPrecision;
     int64_t dataTypeSize = 1;
     int rotaryNdims = 0;
-    // mha kernels, key = batch(high 32bit) + value length(low 32bit, including current and past)
+    // mha kernels, key = past_key number(high 32bit) + value length(low 32bit, current seq_len)
     std::unordered_map<size_t, std::shared_ptr<gpt::MHAGPT>> mhaGPTs;
     std::vector<float> attnMasks;
     std::vector<float> cosCached;
