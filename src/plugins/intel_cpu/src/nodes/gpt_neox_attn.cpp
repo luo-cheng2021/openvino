@@ -492,7 +492,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     MemcpyStride(new_past_value_ptr, value, sizePerHead, sizePerHead, headNum, seq_len, maxSeqLen, batch, dataTypeSize);
     // attn_output = _attn(query, key, value)
     // attn_output = _merge_heads(attn_output, self.num_attention_heads, self.head_size)
-    auto& mha = mhaGPTs[(static_cast<size_t>(batch) << 32) + static_cast<size_t>(new_seq_offset + seq_len)];
+    auto& mha = mhaGPTs[(static_cast<size_t>(new_seq_offset) << 32) + static_cast<size_t>(seq_len)];
     if (!mha) {
         gpt::MHAGPT::CreateParam param = {
             batch, headNum, seq_len, sizePerHead,
