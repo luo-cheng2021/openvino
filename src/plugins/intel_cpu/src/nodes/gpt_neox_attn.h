@@ -70,7 +70,7 @@ protected:
     bool needShapeInfer() const override { return false; }
     void initRotery(size_t maxSeqLen);
     void reinitAttentionMask(size_t batch, size_t max_seq_len);
-    void applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, uint8_t* k_dst,
+    void applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const std::vector<uint8_t*>& k_dst, size_t k_start,
                            float* cos_cached, float* sin_cached, size_t batch, size_t qSeqLen, size_t offset);
 
 private:
@@ -95,10 +95,10 @@ private:
     std::vector<float> sinCached;
     std::vector<uint8_t> queryTranspose;
     std::unique_ptr<jit_uni_rotary_kernel> rotaryKernel;
-    size_t pastKVBufferSize = 0;
 
     static constexpr size_t IN_QKV           = 0;
     static constexpr size_t IN_PAST_KEYS_NUM = 1;
+    static constexpr size_t IN_BEAM_IDX      = 2;
 };
 
 }   // namespace node

@@ -1282,9 +1282,9 @@ void MHAGPT::Impl::callBrgemm(brgemmCtx& ctx, std::unique_ptr<brgemm_kernel_t>& 
 template <typename in1_type>
 void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
     const uint8_t* pQIn0 = param.q;
-    const uint8_t* pKIn0 = param.k;
+    const auto& pKIn0 = param.k;
     const float* pAddIn1 = param.attention_mask;
-    const uint8_t* pVIn0 = param.v;
+    const auto& pVIn0 = param.v;
     uint8_t* pout = param.attn_output;
 
     auto outPrcSize = _create_param.qkv_precision.size();
@@ -1292,8 +1292,8 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
         size_t threadNum = parallel_get_thread_num();
 
         auto pQIn0_aux = pQIn0 + (i0 * param.batch_stride_in_q + i1 * param.head_stride_in_q) * _create_param.qkv_precision.size();
-        auto pKIn0_aux = pKIn0 + (i0 * param.batch_stride_in_kv + i1 * param.head_stride_in_kv) * _create_param.qkv_precision.size();
-        auto pVIn0_aux = pVIn0 + (i0 * param.batch_stride_in_kv + i1 * param.head_stride_in_kv) * _create_param.qkv_precision.size();
+        auto pKIn0_aux = pKIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
+        auto pVIn0_aux = pVIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
 
         auto pAddIn1_aux = pAddIn1 + i0 * param.batch_stride_in_attn_mask;
 

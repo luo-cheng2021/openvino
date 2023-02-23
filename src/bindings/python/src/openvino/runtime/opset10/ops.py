@@ -177,6 +177,7 @@ def unique(
 def gpt_neox_attn(
     qkv: NodeInput,
     past_keys_num: NodeInput,
+    beam_idx: NodeInput,
     layer_num,
     head_num,
     size_per_head,
@@ -191,7 +192,7 @@ def gpt_neox_attn(
     :param name:                (Optional) A name for the output node. Default value: None.
     :return: Node representing gpt_neox_attn operation.
     """
-    inputs = as_nodes(qkv, past_keys_num)
+    inputs = as_nodes(qkv, past_keys_num, beam_idx)
 
     attributes = {
         "layer_num": layer_num,

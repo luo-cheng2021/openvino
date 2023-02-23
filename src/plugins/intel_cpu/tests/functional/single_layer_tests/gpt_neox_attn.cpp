@@ -110,13 +110,15 @@ protected:
         input_ids->set_friendly_name("input_ids");
         auto num = std::make_shared<ngraph::opset1::Parameter>(ngraph::element::i32, inputDynamicShapes[1]);
         num->set_friendly_name("past_num");
+        auto beam_idx = std::make_shared<ngraph::opset1::Parameter>(ngraph::element::i32, inputDynamicShapes[2]);
+        beam_idx->set_friendly_name("beam_idx");
 
-        auto gpt = std::make_shared<ov::opset10::GPTNeoxAttn>(input_ids, num, 32, head_num, size_per_head,
+        auto gpt = std::make_shared<ov::opset10::GPTNeoxAttn>(input_ids, num, beam_idx, 32, head_num, size_per_head,
             head_num * size_per_head, 2048, 10000, rotary_pct, max_seq_length);
         gpt->set_friendly_name("gpt");
         gpt->get_rt_info() = getCPUInfo();
 
-        auto function = std::make_shared<ov::Model>(gpt->outputs(), ov::ParameterVector{input_ids, num}, "gpt");
+        auto function = std::make_shared<ov::Model>(gpt->outputs(), ov::ParameterVector{input_ids, num, beam_idx}, "gpt");
         return function;
     }
     // pattern is:
@@ -169,6 +171,8 @@ protected:
         }
         auto num = std::make_shared<ngraph::opset1::Parameter>(ngraph::element::i32, targetInputStaticShapes[1]);
         num->set_friendly_name("past_num");
+        auto beam_idx = std::make_shared<ngraph::opset1::Parameter>(ngraph::element::i32, targetInputStaticShapes[2]);
+        beam_idx->set_friendly_name("beam_idx");
         // [batch, query_seq_len, head_num, 3 * head_size]
         auto qkv_reshape = std::make_shared<opset10::Reshape>(input_ids_convert, opset10::Constant::create(element::i32, Shape{4},
             {batch, query_seq_len, head_num, 3 * size_per_head}), false);
@@ -213,7 +217,7 @@ protected:
         // [batch, query_seq_len, head_num * head_size]
         auto reshape1 = std::make_shared<opset10::Reshape>(transpose1, opset10::Constant::create(element::i32, Shape{3},
             {batch, query_seq_len, head_num * size_per_head}), false);
-        funcRef = std::make_shared<ov::Model>(NodeVector{reshape1}, ParameterVector{input_ids, num});
+        funcRef = std::make_shared<ov::Model>(NodeVector{reshape1}, ParameterVector{input_ids, num, beam_idx});
 
         ngraph::helpers::resize_function(funcRef, targetInputStaticShapes);
     }
@@ -297,7 +301,14 @@ protected:
             const auto& funcInput = funcInputs[i];
             ov::Tensor tensor;
 
-            if (i == 1) {
+            if (i == 2) {
+                tensor = ov::Tensor(funcInput.get_element_type(), targetInputStaticShapes[i]);
+                auto *dataPtr = tensor.data<int32_t>();
+                for (int i = 0; i < tensor.get_size(); i++) {
+                    dataPtr[0] = i;
+                }
+                inputs_ref.insert({funcInput.get_node_shared_ptr(), tensor});
+            } else if (i == 1) {
                 tensor = ov::Tensor(funcInput.get_element_type(), targetInputStaticShapes[i]);
                 auto *dataPtr = tensor.data<int32_t>();
                 dataPtr[0] = past_key_number;
@@ -334,7 +345,8 @@ protected:
 TEST_P(GPTNeoxAttnCPUTest, CompareWithRefs) {
     if (!InferenceEngine::with_cpu_x86_avx512_core())
         GTEST_SKIP();
-
+    if (!InferenceEngine::with_cpu_x86_bfloat16() && netPrecision == ElementType::bf16)
+        GTEST_SKIP();
     run();
     //CheckPluginRelatedResults(compiledModel, "GPTNeoxAttn");
 }
@@ -358,7 +370,7 @@ const std::vector<ElementType> netPrecisions = {
     ElementType::bf16
 };
 
-std::vector<std::vector<ov::Shape>> staticInputShapeVector = {{{2, 300, 7680}, {1}}, {{2, 301, 7680}, {1}}};
+std::vector<std::vector<ov::Shape>> staticInputShapeVector = {{{2, 300, 7680}, {1}, {2}}, {{2, 301, 7680}, {1}, {2}}};
 
 const auto staticGPTNeoxAttnParams = ::testing::Combine(
     ::testing::ValuesIn(static_shapes_to_test_representation(staticInputShapeVector))      // feature map shape

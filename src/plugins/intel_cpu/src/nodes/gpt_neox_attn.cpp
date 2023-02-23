@@ -214,23 +214,124 @@ private:
 
 class GlobalContext {
 public:
+    using buffer_t = std::vector<uint8_t>;
+    using beam_buffers_t = std::vector<buffer_t>;
+
+    struct PastKVStore {
+        // real memory buffer
+        beam_buffers_t key_buffer;
+        beam_buffers_t value_buffer;
+        std::vector<buffer_t*> current_k_bufs;
+        std::vector<buffer_t*> current_v_bufs;
+    };
     static GlobalContext& getInstance() {
         static GlobalContext instance;
         return instance;
     }
 
-    std::vector<uint8_t>& getOrCreateStore(const std::string& key, size_t new_size) {
-        auto& store = simpleStore[key];
-        if (store.size() < new_size) {
-            std::vector<uint8_t> new_store(new_size);
-            memcpy(new_store.data(), store.data(), store.size());
-            store = std::move(new_store);
+    void getOrCreateStore(const std::string& key, size_t new_size_per_key_per_beam, const int* beam_idx, size_t beam_idx_num,
+        std::vector<uint8_t*>& current_k_bufs, std::vector<uint8_t*>& current_v_bufs) {
+        // expected buffer: [2, beam_num/batch, headNum, maxSeqLen, sizePerHead]
+        auto& store = simpleKVStore[key];
+        current_k_bufs.resize(beam_idx_num);
+        current_v_bufs.resize(beam_idx_num);
+        // new_size_per_key_per_beam = headNum * maxSeqLen * sizePerHead * dataTypeSize
+        // not init
+        if (store.key_buffer.size() < beam_idx_num) {
+            store.key_buffer.resize(beam_idx_num);
+            store.value_buffer.resize(beam_idx_num);
+            store.current_k_bufs.resize(beam_idx_num);
+            store.current_v_bufs.resize(beam_idx_num);
+            for (auto i = 0; i < beam_idx_num; i++) {
+                std::vector<uint8_t> new_k_store(new_size_per_key_per_beam);
+                store.key_buffer[i] = std::move(new_k_store);
+                std::vector<uint8_t> new_v_store(new_size_per_key_per_beam);
+                store.value_buffer[i] = std::move(new_v_store);
+                store.current_k_bufs[i] = &store.key_buffer[i];
+                store.current_v_bufs[i] = &store.value_buffer[i];
+                current_k_bufs[i] = store.current_k_bufs[i]->data();
+                current_v_bufs[i] = store.current_v_bufs[i]->data();
+            }
+            return;
         }
-        return store;
+        assert(store.key_buffer.size() == beam_idx_num);
+        // max seq becomes larger
+        if (store.key_buffer[0].size() < new_size_per_key_per_beam) {
+            assert(false); // need testcase
+            for (auto i = 0; i < beam_idx_num; i++) {
+                std::vector<uint8_t> new_k_store(new_size_per_key_per_beam * 2);
+                memcpy(new_k_store.data(), store.key_buffer[i].data(), store.key_buffer[i].size());
+                store.key_buffer[i] = std::move(new_k_store);
+                std::vector<uint8_t> new_v_store(new_size_per_key_per_beam * 2);
+                memcpy(new_v_store.data(), store.value_buffer[i].data(), store.value_buffer[i].size());
+                store.value_buffer[i] = std::move(new_v_store);
+                store.current_k_bufs[i] = &store.key_buffer[i];
+                store.current_v_bufs[i] = &store.value_buffer[i];
+            }
+        }
+        for (auto i = 0; i < beam_idx_num; i++) {
+            current_k_bufs[i] = store.current_k_bufs[i]->data();
+            current_v_bufs[i] = store.current_v_bufs[i]->data();
+        }
+        // for each 2x300 case, ignore the reorder
+        if (beam_idx == nullptr)
+            return;
+
+        // beam_idx contains new index which is the index of current_k_bufs
+        // special case: beam_idx contains sequence like 0, 1, 2, 3... which means no reorder
+        bool need_reorder = false;
+        for (size_t i = 0; i < beam_idx_num; i++) {
+            if (i != static_cast<size_t>(beam_idx[i])) {
+                need_reorder = true;
+                break;
+            }
+        }
+        if (!need_reorder)
+            return;
+
+        std::vector<buffer_t*> ptrs_k(beam_idx_num, nullptr), ptrs_v(beam_idx_num, nullptr);
+        // not used buffers pointer(items should be small numbers, use vector to decrease memory alloction times)
+        std::vector<buffer_t*> no_use_ptrs_k(store.current_k_bufs);
+        std::vector<buffer_t*> no_use_ptrs_v(store.current_v_bufs);
+        // first pass: no shared items, shared items first occurence
+        for (auto i = 0; i < beam_idx_num; i++) {
+            auto wanted_idx = beam_idx[i];
+            if (no_use_ptrs_k[wanted_idx]) {
+                ptrs_k[i] = store.current_k_bufs[wanted_idx];
+                ptrs_v[i] = store.current_v_bufs[wanted_idx];
+                no_use_ptrs_k[wanted_idx] = nullptr;
+                no_use_ptrs_v[wanted_idx] = nullptr;
+            }
+        }
+        // second pass: shared items
+        for (auto i = 0; i < beam_idx_num; i++) {
+            if (ptrs_k[i] == nullptr) {
+                auto wanted_idx = beam_idx[i];
+                auto it = std::find_if(no_use_ptrs_k.begin(), no_use_ptrs_k.end(), [] (const buffer_t* p) {
+                    return p != nullptr;
+                });
+                ptrs_k[i] = *it;
+                *it = nullptr;
+                // TODO: opt
+                memcpy(ptrs_k[i]->data(), store.current_k_bufs[wanted_idx]->data(), store.current_k_bufs[wanted_idx]->size());
+                it = std::find_if(no_use_ptrs_v.begin(), no_use_ptrs_v.end(), [] (const buffer_t* p) {
+                    return p != nullptr;
+                });
+                ptrs_v[i] = *it;
+                *it = nullptr;
+                memcpy(ptrs_v[i]->data(), store.current_v_bufs[wanted_idx]->data(), store.current_v_bufs[wanted_idx]->size());
+            }
+            current_k_bufs[i] = ptrs_k[i]->data();
+            current_v_bufs[i] = ptrs_v[i]->data();
+        }
+        for (auto i = 0; i < beam_idx_num; i++) {
+            store.current_k_bufs[i] = ptrs_k[i];
+            store.current_v_bufs[i] = ptrs_v[i];
+        }
     }
 
 private:
-    std::unordered_map<std::string, std::vector<uint8_t>> simpleStore;
+    std::unordered_map<std::string, PastKVStore> simpleKVStore;
 };
 
 bool GPTNeoxAttn::isSupportedOperation(const std::shared_ptr<const ov::Node>& op, std::string& errorMessage) noexcept {
@@ -272,6 +373,7 @@ void GPTNeoxAttn::initSupportedPrimitiveDescriptors() {
     dataTypeSize = dataPrecision.size();
 
     addSupportedPrimDesc({{LayoutType::ncsp, dataPrecision},
+                          {LayoutType::ncsp, Precision::I32},
                           {LayoutType::ncsp, Precision::I32}},
                          {{LayoutType::ncsp, dataPrecision}},
                           impl_desc_type::ref_any);
@@ -294,8 +396,6 @@ void GPTNeoxAttn::prepareParams() {
     if (queryTranspose.size() < batch * seq_len * hiddenSize * dataTypeSize) {
         queryTranspose.resize(batch * seq_len * hiddenSize * dataTypeSize);
     }
-    // memory size for key/value past buffers, shape: [2, batch, headNum, maxSeqLen, sizePerHead]
-    pastKVBufferSize = 2 * batch * headNum * maxSeqLen * sizePerHead * dataTypeSize;
 
     {
         jit_rotary_compile_params jcp;
@@ -390,14 +490,14 @@ void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
 // q_src, k_src: [batch, seq_len, num_heads, 3 * head_size]
 // q_dst: [batch, num_heads, query_seq_len, head_size]
 // k_dst: [batch, num_heads, maxSeqLen, head_size]
-void GPTNeoxAttn::applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, uint8_t* k_dst,
+void GPTNeoxAttn::applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const std::vector<uint8_t*>& k_dst, size_t k_start,
                                     float* cos_cached, float* sin_cached, size_t batch, size_t q_seq_len, size_t offset) {
     jit_rotary_call_args call_args;
     for (size_t m = 0; m < batch; m ++) {
         float* cos = cos_cached + offset * rotaryNdims;
         float* sin = sin_cached + offset * rotaryNdims;
         auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHead * dataTypeSize;
-        auto k_dst_batch = k_dst + m * headNum * maxSeqLen * sizePerHead * dataTypeSize;
+        auto k_dst_batch = k_dst[m] + k_start;
         for (size_t n = 0; n < q_seq_len; n++) {
             auto q_dst_seq = q_dst_batch + n * sizePerHead * dataTypeSize;
             auto k_dst_seq = k_dst_batch + n * sizePerHead * dataTypeSize;
@@ -446,10 +546,33 @@ static void MemcpyStride(void* dst, void* src, size_t copy_head_size, size_t hea
     }
 }
 
+// typical use:
+// 1, read from kv input and write to pask_keys, which needed by attention
+// 2, read from q input and write to q temp buffer
+// src: [batch, seq_len, num_attention_heads, 3, head_size]
+// dst: [batch, num_attention_heads, max_seq_len/seq_len, head_size]
+static void MemcpyStride(const std::vector<uint8_t*>& dst, size_t dst_start, void* src, size_t copy_head_size, size_t head_size,
+    size_t head_num, size_t seq_len, size_t max_seq_len, size_t batch, size_t type_size) {
+    for (size_t m = 0; m < batch; m++) {
+        auto* dst_batch = dst[m] + dst_start;
+        auto* src_batch = static_cast<uint8_t*>(src) + m * head_num * seq_len * 3 * head_size * type_size;
+        for (size_t n = 0; n < head_num; n++) {
+            auto* dst_head = dst_batch + n * max_seq_len * head_size * type_size;
+            auto* src_head = src_batch + n * 3 * head_size * type_size;
+            for (size_t i = 0; i < seq_len; i++) {
+                memcpy(dst_head, src_head, copy_head_size * type_size);
+                dst_head += head_size * type_size;
+                src_head += head_num * 3 * head_size * type_size;
+            }
+        }
+    }
+}
+
 void GPTNeoxAttn::execute(dnnl::stream strm) {
     // [batch, seq_len, (num_heads * 3 * head_size)]
     auto* qkv = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
     const int* past_keys_num = reinterpret_cast<const int*>(getParentEdgeAt(IN_PAST_KEYS_NUM)->getMemoryPtr()->GetPtr());
+    const int* beam_idx = reinterpret_cast<const int*>(getParentEdgeAt(IN_BEAM_IDX)->getMemoryPtr()->GetPtr());
     auto* dst_data = reinterpret_cast<uint8_t*>(getChildEdgeAt(0)->getMemoryPtr()->GetPtr());
     const auto& qkv_dims = getParentEdgeAt(IN_QKV)->getMemoryPtr()->getStaticDims();
     const auto batch = qkv_dims[0];
@@ -459,8 +582,13 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     assert(new_seq_offset < maxSeqLen);
     // usage: each 1x300 sub model and 1x1 sub model will share the same model id
     const auto model_id = static_cast<size_t>(past_keys_num[0]) >> 16;
+    // first token will write to pastKeys offset 0
+    bool first_token = new_seq_offset == 0;
     // [2, batch, num_heads, maxSeqLen, head_size]
-    auto* past_keys = GlobalContext::getInstance().getOrCreateStore(getName() + std::to_string(model_id), pastKVBufferSize).data();
+    auto size_per_key_per_beam = headNum * maxSeqLen * sizePerHead * dataTypeSize;
+    std::vector<uint8_t*> current_k_bufs, current_v_bufs;
+    GlobalContext::getInstance().getOrCreateStore(getName() + std::to_string(model_id), size_per_key_per_beam, first_token ? nullptr : beam_idx, batch,
+        current_k_bufs, current_v_bufs);
 
     // the sentence is longer than maxSeqLen
     if (seq_len + new_seq_offset > cosCached.size()) {
@@ -473,23 +601,21 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     auto query = qkv;                                      // qkv[..., : self.head_size].permute(0, 2, 1, 3)
     auto key = qkv + sizePerHead * dataTypeSize;           // qkv[..., self.head_size : 2 * self.head_size].permute(0, 2, 1, 3)
     auto value = qkv + 2 * sizePerHead * dataTypeSize;     // qkv[..., 2 * self.head_size :].permute(0, 2, 1, 3)
-    auto new_past_key_ptr = past_keys + dataTypeSize * new_seq_offset * sizePerHead;
-    auto new_past_value_ptr = new_past_key_ptr + pastKVBufferSize / 2;
-    // first token will write to pastKeys offset 0
-    bool first_token = new_seq_offset == 0;
     // transpose + rotary embbeding:
     // transpose: [batch, seq_len, num_attention_heads, 3 * head_size] -->
     //          3 [batch, num_attention_heads, seq_len, head_size]
     // rotary embbeding: part of key will write to past_key, part of query will write to tempory buffer
-    applyRotaryPosEmb(query, key, queryTranspose.data(), new_past_key_ptr, &cosCached[0], &sinCached[0], batch, seq_len, new_seq_offset);
+    applyRotaryPosEmb(query, key, queryTranspose.data(), current_k_bufs, dataTypeSize * new_seq_offset * sizePerHead,
+        &cosCached[0], &sinCached[0], batch, seq_len, new_seq_offset);
     // query pass part(temp buffer): query = torch.cat((query, query_pass), dim=-1)
-    MemcpyStride(queryTranspose.data() + rotaryNdims * dataTypeSize, query + rotaryNdims * dataTypeSize, sizePerHead - rotaryNdims, sizePerHead, headNum,
-        seq_len, seq_len, batch, dataTypeSize);
+    MemcpyStride(queryTranspose.data() + rotaryNdims * dataTypeSize, query + rotaryNdims * dataTypeSize, sizePerHead - rotaryNdims,
+        sizePerHead, headNum, seq_len, seq_len, batch, dataTypeSize);
     // key pass part(past_key): key = torch.cat((key, key_pass), dim=-1)
-    MemcpyStride(new_past_key_ptr + rotaryNdims * dataTypeSize, key + rotaryNdims * dataTypeSize, sizePerHead - rotaryNdims, sizePerHead, headNum, seq_len,
-        maxSeqLen, batch, dataTypeSize);
+    MemcpyStride(current_k_bufs, (new_seq_offset * sizePerHead + rotaryNdims) * dataTypeSize, key + rotaryNdims * dataTypeSize,
+        sizePerHead - rotaryNdims, sizePerHead, headNum, seq_len, maxSeqLen, batch, dataTypeSize);
     // value(pastKeys): value = torch.cat((past_value, value), dim=-2)
-    MemcpyStride(new_past_value_ptr, value, sizePerHead, sizePerHead, headNum, seq_len, maxSeqLen, batch, dataTypeSize);
+    MemcpyStride(current_v_bufs, new_seq_offset * sizePerHead * dataTypeSize, value, sizePerHead, sizePerHead, headNum, seq_len,
+        maxSeqLen, batch, dataTypeSize);
     // attn_output = _attn(query, key, value)
     // attn_output = _merge_heads(attn_output, self.num_attention_heads, self.head_size)
     auto& mha = mhaGPTs[(static_cast<size_t>(new_seq_offset) << 32) + static_cast<size_t>(seq_len)];
@@ -505,18 +631,17 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     auto head_stride_in_q = sizePerHead * seq_len;
     auto batch_stride_in_q = head_stride_in_q * headNum;
     auto head_stride_in_kv = sizePerHead * maxSeqLen;
-    auto batch_stride_in_kv = head_stride_in_kv * headNum;
     // q: [batch, num_heads, query_seq_len, head_size]
     // k: [batch, num_heads, key_seq_len, head_size]
     // v: [batch, num_heads, value_seq_len, head_size]
     // attention_mask: [batch, 1, 1, key_seq_len]
     // attn_output: [batch, query_seq_len, num_heads * head_size]
     gpt::MHAGPT::ExecParam param = {
-        queryTranspose.data(), past_keys, past_keys + pastKVBufferSize / 2,
+        queryTranspose.data(), current_k_bufs, current_v_bufs,
         &attnMasks[0],
         dst_data,
         head_stride_in_q, batch_stride_in_q,    // q stride
-        head_stride_in_kv, batch_stride_in_kv,  // kv stride
+        head_stride_in_kv,                      // kv stride
         maxSeqLen,                              // attn_mask stride
         sizePerHead, hiddenSize * seq_len,      // output stride
     };

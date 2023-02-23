@@ -9,25 +9,6 @@ import numpy as np
 import sys, os
 import argparse
 
-def const(data, itype):
-    if isinstance(data, list):
-        shape = [len(data)]
-    else:
-        data = [data]
-        shape = []
-    return opset.constant(itype, Shape(shape), data)
-def const_i64(data):
-    return const(data, Type.i64)
-def const_i32(data):
-    return const(data, Type.i32)
-def collect_const(model, consts):
-    for n in model.get_ordered_ops():
-        if n.get_type_name() == "Constant":
-            # print(n.get_friendly_name())
-            consts[n.get_friendly_name()] = list(n.get_vector())
-        if hasattr(n, "get_function"):
-            collect_const(n.get_function(), consts)
-    return
 def show_io(m):
     print("Inputs of the model:")
     for port, _input in enumerate(m.inputs):
@@ -87,7 +68,7 @@ FakeConstDict = {
         np.zeros((INTERMEDIATE_SIZE, HIDDEN_SIZE), dtype=np.float32)
     ] * LAYER_NUM,
 }
-def layer(hidden_states, past_keys_num, layer_idx, ConstDict):
+def layer(hidden_states, past_keys_num, beam_idx, layer_idx, ConstDict):
     input_layernorm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mvn')
     input_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.bias')
     input_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.weight')
@@ -101,7 +82,7 @@ def layer(hidden_states, past_keys_num, layer_idx, ConstDict):
     qkv = opset.add(qkv_, query_key_value_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/Add') #wildcard [?,?,7680]
 
     # custom op
-    attn_output = opset.gpt_neox_attn(qkv, past_keys_num,
+    attn_output = opset.gpt_neox_attn(qkv, past_keys_num, beam_idx,
             layer_num=LAYER_NUM, head_num=HEAD_NUM, size_per_head=SIZE_PER_HEAD, hidden_size=HIDDEN_SIZE, max_position_embeddings=MAX_POSITION_EMBEDDINGS,
             rotary_emb_base=ROTARY_EMB_BASE, rotary_pct=ROTARY_PCT, max_seq_len=MAX_SEQ_LEN, name=f'/model/gpt_neox/layers.{layer_idx}/attention/attn')
 
@@ -146,12 +127,13 @@ def create_model(arg):
 
     input_ids = opset.parameter([-1, -1], Type.i64, name='input_ids')
     past_keys_num = opset.parameter([1,], Type.i64, name='past_keys_num')
+    beam_idx = opset.parameter([-1,], Type.i64, name='beam_idx')
 
     embed_in_const = opset.constant(ConstDict['model.gpt_neox.embed_in.weight'], Type.f32)
     inputs_embeds = opset.gather(embed_in_const, indices=input_ids, axis=0) # name='/model/gpt_neox/embed_in/Gather') # [?,?,HIDDEN_SIZE]
     hidden_states = inputs_embeds
     for i in range(LAYER_NUM):
-        hidden_states = layer(hidden_states, past_keys_num, i, ConstDict)
+        hidden_states = layer(hidden_states, past_keys_num, beam_idx, i, ConstDict)
     # final_layer_norm
     final_layer_norm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name='/model/gpt_neox/final_layer_norm/mvn')
     final_layer_norm_bias = opset.constant(ConstDict['model.gpt_neox.final_layer_norm.bias'], Type.f32)
@@ -162,7 +144,7 @@ def create_model(arg):
     embed_out_weight = opset.constant(ConstDict['model.embed_out.weight'], Type.f32)
     embed_out = opset.matmul(final_layer_norm, embed_out_weight, transpose_a=False,transpose_b=False, name='logits') #wildcard [?,?,VOCAB_SIZE]
     embed_out_result = opset.result(embed_out, name='logits/sink_port_0') # [?,?,VOCAB_SIZE]
-    return Model([embed_out_result], [input_ids, past_keys_num])
+    return Model([embed_out_result], [input_ids, past_keys_num, beam_idx])
 
 def get_params_from_model(path):
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -229,18 +211,10 @@ def get_params_from_model(path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("")
     parser.add_argument("org_model_path")
+    parser.add_argument("ov_model_path")
     args = parser.parse_args()
 
     dicts = get_params_from_model(args.org_model_path)
-    # # org_model_path = "/home/luocheng/models/gpt2_test/origin.xml"
-    # # core = Core()
-    # # # example of introducing custome (OP) extension
-    # # # import os
-    # # # os.environ["add_RnntUpdate_opset8"] = "1"
-    # # # core.add_extension("/home/dev/tingqian/ov-rnnt/rnnt_ov_extension/build/librnnt_ov_extension.so")
-    # # model = core.read_model(org_model_path)
-    # # print("====", org_model_path)
-    # # show_io(model)
     model2 = create_model(dicts)
     # model2 = create_model(FakeConstDict)
     print("====", "new model")

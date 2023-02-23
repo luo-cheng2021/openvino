@@ -65,14 +65,13 @@ public:
     };
     struct ExecParam {
         uint8_t* q;
-        uint8_t* k;
-        uint8_t* v;
+        std::vector<uint8_t*>& k;
+        std::vector<uint8_t*>& v;
         float* attention_mask;
         uint8_t* attn_output;
         size_t head_stride_in_q;            // q stride for next head
         size_t batch_stride_in_q;           // q stride for next batch
         size_t head_stride_in_kv;           // kv stride for next head
-        size_t batch_stride_in_kv;          // kv stride for next batch
         size_t batch_stride_in_attn_mask;   // attn_mask stride for next batch
         size_t head_stride_in_attn;         // attn stride for next head
         size_t batch_stride_in_attn;        // attn stride for next batch
