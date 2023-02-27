@@ -243,9 +243,9 @@ public:
             store.current_k_bufs.resize(beam_idx_num);
             store.current_v_bufs.resize(beam_idx_num);
             for (auto i = 0; i < beam_idx_num; i++) {
-                std::vector<uint8_t> new_k_store(new_size_per_key_per_beam);
+                std::vector<uint8_t> new_k_store(new_size_per_key_per_beam, 0);
                 store.key_buffer[i] = std::move(new_k_store);
-                std::vector<uint8_t> new_v_store(new_size_per_key_per_beam);
+                std::vector<uint8_t> new_v_store(new_size_per_key_per_beam, 0);
                 store.value_buffer[i] = std::move(new_v_store);
                 store.current_k_bufs[i] = &store.key_buffer[i];
                 store.current_v_bufs[i] = &store.value_buffer[i];
@@ -383,6 +383,9 @@ void GPTNeoxAttn::createPrimitive() {
     Node::createPrimitive();
 }
 
+// test only
+int g_seq_offset = -1;
+int g_beam_idx[] = {0, 1, 2, 3, 4, 5, 6, 7};
 void GPTNeoxAttn::prepareParams() {
     const auto& qkv_dims = getParentEdgeAt(IN_QKV)->getMemoryPtr()->getStaticDims();
     const auto batch = qkv_dims[0];
@@ -422,6 +425,10 @@ void GPTNeoxAttn::prepareParams() {
             THROW_ERROR << "cannot create jit rotary kernel";
         }
         rotaryKernel->create_ker();
+    }
+    auto env = std::getenv("USE_OFFSET");
+    if (env) {
+        g_seq_offset = std::stoi(env);
     }
 }
 
@@ -572,13 +579,17 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     // [batch, seq_len, (num_heads * 3 * head_size)]
     auto* qkv = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
     const int* past_keys_num = reinterpret_cast<const int*>(getParentEdgeAt(IN_PAST_KEYS_NUM)->getMemoryPtr()->GetPtr());
-    const int* beam_idx = reinterpret_cast<const int*>(getParentEdgeAt(IN_BEAM_IDX)->getMemoryPtr()->GetPtr());
+    int* beam_idx = reinterpret_cast<int*>(getParentEdgeAt(IN_BEAM_IDX)->getMemoryPtr()->GetPtr());
     auto* dst_data = reinterpret_cast<uint8_t*>(getChildEdgeAt(0)->getMemoryPtr()->GetPtr());
     const auto& qkv_dims = getParentEdgeAt(IN_QKV)->getMemoryPtr()->getStaticDims();
     const auto batch = qkv_dims[0];
     const auto seq_len = qkv_dims[1];
     // lower 16 bit means the number of past keys, higher 16 bit means the model id
-    const auto new_seq_offset = static_cast<size_t>(past_keys_num[0]) & 0xffff;
+    auto new_seq_offset = static_cast<size_t>(past_keys_num[0]) & 0xffff;
+    if (g_seq_offset != -1) {
+        new_seq_offset = g_seq_offset;
+        beam_idx = g_beam_idx;
+    }
     assert(new_seq_offset < maxSeqLen);
     // usage: each 1x300 sub model and 1x1 sub model will share the same model id
     const auto model_id = static_cast<size_t>(past_keys_num[0]) >> 16;
