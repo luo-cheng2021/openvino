@@ -7,10 +7,11 @@
 #include "itt.hpp"
 
 namespace ov {
-op::v10::GPTNeoxAttn::GPTNeoxAttn(const Output<Node>& qkv, const Output<Node>& past_keys_num, const Output<Node>& beam_idx,
+op::v10::GPTNeoxAttn::GPTNeoxAttn(const Output<Node>& qkv, const Output<Node>& past_keys_num,
+        const Output<Node>& beam_idx, const Output<Node>& attn_mask,
         int layer_num, int head_num, int size_per_head, int hidden_size, int max_position_embeddings,
         int rotary_emb_base, float rotary_pct, int max_seq_len) :
-        op::Op({qkv, past_keys_num, beam_idx}),
+        op::Op({qkv, past_keys_num, beam_idx, attn_mask}),
         m_layer_num(layer_num),
         m_head_num(head_num),
         m_size_per_head(size_per_head),
@@ -49,7 +50,7 @@ void op::v10::GPTNeoxAttn::validate_and_infer_types() {
 std::shared_ptr<Node> op::v10::GPTNeoxAttn::clone_with_new_inputs(const OutputVector& new_args) const {
     OV_OP_SCOPE(v10_GPTNeoxAttn_clone_with_new_inputs);
     check_new_args_count(this, new_args);
-    return std::make_shared<op::v10::GPTNeoxAttn>(new_args.at(0), new_args.at(1), new_args.at(2),
+    return std::make_shared<op::v10::GPTNeoxAttn>(new_args.at(0), new_args.at(1), new_args.at(2), new_args.at(3),
             m_layer_num,
             m_head_num,
             m_size_per_head,

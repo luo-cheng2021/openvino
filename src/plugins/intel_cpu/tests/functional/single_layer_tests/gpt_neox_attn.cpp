@@ -26,7 +26,6 @@ using GPTNeoxAttnLayerTestParams = std::tuple<
         ElementType,         // Net precision
         size_t,              // head number
         size_t,              // size per head
-        size_t,              // past key number
         size_t,              // max seq length
         float,               // rotary_pct
         TargetDevice>;       // Device name
@@ -47,12 +46,15 @@ public:
         GPTNeoxAttnSpecificParams shapes;
         size_t head_num;
         size_t size_per_head;
-        size_t past_key_number;
+        size_t past_key_number = 0;
         size_t max_seq_length;
         float rotary_pct;
 
-        std::tie(shapes, netPr, head_num, size_per_head, past_key_number, max_seq_length, rotary_pct, td) = basicParamsSet;
+        std::tie(shapes, netPr, head_num, size_per_head, max_seq_length, rotary_pct, td) = basicParamsSet;
         std::tie(inputShape) = shapes;
+        if (inputShape[0].second[0][1] == 1) {
+            past_key_number = 10;
+        }
         std::ostringstream result;
         result << "GPTNeoxAttnTest_";
         result << "IS=(";
@@ -78,9 +80,10 @@ public:
 protected:
     size_t head_num;
     size_t size_per_head;
-    size_t past_key_number;
+    size_t past_key_number = 0;
     size_t max_seq_length;
     float rotary_pct;
+    size_t padding_seq_len = 100;
     ElementType netPrecision;
 
     void SetUp() override {
@@ -91,12 +94,16 @@ protected:
 
         CPULayerTestsDefinitions::GPTNeoxAttnSpecificParams GPTNeoxAttnParams;
 
-        std::tie(GPTNeoxAttnParams, netPrecision, head_num, size_per_head, past_key_number, max_seq_length, rotary_pct, targetDevice) = basicParamsSet;
+        std::tie(GPTNeoxAttnParams, netPrecision, head_num, size_per_head, max_seq_length, rotary_pct, targetDevice) = basicParamsSet;
         std::tie(inputShape) = GPTNeoxAttnParams;
         if (netPrecision == ElementType::bf16) {
             selectedType = "unknown_FP32";
             rel_threshold = 1.f;
             configuration[InferenceEngine::PluginConfigParams::KEY_ENFORCE_BF16] = InferenceEngine::PluginConfigParams::YES;
+        }
+        if (inputShape[0].second[0][1] == 1) {
+            past_key_number = 10;
+            padding_seq_len = 0;
         }
 
         init_input_shapes(inputShape);
@@ -112,13 +119,15 @@ protected:
         num->set_friendly_name("past_num");
         auto beam_idx = std::make_shared<ngraph::opset1::Parameter>(ngraph::element::i32, inputDynamicShapes[2]);
         beam_idx->set_friendly_name("beam_idx");
+        auto attn_mask = std::make_shared<ngraph::opset1::Parameter>(ngraph::element::i32, inputDynamicShapes[3]);
+        attn_mask->set_friendly_name("attn_mask");
 
-        auto gpt = std::make_shared<ov::opset10::GPTNeoxAttn>(input_ids, num, beam_idx, 32, head_num, size_per_head,
+        auto gpt = std::make_shared<ov::opset10::GPTNeoxAttn>(input_ids, num, beam_idx, attn_mask, 32, head_num, size_per_head,
             head_num * size_per_head, 2048, 10000, rotary_pct, max_seq_length);
         gpt->set_friendly_name("gpt");
         gpt->get_rt_info() = getCPUInfo();
 
-        auto function = std::make_shared<ov::Model>(gpt->outputs(), ov::ParameterVector{input_ids, num, beam_idx}, "gpt");
+        auto function = std::make_shared<ov::Model>(gpt->outputs(), ov::ParameterVector{input_ids, num, beam_idx, attn_mask}, "gpt");
         return function;
     }
     // pattern is:
@@ -173,6 +182,8 @@ protected:
         num->set_friendly_name("past_num");
         auto beam_idx = std::make_shared<ngraph::opset1::Parameter>(ngraph::element::i32, targetInputStaticShapes[2]);
         beam_idx->set_friendly_name("beam_idx");
+        auto attn_mask = std::make_shared<ngraph::opset1::Parameter>(ngraph::element::i32, inputDynamicShapes[3]);
+        attn_mask->set_friendly_name("attn_mask");
         // [batch, query_seq_len, head_num, 3 * head_size]
         auto qkv_reshape = std::make_shared<opset10::Reshape>(input_ids_convert, opset10::Constant::create(element::i32, Shape{4},
             {batch, query_seq_len, head_num, 3 * size_per_head}), false);
@@ -182,15 +193,17 @@ protected:
         auto query = split->output(0);
         auto key = split->output(1);
         auto value = split->output(2);
+        if (past_key_number) {
+            // concat query_seq_len+past_key
+            auto histroy_const = opset10::Constant::create(element::f32, Shape{batch, past_key_number, head_num, size_per_head}, { 0.0f });
+            key = std::make_shared<opset10::Concat>(OutputVector{histroy_const, key}, 1);
+            value = std::make_shared<opset10::Concat>(OutputVector{histroy_const, value}, 1);
+        }
         // [batch, head_num, query_seq_len, head_size]
         auto query_transpose = std::make_shared<opset10::Transpose>(query, opset10::Constant::create(element::i32, Shape{4}, {0, 2, 1, 3}));
         // [batch, head_num, query_seq_len+past_key_num, head_size]
         auto key_transpose = std::make_shared<opset10::Transpose>(key, opset10::Constant::create(element::i32, Shape{4}, {0, 2, 1, 3}));
         auto value_transpose = std::make_shared<opset10::Transpose>(value, opset10::Constant::create(element::i32, Shape{4}, {0, 2, 1, 3}));
-        if (past_key_number) {
-            // concat query_seq_len+past_key
-            assert(false);
-        }
         // [batch, head_num, query_seq_len, query_seq_len+past_key_num]
         auto matmul0 = std::make_shared<opset10::MatMul>(query_transpose, key_transpose, false, true);
         auto norm_factor = opset10::Constant::create(element::f32, Shape{1}, {1.0f / std::sqrt(size_per_head)});
@@ -206,7 +219,13 @@ protected:
         auto minus = std::make_shared<opset10::Constant>(element::f32, Shape{1}, -FLT_MAX);
         auto select = std::make_shared<opset10::Select>(causal_mask, multiply, minus);
         // [batch, 1, 1, query_seq_len+past_key_num]
-        auto attention_mask = std::make_shared<opset10::Constant>(element::f32, Shape{batch, 1, 1, query_seq_len + past_key_number}, 0.0f);
+        std::vector<float> attention_mask_const(batch * (query_seq_len + past_key_number));
+        for (auto k = 0; k < batch; k++) {
+            for (auto l = 0; l < query_seq_len + past_key_number; l++) {
+                attention_mask_const[k * (query_seq_len + past_key_number) + l] = l < padding_seq_len ? -FLT_MAX : 0;
+            }
+        }
+        auto attention_mask = std::make_shared<opset10::Constant>(element::f32, Shape{batch, 1, 1, query_seq_len + past_key_number}, attention_mask_const);
         auto add = std::make_shared<opset10::Add>(select, attention_mask);
         // [batch, head_num, query_seq_len, query_seq_len + past_key_number]
         auto softmax = std::make_shared<opset10::Softmax>(add, -1);
@@ -217,7 +236,7 @@ protected:
         // [batch, query_seq_len, head_num * head_size]
         auto reshape1 = std::make_shared<opset10::Reshape>(transpose1, opset10::Constant::create(element::i32, Shape{3},
             {batch, query_seq_len, head_num * size_per_head}), false);
-        funcRef = std::make_shared<ov::Model>(NodeVector{reshape1}, ParameterVector{input_ids, num, beam_idx});
+        funcRef = std::make_shared<ov::Model>(NodeVector{reshape1}, ParameterVector{input_ids, num, beam_idx, attn_mask});
 
         ngraph::helpers::resize_function(funcRef, targetInputStaticShapes);
     }
@@ -231,7 +250,27 @@ protected:
         ASSERT_EQ(actualOutputs.size(), expectedOutputs.size())
                 << "nGraph interpreter has " << expectedOutputs.size() << " outputs, while IE " << actualOutputs.size();
 
-        compare(expectedOutputs, actualOutputs);
+        // skip padding in the begin of sequence
+        auto shape = actualOutputs[0].get_shape();
+
+        shape[1] -= padding_seq_len;
+        ov::Tensor actualTensor(actualOutputs[0].get_element_type(), shape);
+        ov::Tensor expectedTensor(actualOutputs[0].get_element_type(), shape);
+        auto *actualPtr = actualTensor.data<float>();
+        auto *expectedPtr = expectedTensor.data<float>();
+        auto *actualPtrOrg = actualOutputs[0].data<float>();
+        auto *expectedPtrOrg = expectedOutputs[0].data<float>();
+        auto offset = padding_seq_len * shape[2];
+        for (size_t i = 0; i < shape[0]; i++) {
+            memcpy(actualPtr, actualPtrOrg + offset, shape[1] * shape[2] * sizeof(float));
+            actualPtr += shape[1] * shape[2];
+            actualPtrOrg += shape[1] * shape[2] + offset;
+            memcpy(expectedPtr, expectedPtrOrg + offset, shape[1] * shape[2] * sizeof(float));
+            expectedPtr += shape[1] * shape[2];
+            expectedPtrOrg += shape[1] * shape[2] + offset;
+        }
+
+        compare({expectedTensor}, {actualTensor});
     }
     void initRotery(size_t max_position_embeddings, size_t rotary_dims, std::vector<float>& cos_cached, std::vector<float>& sin_cached) {
         std::vector<float> inv_freq;
@@ -301,11 +340,22 @@ protected:
             const auto& funcInput = funcInputs[i];
             ov::Tensor tensor;
 
-            if (i == 2) {
+            if (i == 3) {
+                ASSERT_EQ(targetInputStaticShapes[i][1], max_seq_length)
+                        << "GPTAttn max_seq_len= " << max_seq_length << ", while input[3][1] " << targetInputStaticShapes[i][1];
+                tensor = ov::Tensor(funcInput.get_element_type(), targetInputStaticShapes[i]);
+                auto *dataPtr = tensor.data<int32_t>();
+                for (int m = 0; m < targetInputStaticShapes[i][0]; m++) {
+                    for (int j = 0; j < targetInputStaticShapes[i][1]; j++)
+                        dataPtr[j] = j < padding_seq_len ? 0 : 1;
+                    dataPtr += targetInputStaticShapes[i][1];
+                }
+                inputs_ref.insert({funcInput.get_node_shared_ptr(), tensor});
+            } else if (i == 2) {
                 tensor = ov::Tensor(funcInput.get_element_type(), targetInputStaticShapes[i]);
                 auto *dataPtr = tensor.data<int32_t>();
                 for (int i = 0; i < tensor.get_size(); i++) {
-                    dataPtr[0] = i;
+                    dataPtr[i] = i;
                 }
                 inputs_ref.insert({funcInput.get_node_shared_ptr(), tensor});
             } else if (i == 1) {
@@ -370,7 +420,7 @@ const std::vector<ElementType> netPrecisions = {
     ElementType::bf16
 };
 
-std::vector<std::vector<ov::Shape>> staticInputShapeVector = {{{2, 300, 7680}, {1}, {2}}, {{2, 301, 7680}, {1}, {2}}};
+std::vector<std::vector<ov::Shape>> staticInputShapeVector = {{{2, 1, 7680}, {1}, {2}, {2, 1024}}, {{2, 301, 7680}, {1}, {2}, {2, 1024}}};
 
 const auto staticGPTNeoxAttnParams = ::testing::Combine(
     ::testing::ValuesIn(static_shapes_to_test_representation(staticInputShapeVector))      // feature map shape
@@ -383,8 +433,7 @@ INSTANTIATE_TEST_SUITE_P(smoke_GPTNeoxAttnTest, GPTNeoxAttnCPUTest,
                                          ::testing::ValuesIn(netPrecisions),
                                          ::testing::Values(32),         // head number
                                          ::testing::Values(80),         // size per head
-                                         ::testing::Values(0),          // past key number
-                                         ::testing::Values(400),        // max seq length
+                                         ::testing::Values(1024),       // max seq length
                                          ::testing::Values(0.25f),      // rotary_pct
                                          ::testing::Values(CommonTestUtils::DEVICE_CPU)),
                                  ::testing::ValuesIn(filterCPUInfoForDevice())),

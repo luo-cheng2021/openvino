@@ -374,6 +374,7 @@ void GPTNeoxAttn::initSupportedPrimitiveDescriptors() {
 
     addSupportedPrimDesc({{LayoutType::ncsp, dataPrecision},
                           {LayoutType::ncsp, Precision::I32},
+                          {LayoutType::ncsp, Precision::I32},
                           {LayoutType::ncsp, Precision::I32}},
                          {{LayoutType::ncsp, dataPrecision}},
                           impl_desc_type::ref_any);
@@ -523,6 +524,16 @@ void GPTNeoxAttn::applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_d
     }
 }
 
+void GPTNeoxAttn::updateAttnMask(const int* attn_mask, size_t batch, size_t seq_len) {
+    for (size_t m = 0; m < batch; m ++) {
+        auto* mask = &attnMasks[m * maxSeqLen];
+        for (size_t n = 0; n < seq_len; n++) {
+            mask[n] = attn_mask[n] ? 0 : -FLT_MAX;
+        }
+        attn_mask += maxSeqLen;
+    }
+}
+
 void GPTNeoxAttn::executeDynamicImpl(dnnl::stream strm) {
     auto qkv_data_dims = getParentEdgeAt(IN_QKV)->getMemoryPtr()->getStaticDims();
     qkv_data_dims.back() = qkv_data_dims.back() / 3;
@@ -580,6 +591,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     auto* qkv = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
     const int* past_keys_num = reinterpret_cast<const int*>(getParentEdgeAt(IN_PAST_KEYS_NUM)->getMemoryPtr()->GetPtr());
     int* beam_idx = reinterpret_cast<int*>(getParentEdgeAt(IN_BEAM_IDX)->getMemoryPtr()->GetPtr());
+    const int* attn_mask = reinterpret_cast<const int*>(getParentEdgeAt(ATTN_MASK_IDX)->getMemoryPtr()->GetPtr());
     auto* dst_data = reinterpret_cast<uint8_t*>(getChildEdgeAt(0)->getMemoryPtr()->GetPtr());
     const auto& qkv_dims = getParentEdgeAt(IN_QKV)->getMemoryPtr()->getStaticDims();
     const auto batch = qkv_dims[0];
@@ -591,6 +603,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
         beam_idx = g_beam_idx;
     }
     assert(new_seq_offset < maxSeqLen);
+    updateAttnMask(attn_mask, batch, seq_len + new_seq_offset);
     // usage: each 1x300 sub model and 1x1 sub model will share the same model id
     const auto model_id = static_cast<size_t>(past_keys_num[0]) >> 16;
     // first token will write to pastKeys offset 0

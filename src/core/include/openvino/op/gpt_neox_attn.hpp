@@ -24,6 +24,7 @@ public:
     ///
     GPTNeoxAttn(const Output<Node>& qkv, const Output<Node>& past_keys_num,
         const Output<Node>& beam_idx,
+        const Output<Node>& attn_mask,
         int layer_num = 32,
         int head_num = 32,
         int size_per_head = 80,

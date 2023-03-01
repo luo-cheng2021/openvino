@@ -28,7 +28,7 @@ ROTARY_EMB_BASE = 10000
 ROTARY_PCT = 0.25
 USE_PARALLEL_RESIDUAL = True
 VOCAB_SIZE = 50304
-MAX_SEQ_LEN = 400
+MAX_SEQ_LEN = 1024
 FakeConstDict = {
     'model.gpt_neox.embed_in.weight': np.zeros((VOCAB_SIZE, HIDDEN_SIZE), dtype=np.float32),
     'model.embed_out.weight': np.zeros((HIDDEN_SIZE, VOCAB_SIZE), dtype=np.float32),
@@ -68,7 +68,7 @@ FakeConstDict = {
         np.zeros((INTERMEDIATE_SIZE, HIDDEN_SIZE), dtype=np.float32)
     ] * LAYER_NUM,
 }
-def layer(hidden_states, past_keys_num, beam_idx, layer_idx, ConstDict):
+def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDict):
     input_layernorm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mvn')
     input_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.bias')
     input_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.weight')
@@ -82,7 +82,7 @@ def layer(hidden_states, past_keys_num, beam_idx, layer_idx, ConstDict):
     qkv = opset.add(qkv_, query_key_value_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/Add') #wildcard [?,?,7680]
 
     # custom op
-    attn_output = opset.gpt_neox_attn(qkv, past_keys_num, beam_idx,
+    attn_output = opset.gpt_neox_attn(qkv, past_keys_num, beam_idx, attn_mask,
             layer_num=LAYER_NUM, head_num=HEAD_NUM, size_per_head=SIZE_PER_HEAD, hidden_size=HIDDEN_SIZE, max_position_embeddings=MAX_POSITION_EMBEDDINGS,
             rotary_emb_base=ROTARY_EMB_BASE, rotary_pct=ROTARY_PCT, max_seq_len=MAX_SEQ_LEN, name=f'/model/gpt_neox/layers.{layer_idx}/attention/attn')
 
@@ -128,12 +128,13 @@ def create_model(arg):
     input_ids = opset.parameter([-1, -1], Type.i64, name='input_ids')
     past_keys_num = opset.parameter([1,], Type.i64, name='past_keys_num')
     beam_idx = opset.parameter([-1,], Type.i64, name='beam_idx')
+    attn_mask = opset.parameter([-1, MAX_SEQ_LEN], Type.i64, name='attn_mask')
 
     embed_in_const = opset.constant(ConstDict['model.gpt_neox.embed_in.weight'], Type.f32)
     inputs_embeds = opset.gather(embed_in_const, indices=input_ids, axis=0) # name='/model/gpt_neox/embed_in/Gather') # [?,?,HIDDEN_SIZE]
     hidden_states = inputs_embeds
     for i in range(LAYER_NUM):
-        hidden_states = layer(hidden_states, past_keys_num, beam_idx, i, ConstDict)
+        hidden_states = layer(hidden_states, past_keys_num, beam_idx, attn_mask, i, ConstDict)
     # final_layer_norm
     final_layer_norm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name='/model/gpt_neox/final_layer_norm/mvn')
     final_layer_norm_bias = opset.constant(ConstDict['model.gpt_neox.final_layer_norm.bias'], Type.f32)
@@ -144,7 +145,7 @@ def create_model(arg):
     embed_out_weight = opset.constant(ConstDict['model.embed_out.weight'], Type.f32)
     embed_out = opset.matmul(final_layer_norm, embed_out_weight, transpose_a=False,transpose_b=False, name='logits') #wildcard [?,?,VOCAB_SIZE]
     embed_out_result = opset.result(embed_out, name='logits/sink_port_0') # [?,?,VOCAB_SIZE]
-    return Model([embed_out_result], [input_ids, past_keys_num, beam_idx])
+    return Model([embed_out_result], [input_ids, past_keys_num, beam_idx, attn_mask])
 
 def get_params_from_model(path):
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -219,4 +220,4 @@ if __name__ == "__main__":
     # model2 = create_model(FakeConstDict)
     print("====", "new model")
     show_io(model2)
-    serialize(model2, f"./hacked/gpt_neox.xml")
+    serialize(model2, args.ov_model_path)

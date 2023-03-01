@@ -72,6 +72,7 @@ protected:
     void reinitAttentionMask(size_t batch, size_t max_seq_len);
     void applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const std::vector<uint8_t*>& k_dst, size_t k_start,
                            float* cos_cached, float* sin_cached, size_t batch, size_t qSeqLen, size_t offset);
+    void updateAttnMask(const int* attn_mask, size_t batch, size_t seq_len);
 
 private:
     size_t layerNum = 32;
@@ -99,6 +100,7 @@ private:
     static constexpr size_t IN_QKV           = 0;
     static constexpr size_t IN_PAST_KEYS_NUM = 1;
     static constexpr size_t IN_BEAM_IDX      = 2;
+    static constexpr size_t ATTN_MASK_IDX    = 3;
 };
 
 }   // namespace node
