@@ -47,6 +47,7 @@ private:
         mov(reg_sin, ptr[reg_params + GET_OFF(sin)]);
         mov(reg_q_dst, ptr[reg_params + GET_OFF(q_dst)]);
         mov(reg_k_dst, ptr[reg_params + GET_OFF(k_dst)]);
+        mov(reg_q_dst_stride, ptr[reg_params + GET_OFF(q_dst_stride)]);
 
         uni_vpxor(vmm_q_src, vmm_q_src, vmm_q_src);
         uni_vpxor(vmm_k_src, vmm_k_src, vmm_k_src);
@@ -55,28 +56,29 @@ private:
 
         auto half_rotary_ndims = jcp_.rotary_ndims / 2;
         for (size_t k = 0; k < jcp_.head_num; k++) {
-            mov(reg_q_src_aux, reg_q_src);
-            mov(reg_k_src_aux, reg_k_src);
             mov(reg_q_dst_aux, reg_q_dst);
-            mov(reg_k_dst_aux, reg_k_dst);
             mov(reg_cos_aux, reg_cos);
             mov(reg_sin_aux, reg_sin);
+            size_t steps = 0;
             for (size_t i = 0; i < half_rotary_ndims / vec_size; i++) {
                 rotary_first_half(vec_size);
+                steps += vec_size;
             }
             if (half_rotary_ndims % vec_size != 0) {
                 rotary_first_half(half_rotary_ndims % vec_size);
+                steps += half_rotary_ndims % vec_size;
             }
             for (size_t i = 0; i < half_rotary_ndims / vec_size; i++) {
                 rotary_last_half(vec_size);
+                steps += vec_size;
             }
             if (half_rotary_ndims % vec_size != 0) {
                 rotary_last_half(half_rotary_ndims % vec_size);
             }
-            add(reg_q_src, jcp_.size_per_head * 3 * jcp_.src_prc.size());
-            add(reg_k_src, jcp_.size_per_head * 3 * jcp_.src_prc.size());
-            add(reg_q_dst, jcp_.q_seq_len * jcp_.size_per_head * jcp_.src_prc.size());
-            add(reg_k_dst, jcp_.max_seq_len * jcp_.size_per_head * jcp_.src_prc.size());
+            add(reg_q_src, (jcp_.size_per_head * 3 - steps) * jcp_.src_prc.size());
+            add(reg_k_src, (jcp_.size_per_head * 3 - steps) * jcp_.src_prc.size());
+            add(reg_q_dst, reg_q_dst_stride);
+            add(reg_k_dst, (jcp_.max_seq_len * jcp_.size_per_head - steps) * jcp_.src_prc.size());
         }
 
         this->postamble();
@@ -91,11 +93,11 @@ private:
         //bool is_tail = step < vec_size;
 
         // q_src[i + halfRotaryNdims]
-        mov(reg_tmp, reg_q_src_aux);
+        mov(reg_tmp, reg_q_src);
         add(reg_tmp, jcp_.rotary_ndims / 2 * jcp_.src_prc.size());
         load(vmm_q_src, reg_tmp, jcp_.src_prc, step, false);
         // k_src[i + halfRotaryNdims]
-        mov(reg_tmp, reg_k_src_aux);
+        mov(reg_tmp, reg_k_src);
         add(reg_tmp, jcp_.rotary_ndims / 2 * jcp_.src_prc.size());
         load(vmm_k_src, reg_tmp, jcp_.src_prc, step, false);
         load(vmm_cos, reg_cos_aux, Precision::FP32, step, false);
@@ -105,8 +107,8 @@ private:
         // k_src[i + halfRotaryNdims] * sin[i]
         uni_vmulps(vmm_k_dst, vmm_k_src, vmm_sin);
 
-        load(vmm_q_src, reg_q_src_aux, jcp_.src_prc, step, false);
-        load(vmm_k_src, reg_k_src_aux, jcp_.src_prc, step, false);
+        load(vmm_q_src, reg_q_src, jcp_.src_prc, step, false);
+        load(vmm_k_src, reg_k_src, jcp_.src_prc, step, false);
         // TODO: sse4
         // q_src[i] * cos[i] - q_src[i + halfRotaryNdims] * sin[i]
         vfmsub231ps(vmm_q_dst, vmm_q_src, vmm_cos);
@@ -114,12 +116,12 @@ private:
         vfmsub231ps(vmm_k_dst, vmm_k_src, vmm_cos);
 
         store(reg_q_dst_aux, vmm_q_dst, jcp_.src_prc, step);
-        store(reg_k_dst_aux, vmm_k_dst, jcp_.src_prc, step);
+        store(reg_k_dst, vmm_k_dst, jcp_.src_prc, step);
 
-        add(reg_q_src_aux, jcp_.src_prc.size() * step);
-        add(reg_k_src_aux, jcp_.src_prc.size() * step);
+        add(reg_q_src, jcp_.src_prc.size() * step);
+        add(reg_k_src, jcp_.src_prc.size() * step);
         add(reg_q_dst_aux, jcp_.src_prc.size() * step);
-        add(reg_k_dst_aux, jcp_.src_prc.size() * step);
+        add(reg_k_dst, jcp_.src_prc.size() * step);
         add(reg_cos_aux, sizeof(float) * step);
         add(reg_sin_aux, sizeof(float) * step);
     }
@@ -127,11 +129,11 @@ private:
         bool is_tail = step < vec_size;
 
         // q_src[i - halfRotaryNdims]
-        mov(reg_tmp, reg_q_src_aux);
+        mov(reg_tmp, reg_q_src);
         sub(reg_tmp, jcp_.rotary_ndims / 2 * jcp_.src_prc.size());
         load(vmm_q_src, reg_tmp, jcp_.src_prc, step, false);
         // k_src[i - halfRotaryNdims]
-        mov(reg_tmp, reg_k_src_aux);
+        mov(reg_tmp, reg_k_src);
         sub(reg_tmp, jcp_.rotary_ndims / 2 * jcp_.src_prc.size());
         load(vmm_k_src, reg_tmp, jcp_.src_prc, step, false);
         load(vmm_cos, reg_cos_aux, Precision::FP32, step, false);
@@ -141,21 +143,21 @@ private:
         // k_src[i - halfRotaryNdims] * sin[i]
         uni_vmulps(vmm_k_dst, vmm_k_src, vmm_sin);
 
-        load(vmm_q_src, reg_q_src_aux, jcp_.src_prc, step, false);
-        load(vmm_k_src, reg_k_src_aux, jcp_.src_prc, step, false);
+        load(vmm_q_src, reg_q_src, jcp_.src_prc, step, false);
+        load(vmm_k_src, reg_k_src, jcp_.src_prc, step, false);
         // q_src[i] * cos[i] + q_src[i - halfRotaryNdims] * sin[i]
         vfmadd231ps(vmm_q_dst, vmm_q_src, vmm_cos);
         // k_src[i] * cos[i] + k_src[i - halfRotaryNdims] * sin[i]
         vfmadd231ps(vmm_k_dst, vmm_k_src, vmm_cos);
 
         store(reg_q_dst_aux, vmm_q_dst, jcp_.src_prc, step);
-        store(reg_k_dst_aux, vmm_k_dst, jcp_.src_prc, step);
+        store(reg_k_dst, vmm_k_dst, jcp_.src_prc, step);
 
         if (!is_tail) {
-            add(reg_q_src_aux, jcp_.src_prc.size() * step);
-            add(reg_k_src_aux, jcp_.src_prc.size() * step);
+            add(reg_q_src, jcp_.src_prc.size() * step);
+            add(reg_k_src, jcp_.src_prc.size() * step);
             add(reg_q_dst_aux, jcp_.src_prc.size() * step);
-            add(reg_k_dst_aux, jcp_.src_prc.size() * step);
+            add(reg_k_dst, jcp_.src_prc.size() * step);
             add(reg_cos_aux, sizeof(float) * step);
             add(reg_sin_aux, sizeof(float) * step);
         }
@@ -196,10 +198,8 @@ private:
     Reg64 reg_sin = r11;
     Reg64 reg_q_dst = r12;
     Reg64 reg_k_dst = r13;
-    Reg64 reg_q_src_aux = r14;
-    Reg64 reg_k_src_aux = r15;
+    Reg64 reg_q_dst_stride = r14;
     Reg64 reg_q_dst_aux = rax;
-    Reg64 reg_k_dst_aux = rbx;
     Reg64 reg_cos_aux = rsi;
     Reg64 reg_sin_aux = rbp;
     Reg64 reg_tmp = rdx;
@@ -390,30 +390,26 @@ int g_beam_idx[] = {0, 1, 2, 3, 4, 5, 6, 7};
 void GPTNeoxAttn::prepareParams() {
     const auto& qkv_dims = getParentEdgeAt(IN_QKV)->getMemoryPtr()->getStaticDims();
     const auto batch = qkv_dims[0];
-    const auto seq_len = qkv_dims[1];
 
     // init rotary embeddings
-    initRotery(maxPositionEmbeddings);
+    if (cosCached.empty())
+        initRotery(maxPositionEmbeddings);
     // attention_mask shape: [batch, seq_len/maxSeqLen], real length = seq_len + past_key[-2]
-    attnMasks.resize(batch * maxSeqLen, 0.0f);
+    if (attnMasks.empty())
+        attnMasks.resize(batch * maxSeqLen, 0.0f);
     // memory for query transpose destination
-    if (queryTranspose.size() < batch * seq_len * hiddenSize * dataTypeSize) {
-        queryTranspose.resize(batch * seq_len * hiddenSize * dataTypeSize);
+    if (queryTranspose.size() < batch * maxSeqLen * hiddenSize * dataTypeSize) {
+        queryTranspose.resize(batch * maxSeqLen * hiddenSize * dataTypeSize);
     }
 
-    {
+    if (!rotaryKernel) {
         jit_rotary_compile_params jcp;
         jcp.src_prc = dataPrecision;
         jcp.head_num = headNum;
         jcp.rotary_ndims = rotaryNdims;
         jcp.hidden_size = hiddenSize;
-        jcp.q_seq_len = seq_len;
         jcp.max_seq_len = maxSeqLen;
         jcp.size_per_head = sizePerHead;
-        jcp.src_stride = hiddenSize * 3 * dataTypeSize;
-        jcp.q_dst_stride = seq_len * sizePerHead * dataTypeSize;
-        // key will directly write to past_keys
-        jcp.k_dst_stride = maxSeqLen * sizePerHead * dataTypeSize;
         if (mayiuse(cpu_isa_t::avx512_core)) {
             rotaryKernel.reset(new jit_rotary_kernel<cpu_isa_t::avx512_core>(jcp));
         } else if (mayiuse(cpu_isa_t::avx2)) {
@@ -515,6 +511,8 @@ void GPTNeoxAttn::applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_d
             call_args.sin = sin;
             call_args.q_dst = q_dst_seq;
             call_args.k_dst = k_dst_seq;
+            call_args.q_dst_stride = q_seq_len * sizePerHead * dataTypeSize;
+
             (*rotaryKernel)(&call_args);
             q_src += hiddenSize * 3 * dataTypeSize;
             k_src += hiddenSize * 3 * dataTypeSize;
@@ -614,11 +612,11 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     GlobalContext::getInstance().getOrCreateStore(getName() + std::to_string(model_id), size_per_key_per_beam, first_token ? nullptr : beam_idx, batch,
         current_k_bufs, current_v_bufs);
 
-    // the sentence is longer than maxSeqLen
-    if (seq_len + new_seq_offset > cosCached.size()) {
-        initRotery(seq_len + new_seq_offset);
-        reinitAttentionMask(batch, seq_len + new_seq_offset);
-    }
+    // TODO: support the sentence length is longer than maxSeqLen
+    // if (seq_len + new_seq_offset > cosCached.size()) {
+    //     initRotery(seq_len + new_seq_offset);
+    //     reinitAttentionMask(batch, seq_len + new_seq_offset);
+    // }
 
     // [batch, seq_len, (num_heads * 3 * head_size)]
     //   --> [batch, seq_len, num_heads, 3 * head_size]

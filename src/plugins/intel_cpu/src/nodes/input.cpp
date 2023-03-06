@@ -289,6 +289,8 @@ void Input::cloneBlobIfRequired() {
             if (!size)
                 return false;
 
+            // TODO: reduce compiling time
+            return false;
             if (auto fn = jit_has_subnormals_function()) {
                 static const size_t batch_size = 2048;
                 const size_t iterations_num = size / batch_size + 1;

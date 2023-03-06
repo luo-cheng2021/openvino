@@ -20,12 +20,8 @@ struct jit_rotary_compile_params {
     size_t head_num;
     size_t rotary_ndims;
     size_t hidden_size;
-    size_t q_seq_len;
     size_t max_seq_len;
     size_t size_per_head;
-    size_t src_stride;
-    size_t q_dst_stride;
-    size_t k_dst_stride;
 };
 
 struct jit_rotary_call_args {
@@ -35,6 +31,7 @@ struct jit_rotary_call_args {
     float* sin;
     void* q_dst;
     void* k_dst;
+    size_t q_dst_stride;
 };
 
 struct jit_uni_rotary_kernel {
