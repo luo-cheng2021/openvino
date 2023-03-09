@@ -125,6 +125,8 @@ void Gather::initSupportedPrimitiveDescriptors() {
 
     // Implementation desc type will be redefined in the fn prepareParams if a kernel will be created.
     Precision dataPrecision = getOriginalInputPrecisionAtPort(GATHER_DATA);
+    if (x64::mayiuse(x64::avx512_core_bf16))
+        dataPrecision = Precision::BF16;
     addSupportedPrimDesc({{LayoutType::ncsp, dataPrecision},
                           {LayoutType::ncsp, Precision::I32},
                           {LayoutType::ncsp, Precision::I32, isAxisInputConst}},
