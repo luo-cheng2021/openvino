@@ -115,16 +115,11 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
         return dense_4h_to_h
 
     mlp_output = mlp(post_attention_layernorm)
-    hidden_states_tmp = opset.add(mlp_output, attn_output)
-    return opset.add(hidden_states_tmp, hidden_states)
+    # hidden_states_tmp = opset.add(mlp_output, attn_output)
+    # return opset.add(hidden_states_tmp, hidden_states)
+    return opset.add_custom(mlp_output, attn_output, hidden_states)
 
-def create_model(arg):
-    if isinstance(arg, Model):
-        ConstDict = {}
-        collect_const(arg, ConstDict)
-    else:
-        ConstDict = arg
-
+def create_model(ConstDict):
     input_ids = opset.parameter([-1, -1], Type.i64, name='input_ids')
     past_keys_num = opset.parameter([1,], Type.i64, name='past_keys_num')
     beam_idx = opset.parameter([-1,], Type.i64, name='beam_idx')

@@ -12,6 +12,7 @@
 #include "openvino/op/adaptive_avg_pool.hpp"
 #include "openvino/op/adaptive_max_pool.hpp"
 #include "openvino/op/add.hpp"
+#include "openvino/op/add_custom.hpp"
 #include "openvino/op/asin.hpp"
 #include "openvino/op/asinh.hpp"
 #include "openvino/op/assign.hpp"

@@ -9,6 +9,7 @@ from openvino.runtime.opset4.ops import acosh
 from openvino.runtime.opset8.ops import adaptive_avg_pool
 from openvino.runtime.opset8.ops import adaptive_max_pool
 from openvino.runtime.opset1.ops import add
+from openvino.runtime.opset10.ops import add_custom
 from openvino.runtime.opset1.ops import asin
 from openvino.runtime.opset4.ops import asinh
 from openvino.runtime.opset3.ops import assign

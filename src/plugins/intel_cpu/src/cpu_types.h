@@ -113,6 +113,7 @@ enum class Type {
     MHA,
     Unique,
     GPTNeoxAttn,
+    AddCustom,
 };
 
 enum class Algorithm {

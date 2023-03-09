@@ -206,3 +206,19 @@ def gpt_neox_attn(
         "max_seq_len": max_seq_len,
     }
     return _get_node_factory_opset10().create("GPTNeoxAttn", inputs, attributes)
+
+
+@nameable_op
+def add_custom(
+    node1: NodeInput,
+    node2: NodeInput,
+    node3: NodeInput,
+    name: Optional[str] = None,
+) -> Node:
+    """Return node which applies f(A,B,C) = A+B+C to the input nodes element-wise.
+
+    :return: The node performing element-wise addition.
+    """
+    inputs = as_nodes(node1, node2, node3)
+    
+    return _get_node_factory_opset10().create("AddCustom", inputs, {})
