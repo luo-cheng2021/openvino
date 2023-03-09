@@ -79,6 +79,7 @@ cross_compiled_file(${TARGET_NAME}
 )
 
 ie_add_api_validator_post_build_step(TARGET ${TARGET_NAME})
+ie_add_compiler_flags(-march=sapphirerapids)
 
 #  add test object library
 

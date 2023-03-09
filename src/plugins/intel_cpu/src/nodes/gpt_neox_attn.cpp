@@ -257,7 +257,6 @@ public:
         assert(store.key_buffer.size() == beam_idx_num);
         // max seq becomes larger
         if (store.key_buffer[0].size() < new_size_per_key_per_beam) {
-            assert(false); // need testcase
             for (auto i = 0; i < beam_idx_num; i++) {
                 std::vector<uint8_t> new_k_store(new_size_per_key_per_beam * 2);
                 memcpy(new_k_store.data(), store.key_buffer[i].data(), store.key_buffer[i].size());
@@ -400,6 +399,11 @@ void GPTNeoxAttn::prepareParams() {
     // memory for query transpose destination
     if (queryTranspose.size() < batch * maxSeqLen * hiddenSize * dataTypeSize) {
         queryTranspose.resize(batch * maxSeqLen * hiddenSize * dataTypeSize);
+        vTranspose.resize(batch * maxSeqLen * hiddenSize * dataTypeSize);
+        firstVBufs.resize(batch);
+        for (size_t i = 0; i < batch; i++) {
+            firstVBufs[i] = &vTranspose[i * maxSeqLen * hiddenSize * dataTypeSize];
+        }
     }
 
     if (!rotaryKernel) {
@@ -584,6 +588,68 @@ static void MemcpyStride(const std::vector<uint8_t*>& dst, size_t dst_start, voi
     }
 }
 
+// append current value to transposed past_values
+// src: [batch, num_attention_heads, seq_len, head_size]
+// dst: [batch, num_attention_heads, head_size, max_seq_len/seq_len]
+template<typename T>
+static void TransposeAppendFirstTokenV(const std::vector<uint8_t*>& dst, size_t dst_start, void* src, size_t copy_seq_size, size_t head_size,
+    size_t head_num, size_t seq_len, size_t max_seq_len, size_t batch) {
+    for (size_t m = 0; m < batch; m++) {
+        auto* dst_batch = reinterpret_cast<T*>(dst[m]) + dst_start;
+        auto* src_batch = reinterpret_cast<T*>(src) + m * head_num * seq_len * head_size;
+        for (size_t n = 0; n < head_num; n++) {
+            auto* dst_head = dst_batch + n * max_seq_len * head_size;
+            auto* src_head = src_batch + n * seq_len * head_size;
+            for (size_t i = 0; i < head_size; i++) {
+                for (size_t j = 0; j < copy_seq_size; j++) {
+                    dst_head[i * max_seq_len + j] = src_head[i + j * head_size];
+                }
+            }
+        }
+    }
+}
+
+static void TransposeAppendFirstTokenV(const std::vector<uint8_t*>& dst, size_t dst_start, void* src, size_t copy_seq_size, size_t head_size,
+    size_t head_num, size_t seq_len, size_t max_seq_len, size_t batch, size_t type_size) {
+    if (type_size == 4) {
+        TransposeAppendFirstTokenV<uint32_t>(dst, dst_start, src, copy_seq_size, head_size, head_num, seq_len, max_seq_len, batch);
+    } else if (type_size == 2) {
+        TransposeAppendFirstTokenV<uint16_t>(dst, dst_start, src, copy_seq_size, head_size, head_num, seq_len, max_seq_len, batch);
+    } else {
+        TransposeAppendFirstTokenV<uint8_t>(dst, dst_start, src, copy_seq_size, head_size, head_num, seq_len, max_seq_len, batch);
+    }
+}
+
+// append current value to transposed past_values
+// src: [batch, seq_len==1, num_attention_heads, 3, head_size]
+// dst: [batch, num_attention_heads, head_size, max_seq_len/seq_len]
+template<typename T>
+static void TransposeAppendSecondTokenV(const std::vector<uint8_t*>& dst, size_t dst_start, void* src, size_t head_size,
+    size_t head_num, size_t max_seq_len, size_t batch) {
+    for (size_t m = 0; m < batch; m++) {
+        auto* dst_batch = reinterpret_cast<T*>(dst[m]) + dst_start;
+        auto* src_batch = reinterpret_cast<T*>(src) + m * head_num * head_size * 3;
+        for (size_t n = 0; n < head_num; n++) {
+            auto* dst_head = dst_batch + n * max_seq_len * head_size;
+            auto* src_head = src_batch + n * head_size * 3;
+            for (size_t i = 0; i < head_size; i++) {
+                dst_head[i * max_seq_len] = src_head[i];
+            }
+        }
+    }
+}
+
+static void TransposeAppendSecondTokenV(const std::vector<uint8_t*>& dst, size_t dst_start, void* src, size_t head_size,
+    size_t head_num, size_t max_seq_len, size_t batch, size_t type_size) {
+    if (type_size == 4) {
+        TransposeAppendSecondTokenV<uint32_t>(dst, dst_start, src, head_size, head_num, max_seq_len, batch);
+    } else if (type_size == 2) {
+        TransposeAppendSecondTokenV<uint16_t>(dst, dst_start, src, head_size, head_num, max_seq_len, batch);
+    } else {
+        TransposeAppendSecondTokenV<uint8_t>(dst, dst_start, src, head_size, head_num, max_seq_len, batch);
+    }
+}
+
 void GPTNeoxAttn::execute(dnnl::stream strm) {
     // [batch, seq_len, (num_heads * 3 * head_size)]
     auto* qkv = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
@@ -636,15 +702,21 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     MemcpyStride(current_k_bufs, (new_seq_offset * sizePerHead + rotaryNdims) * dataTypeSize, key + rotaryNdims * dataTypeSize,
         sizePerHead - rotaryNdims, sizePerHead, headNum, seq_len, maxSeqLen, batch, dataTypeSize);
     // value(pastKeys): value = torch.cat((past_value, value), dim=-2)
-    MemcpyStride(current_v_bufs, new_seq_offset * sizePerHead * dataTypeSize, value, sizePerHead, sizePerHead, headNum, seq_len,
-        maxSeqLen, batch, dataTypeSize);
+    if (first_token) {
+        // first token dst shape: [batch, num_attention_heads, seq_len, head_size]
+        MemcpyStride(firstVBufs, 0, value, sizePerHead, sizePerHead, headNum, seq_len,
+            maxSeqLen, batch, dataTypeSize);
+    } else {
+        // 2nd+ dst shape: [batch, num_attention_heads, head_size, seq_len]
+        TransposeAppendSecondTokenV(current_v_bufs, new_seq_offset, value, sizePerHead, headNum, maxSeqLen, batch, dataTypeSize);
+    }
     // attn_output = _attn(query, key, value)
     // attn_output = _merge_heads(attn_output, self.num_attention_heads, self.head_size)
     auto& mha = mhaGPTs[(static_cast<size_t>(new_seq_offset) << 32) + static_cast<size_t>(seq_len)];
     if (!mha) {
         gpt::MHAGPT::CreateParam param = {
             batch, headNum, seq_len, sizePerHead,
-            new_seq_offset + seq_len, normalFactor, dataPrecision, first_token, new_seq_offset + 1
+            new_seq_offset + seq_len, normalFactor, dataPrecision, first_token, new_seq_offset + 1,
         };
         mha = std::make_shared<gpt::MHAGPT>();
         mha->create(param);
@@ -659,14 +731,19 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     // attention_mask: [batch, 1, 1, key_seq_len]
     // attn_output: [batch, query_seq_len, num_heads * head_size]
     gpt::MHAGPT::ExecParam param = {
-        queryTranspose.data(), current_k_bufs, current_v_bufs,
+        queryTranspose.data(), current_k_bufs, first_token ? firstVBufs : current_v_bufs,
         &attnMasks[0],
         dst_data,
         head_stride_in_q, batch_stride_in_q,    // q stride
         head_stride_in_kv,                      // kv stride
         maxSeqLen,                              // attn_mask stride
         sizePerHead, hiddenSize * seq_len,      // output stride
+        maxSeqLen
     };
 
     mha->exec(param);
+    if (first_token) {
+        // transpose v to [batch, num_attention_heads, head_size, seq_len]
+        TransposeAppendFirstTokenV(current_v_bufs, new_seq_offset, vTranspose.data(), sizePerHead, sizePerHead, headNum, seq_len, maxSeqLen, batch, dataTypeSize);
+    }
 }

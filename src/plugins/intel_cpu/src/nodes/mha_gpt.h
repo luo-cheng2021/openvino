@@ -75,6 +75,7 @@ public:
         size_t batch_stride_in_attn_mask;   // attn_mask stride for next batch
         size_t head_stride_in_attn;         // attn stride for next head
         size_t batch_stride_in_attn;        // attn stride for next batch
+        size_t value_seq_stride_in_v;
     };
     MHAGPT();
     static int query_scratch_size(const CreateParam& param);

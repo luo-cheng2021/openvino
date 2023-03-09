@@ -17,6 +17,7 @@
 #include "ngraph_transformations/op/mha.hpp"
 #include "dnnl_extension_utils.h"
 #include <ie_ngraph_utils.hpp>
+#include "special/gemm_custom.hpp"
 
 using namespace InferenceEngine;
 using namespace InferenceEngine::details;
@@ -797,6 +798,8 @@ struct MHAGPT::Impl {
     template <typename in1_type>
     void mhaImpl(const ExecParam& param);
 
+    void mha1x1_bf16(const ExecParam &param);
+
     void init_brgemm(brgemmCtx& ctx, std::unique_ptr<dnnl::impl::cpu::x64::brgemm_kernel_t>& brgKernel, bool use_amx) const;
     void init_brgemm_copy_a(std::unique_ptr<dnnl::impl::cpu::x64::matmul::jit_brgemm_matmul_copy_a_t>& brgCopyKernel,
         size_t K, size_t K_blk, size_t K_tail, size_t LDA, dnnl_data_type_t dt_in0) const;
@@ -1128,9 +1131,9 @@ void MHAGPT::Impl::create(const CreateParam& param) {
 
     bufferMatMul0In0Size = M_blk * rnd_up(K0_head_size, K0_blk) * brg0Prc.size();
     bufferMatMul0In1Size = rnd_up(K0_head_size, brg0VnniFactor) * rnd_up(N0_key_seq_len, N0_blk) * brg0Prc.size();
-    bufferMatMul0OutSize = brgemmCtx0.M * N0_key_seq_len * accPrecision0.size();
+    bufferMatMul0OutSize = brgemmCtx0.M * rnd_up(N0_key_seq_len, 64) * accPrecision0.size();
     bufferMatMul1In1Size = rnd_up(K1_key_seq_len, brg1VnniFactor) * rnd_up(N1_head_size, N1_blk) * std::max(brg0Prc.size(), brg1PrcIn1.size());
-    bufferMatMul1OutSize = brgemmCtx1.M * N1_head_size * accPrecision1.size();
+    bufferMatMul1OutSize = brgemmCtx1.M * rnd_up(N1_head_size, 64) * accPrecision1.size();
     bufferCompensation0Size = rnd_up(N0_key_seq_len, N0_blk);
     bufferCompensation1Size = rnd_up(N1_head_size, N1_blk);
 
@@ -1504,11 +1507,92 @@ void MHAGPT::Impl::mhaImpl(const ExecParam& param) {
     });
 }
 
+void MHAGPT::Impl::mha1x1_bf16(const ExecParam &param) {
+    uint8_t* pQIn0 = param.q;
+    auto& pKIn0 = param.k;
+    float* pAddIn1 = param.attention_mask;
+    auto& pVIn0 = param.v;
+    uint8_t* pout = param.attn_output;
+
+    auto outPrcSize = _create_param.qkv_precision.size();
+    parallel_for2d(dimsMatMul0Out[0], dimsMatMul0Out[1], [&](size_t i0, size_t i1) {
+        size_t threadNum = parallel_get_thread_num();
+
+        auto pQIn0_aux = pQIn0 + (i0 * param.batch_stride_in_q + i1 * param.head_stride_in_q) * _create_param.qkv_precision.size();
+        auto pKIn0_aux = pKIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
+        auto pVIn0_aux = pVIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
+
+        auto pAddIn1_aux = pAddIn1 + i0 * param.batch_stride_in_attn_mask;
+
+        auto bufferMatMul0In1_local = reinterpret_cast<uint8_t*>(bufferMatMul0In1.data() + threadNum * bufferMatMul0In1Size);
+        auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.data() + threadNum * bufferMatMul0OutSize);
+        auto bufferMatMul1In1_local = reinterpret_cast<uint8_t*>(bufferMatMul1In1.data() + threadNum * bufferMatMul1In1Size);
+        auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.data() + threadNum * bufferMatMul1OutSize);
+
+        auto pTranspose1Out_aux = brgCopyBKernel0 ? bufferMatMul1In1_local
+                                                  : bufferMatMul0In1_local;
+        
+        // K: head_size, N: key_seq_len
+        // q[1, K] * transpose(k[N, K])        ==>
+        //     k[N, K] * transpose(q[1, K])    ==>
+        //     k[N, K] * q[K, 1]
+        Gemm gemm;
+        tensor2D<ov::bfloat16> matK(_create_param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux));
+        ov::intel_cpu::tensor2D<ov::bfloat16> Bpadded;
+        gemm.gemAvB(matK, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), Bpadded);
+
+        auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : mulScales.data());
+        auto pMatMul0Out = bufferMatMul0Out_local;
+        // loop along K dimension
+        auto valid_softmax_items = _create_param.first_valid_softmax_items + 0 * M_blk;
+        for (size_t m = 0; m < 1; m++) {
+            jit_mul_add_softmax_call_args call_args;
+            call_args.p_in0 = pMatMul0Out + m * N0_key_seq_len * accPrecision0.size();
+            call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
+            call_args.p_add_in1 = pAddIn1_aux;
+            call_args.p_out = pMatMul0Out + m * N0_key_seq_len * _create_param.qkv_precision.size();
+            call_args.p_buffer = pMatMul0Out + m * N0_key_seq_len * accPrecision0.size();
+            call_args.p_scales0 = fqScales1.data();
+            call_args.p_scales1 = fqScales2.data();
+            call_args.work_amount = valid_softmax_items;
+
+            (*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
+            // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
+            if (_create_param.need_select_transpose) {
+                void *invalidPtr = pMatMul0Out + (m * N0_key_seq_len + valid_softmax_items) * _create_param.qkv_precision.size();
+                memset(invalidPtr, 0, (N0_key_seq_len - valid_softmax_items) * _create_param.qkv_precision.size());
+                valid_softmax_items = std::min(valid_softmax_items + 1, N0_key_seq_len);
+            }
+        }
+        // K: key_seq_len(stride is max_seq_len), N: head_size
+        // (q*k')[1, K] * v[K, N]    ==>
+        //      v[N, K] * (q*k')[K, 1]
+        // past_values aka v[head_size, key_seq_len] is already stored in this format
+        tensor2D<ov::bfloat16> matV(_create_param.head_size, _create_param.key_seq_len, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), param.value_seq_stride_in_v * sizeof(ov::bfloat16));
+        auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
+        gemm.gemAvB(matV, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), reinterpret_cast<ov::bfloat16*>(bufferMatMul1Out_local), Bpadded);
+        if (convertReorderKernel) {
+            // matmul1: [batch, num_heads, query_seq_len, head_size]
+            // attn_output: [batch, query_seq_len, num_heads * head_size]
+            jit_convert_reorder_call_args call_args;
+            call_args.p_in = bufferMatMul1Out_local;
+            call_args.p_out = pOut_aux + (0 * M_blk * batch1 * N1_head_size) * outPrcSize;
+            call_args.p_scales = fqScales3.data();
+            call_args.outter_work_amount = 1;
+
+            (*convertReorderKernel)(&call_args);
+        }
+    });
+}
+
 void MHAGPT::Impl::exec(const ExecParam& param) {
     if (_create_param.qkv_precision == Precision::FP32) {
         mhaImpl<float>(param);
     } else if (_create_param.qkv_precision == Precision::BF16) {
-        mhaImpl<bfloat16_t>(param);
+        if (_create_param.query_seq_len == 1)
+            mha1x1_bf16(param);
+        else
+            mhaImpl<bfloat16_t>(param);
     } else if (_create_param.qkv_precision == Precision::I8) {
         mhaImpl<int8_t>(param);
     } else {

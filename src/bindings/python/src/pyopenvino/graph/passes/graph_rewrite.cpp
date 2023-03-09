@@ -61,15 +61,15 @@ void regclass_passes_GraphRewrite(py::module m) {
                            :type pass: openvino.runtime.passes.MatcherPass
     )");
 
-    back_graph_rewrite.def(
-        "add_matcher",
-        static_cast<std::shared_ptr<ov::pass::MatcherPass> (ov::pass::BackwardGraphRewrite::*)(
-            const std::shared_ptr<ov::pass::MatcherPass>&)>(&ov::pass::BackwardGraphRewrite::add_matcher),
-        py::arg("pass"),
-        R"(
-        Register single MatcherPass pass inside BackwardGraphRewrite.
+    // back_graph_rewrite.def(
+    //     "add_matcher",
+    //     static_cast<std::shared_ptr<ov::pass::MatcherPass> (ov::pass::BackwardGraphRewrite::*)(
+    //         const std::shared_ptr<ov::pass::MatcherPass>&)>(&ov::pass::BackwardGraphRewrite::add_matcher),
+    //     py::arg("pass"),
+    //     R"(
+    //     Register single MatcherPass pass inside BackwardGraphRewrite.
 
-        :param pass: openvino.runtime.passes.MatcherPass instance
-        :type pass: openvino.runtime.passes.MatcherPass
-    )");
+    //     :param pass: openvino.runtime.passes.MatcherPass instance
+    //     :type pass: openvino.runtime.passes.MatcherPass
+    // )");
 }
