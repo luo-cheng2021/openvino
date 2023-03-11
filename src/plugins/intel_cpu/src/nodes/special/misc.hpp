@@ -53,7 +53,7 @@ using ov::bfloat16;
 #define rndup(x, n) (((x + n - 1)/n)*n)
 
 template<typename T>
-void show(const T * data, int rows, int cols) {
+inline void show(const T * data, int rows, int cols) {
     std::ostream& out = std::cout;
     out << "==============\n";
     for(int i0=0; i0 < rows; i0++) {
@@ -65,7 +65,7 @@ void show(const T * data, int rows, int cols) {
 }
 
 template<typename T, int tile>
-void tshow() {
+inline void tshow() {
     if (std::is_same<bfloat16,T>::value) {
         bfloat16 data[16*32];
         _tile_stored(tile, data, 64);
@@ -78,13 +78,13 @@ void tshow() {
     }
 }
 
-void vshow_bf16(__m512i v) {
+inline void vshow_bf16(__m512i v) {
     bfloat16 values[32];
     _mm512_storeu_epi16(values, v);
     show(values, 1, 32);
 }
 
-void vshow(__m512 v) {
+inline void vshow(__m512 v) {
     float values[16];
     _mm512_storeu_ps(values, v);
     show(values, 1, 16);
@@ -116,7 +116,7 @@ struct tensor2D {
     tensor2D(int d0, int d1) {
         capacity = 0;
         resize(d0, d1);
-        fill_rnd();
+        //fill_rnd();
     }
 
     tensor2D(int d0, int d1, T * ext, int _stride) {
@@ -158,7 +158,7 @@ struct tensor2D {
             // use all bandwidth (L1D/L2 only deliver data in unit of 64-byte aligned cache-line)
             data = std::shared_ptr<T>(
                         reinterpret_cast<T*>(aligned_alloc(64, capacity)),
-                        [](void * p) { free(p); });
+                        [](void * p) { ::free(p); });
         }
     }
 
@@ -238,7 +238,7 @@ struct tensor2D {
         return out;
     }
 };
-
+#if 0
 void matmul(tensor2D<bfloat16> & A, tensor2D<bfloat16> & B, tensor2D<bfloat16> & C) {
     int M = C.dims[0];
     int N = C.dims[1];
@@ -399,6 +399,7 @@ struct timeit {
         return avg_latency;
     }
 };
+#endif
 
 /*
 https://www.intel.com/content/www/us/en/develop/documentation/cpp-compiler-developer-guide-and-reference/top/compiler-reference/intrinsics/intrinsics-for-amx-instructions/intrinsics-for-amx-tile-instructions/tile-loadconfig.html
@@ -654,7 +655,7 @@ struct PPBuffer {
 };
 
 
-
+#if 0
 
 #define ENABLE_PROFILE 0
 
@@ -776,3 +777,4 @@ int amx_unit_test_accuracy() {
     _tile_release();
     return 0;
 }
+#endif

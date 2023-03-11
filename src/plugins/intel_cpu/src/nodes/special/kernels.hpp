@@ -142,7 +142,7 @@ struct KpackedB {
             capacity = need_capacity;
             data = std::shared_ptr<bfloat16>(
                         reinterpret_cast<bfloat16*>(aligned_alloc(64, capacity)),
-                        [](void * p){ free(p); });
+                        [](void * p){ ::free(p); });
         }
     }
 
@@ -163,7 +163,7 @@ constexpr int tB1 = 7;
 
 namespace functional {
 
-    void transpose_m512i_16x16(__m512i &r0, __m512i &r1, __m512i &r2, __m512i &r3,
+    inline void transpose_m512i_16x16(__m512i &r0, __m512i &r1, __m512i &r2, __m512i &r3,
                                __m512i &r4, __m512i &r5, __m512i &r6, __m512i &r7,
                                __m512i &r8, __m512i &r9, __m512i &ra, __m512i &rb,
                                __m512i &rc, __m512i &rd, __m512i &re, __m512i &rf) {
@@ -238,7 +238,7 @@ namespace functional {
         rf = _mm512_shuffle_i32x4(t7, tf, 0xdd); //  15  31  47  63  79  96 111 127 ... 255
     }
 
-    void transpose_epi32_16x16(void * _dst, const void * src, int stride) {
+    inline void transpose_epi32_16x16(void * _dst, const void * src, int stride) {
         auto * dst = reinterpret_cast<uint32_t*>(_dst);
         __m512i r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, ra, rb, rc, rd, re, rf;
         auto * pA = reinterpret_cast<const uint8_t*>(src);
@@ -280,7 +280,7 @@ namespace functional {
     }
 
     // 16xN, N<=16, non-valid part is filled with zeros
-    void transpose_epi32_16xN(void * _dst, const void * src, int stride, int valid_n) {
+    inline void transpose_epi32_16xN(void * _dst, const void * src, int stride, int valid_n) {
         auto * dst = reinterpret_cast<uint32_t*>(_dst);
         __m512i r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, ra, rb, rc, rd, re, rf;
         auto * pA = reinterpret_cast<const uint8_t*>(src);
@@ -320,7 +320,7 @@ namespace functional {
         _mm512_storeu_epi32(dst + 15*16, rf);
     }
 
-    void gelu_erf_minmax_approx() {
+    inline void gelu_erf_minmax_approx() {
         /*
 ```c++
 // gelu_erf(x) polynomial for direct erf approximation (formula defined)
@@ -395,7 +395,7 @@ void jit_uni_eltwise_injector_f32<isa,
     }
     
 
-    void kpack_tile_B0B1(void * _dst0, void * _dst1, const void * _src, int stride, int src_rows) {
+    inline void kpack_tile_B0B1(void * _dst0, void * _dst1, const void * _src, int stride, int src_rows) {
         // in 64unit
         //
         //  [a1 a2 a3 a4 | a5 a6 a7 a8]
@@ -481,7 +481,7 @@ void jit_uni_eltwise_injector_f32<isa,
     //   0 2 4 6 ... ...
     //   1 3 5 7 ... ...
     // 
-    void prepareB(KpackedB & B, tensor2D<bfloat16> & matB, bool transpose = false) {
+    inline void prepareB(KpackedB & B, tensor2D<bfloat16> & matB, bool transpose = false) {
         int K = matB.dims[transpose?1:0];
         int N = matB.dims[transpose?0:1];
         B.resize(K, N);
@@ -911,8 +911,10 @@ struct GemAvB {
                 regC1 = _mm512_dpbf16_ps(regC1, rf, _mm512_set1_epi32(pBi32[15]));
             }
             regC0 = _mm512_add_ps(regC0, regC1);
-            auto regOut = _mm512_cvtne2ps_pbh(regC0, regC0); // only 16 bfloat16 results in lower 256bits 
-            _mm256_storeu_si256(reinterpret_cast<__m256i_u *>(vecC + m), _mm512_extracti64x4_epi64(regOut, 0));
+            _mm512_store_ps(reinterpret_cast<float*>(vecC) + m, regC0);
+
+            // auto regOut = _mm512_cvtne2ps_pbh(regC0, regC0); // only 16 bfloat16 results in lower 256bits 
+            // _mm256_storeu_si256(reinterpret_cast<__m256i *>(vecC + m), _mm512_extracti64x4_epi64(regOut, 0));
         }
     }
 };

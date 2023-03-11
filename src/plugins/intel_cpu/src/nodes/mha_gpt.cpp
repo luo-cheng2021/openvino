@@ -885,6 +885,7 @@ struct MHAGPT::Impl {
     // copy from mha.h/cpp end
 
     size_t vec_size = 1;
+    std::vector<std::shared_ptr<executor_amx_bf16::GemAvB>> gemAvB;
 };
 
 void MHAGPT::Impl::init_brgemm(brgemmCtx& ctx, std::unique_ptr<brgemm_kernel_t>& brgKernel, bool use_amx) const {
@@ -992,6 +993,10 @@ void MHAGPT::Impl::create(const CreateParam& param) {
     bool isAMXSupported = mayiuse(avx512_core_bf16_amx_int8) || mayiuse(avx512_core_bf16_amx_bf16);
 
     size_t numThreads = parallel_get_max_threads();
+    gemAvB.resize(numThreads);
+    for (size_t i = 0; i < numThreads; i++) {
+        gemAvB[i] = std::make_shared<executor_amx_bf16::GemAvB>();
+    }
 
     size_t matmulOptimalM = 32;
 
@@ -1515,6 +1520,7 @@ void MHAGPT::Impl::mha1x1_bf16(const ExecParam &param) {
     uint8_t* pout = param.attn_output;
 
     auto outPrcSize = _create_param.qkv_precision.size();
+    auto& gemAvB_ops = gemAvB;
     parallel_for2d(dimsMatMul0Out[0], dimsMatMul0Out[1], [&](size_t i0, size_t i1) {
         size_t threadNum = parallel_get_thread_num();
 
@@ -1536,10 +1542,8 @@ void MHAGPT::Impl::mha1x1_bf16(const ExecParam &param) {
         // q[1, K] * transpose(k[N, K])        ==>
         //     k[N, K] * transpose(q[1, K])    ==>
         //     k[N, K] * q[K, 1]
-        Gemm gemm;
-        tensor2D<ov::bfloat16> matK(_create_param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux));
-        ov::intel_cpu::tensor2D<ov::bfloat16> Bpadded;
-        gemm.gemAvB(matK, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), Bpadded);
+        tensor2D<ov::bfloat16> matK(_create_param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
+        (*gemAvB_ops[threadNum])(matK, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local));
 
         auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : mulScales.data());
         auto pMatMul0Out = bufferMatMul0Out_local;
@@ -1570,7 +1574,7 @@ void MHAGPT::Impl::mha1x1_bf16(const ExecParam &param) {
         // past_values aka v[head_size, key_seq_len] is already stored in this format
         tensor2D<ov::bfloat16> matV(_create_param.head_size, _create_param.key_seq_len, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), param.value_seq_stride_in_v * sizeof(ov::bfloat16));
         auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
-        gemm.gemAvB(matV, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), reinterpret_cast<ov::bfloat16*>(bufferMatMul1Out_local), Bpadded);
+        (*gemAvB_ops[threadNum])(matV, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), reinterpret_cast<ov::bfloat16*>(bufferMatMul1Out_local));
         if (convertReorderKernel) {
             // matmul1: [batch, num_heads, query_seq_len, head_size]
             // attn_output: [batch, query_seq_len, num_heads * head_size]
