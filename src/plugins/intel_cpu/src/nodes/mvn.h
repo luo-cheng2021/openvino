@@ -129,6 +129,7 @@ private:
     std::vector<const void*> postOpsDataPtrs;
 
     MVNAttrs mvnAttrs;
+    bool fastBf16Path = false;
 
     class MVNExecutor {
     public:

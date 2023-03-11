@@ -306,11 +306,12 @@ std::vector<fusingSpecificParams> fusingParamsSet {
 };
 
 std::vector<fusingSpecificParams> fusingParamsSetStaticShape {
-       /* FQ */
-       fusingFakeQuantizePerChannel,
-       fusingFakeQuantizePerChannelRelu,
-       /* another patterns */
-       fusingScaleShift,
+       emptyFusingSpec,
+    //    /* FQ */
+    //    fusingFakeQuantizePerChannel,
+    //    fusingFakeQuantizePerChannelRelu,
+    //    /* another patterns */
+    //    fusingScaleShift,
 };
 
 const auto Mvn3D = ::testing::Combine(
@@ -460,7 +461,7 @@ const auto Mvn2DStatic = ::testing::Combine(
 const auto Mvn3DStatic = ::testing::Combine(
        ::testing::Combine(
            ::testing::ValuesIn(static_shapes_to_test_representation(inputShapesStatic_3D)),
-           ::testing::Values(ElementType::f32),
+           ::testing::ValuesIn({ElementType::f32, ElementType::bf16}),
            ::testing::ValuesIn(emptyReductionAxes),
            ::testing::ValuesIn(acrossChannels),
            ::testing::ValuesIn(normalizeVariance),

@@ -25,6 +25,7 @@
 #include <ngraph/opsets/opset6.hpp>
 #include "memory_desc/dnnl_blocked_memory_desc.h"
 #include "utils/cpu_utils.hpp"
+#include "special/mvn_custom.hpp"
 
 using namespace dnnl;
 using namespace InferenceEngine;
@@ -1322,9 +1323,6 @@ void MVN::prepareParams() {
     if (getSelectedPrimitiveDescriptor() == nullptr)
         IE_THROW() << "Preferable primitive descriptor is not set.";
 
-    const SizeVector in_dims = srcMemPtr->getStaticDims();
-    transformTo5DCase(in_dims);
-
     auto selectedPD = getSelectedPrimitiveDescriptor();
     mvnAttrs.src_prc = selectedPD->getConfig().inConfs[0].getMemDesc()->getPrecision();
     mvnAttrs.dst_prc = selectedPD->getConfig().outConfs[0].getMemDesc()->getPrecision();
@@ -1335,6 +1333,21 @@ void MVN::prepareParams() {
     } else {
         mvnAttrs.layout = MVNLayoutType::mvn_block;
     }
+    if (mvnAttrs.src_prc == mvnAttrs.dst_prc && mvnAttrs.src_prc == Precision::BF16 &&
+        mvnAttrs.initAcrossChannels_ == false && getInputShapeAtPort(0).getRank() == 3 &&
+        fusedWith.empty() && mvnAttrs.layout == MVNLayoutType::mvn_planar &&
+        mvnAttrs.normalizeVariance_ == true) {
+        fastBf16Path = true;
+        std::cout << "xxxxxxxxxxxxxxxxxxx use fast path\n";
+        return;
+    } else {
+        std::cout << mvnAttrs.src_prc << " " << mvnAttrs.dst_prc << " "
+            << mvnAttrs.initAcrossChannels_ << " " << getInputShapeAtPort(0).getRank()
+            << "\n";
+    }
+    const SizeVector in_dims = srcMemPtr->getStaticDims();
+    transformTo5DCase(in_dims);
+
 
     MVNKey key = {mvnAttrs, dnnl::primitive_attr()};
     setPostOps(key.attr, true);
@@ -1411,7 +1424,7 @@ void MVN::executeDynamicImpl(dnnl::stream strm) {
 }
 
 void MVN::execute(dnnl::stream strm) {
-    if (!execPtr) {
+    if (!execPtr && !fastBf16Path) {
         IE_THROW() << "Can't execute MVN node. Primitive didn't created";
     }
     auto &dstMemPtr = getChildEdgeAt(0)->getMemoryPtr();
@@ -1419,7 +1432,21 @@ void MVN::execute(dnnl::stream strm) {
 
     uint8_t *dst_data = reinterpret_cast<uint8_t*>(dstMemPtr->GetPtr());
     uint8_t *src_data = reinterpret_cast<uint8_t*>(srcMemPtr->GetPtr());
-    execPtr->exec(src_data, dst_data, postOpsDataPtrs.data());
+    if (fastBf16Path) {
+        const SizeVector& in_dims = srcMemPtr->getStaticDims();
+        size_t C1 = in_dims[2];
+        size_t C2 = C1 * in_dims[1];
+        auto eps = mvnAttrs.epsValue_;
+        bool inside_sqrt = mvnAttrs.epsMode_ == INSIDE_SQRT;
+
+        parallel_for2d(in_dims[0], in_dims[1], [&](size_t b, size_t c) {
+            auto offset = b * C2 + c * C1;
+            mvn_line(reinterpret_cast<bfloat16*>(src_data) + offset, in_dims[2], eps, inside_sqrt,
+                reinterpret_cast<bfloat16*>(dst_data) + offset);
+        });
+    } else {
+        execPtr->exec(src_data, dst_data, postOpsDataPtrs.data());
+    }
 }
 
 void MVN::MVNJitExecutor::mvn_pln(const uint8_t* src_data, uint8_t* dst_data, const void *post_ops_data_) {
