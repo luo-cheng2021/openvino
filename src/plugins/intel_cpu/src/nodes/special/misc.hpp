@@ -452,7 +452,7 @@ struct tileconfig_t {
     ~tileconfig_t() {
         _tile_release();
     }
-    void load() {
+    void __attribute__((noinline)) load() {
         //std::cout << "\ttile load config ... " << std::flush;
         _tile_loadconfig(this);
         //std::cout << *this << std::flush << std::endl;

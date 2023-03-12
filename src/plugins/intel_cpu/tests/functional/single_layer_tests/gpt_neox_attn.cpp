@@ -416,7 +416,8 @@ std::vector<CPUSpecificParams> filterCPUInfoForDevice() {
 }
 
 const std::vector<ElementType> netPrecisions = {
-    ElementType::f32,
+    // TODO: support f32
+    //ElementType::f32,
     ElementType::bf16
 };
 

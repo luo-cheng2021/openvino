@@ -536,22 +536,39 @@ void jit_uni_eltwise_injector_f32<isa,
 };
 
 // 2x2 tiles post process kernels
-struct Tiles2x2PostProcess {
-    Tiles2x2PostProcess() {}
 
-    // output converted into bf16
-    tensor2D<bfloat16> * pmatC;
-    void setDstBF16(tensor2D<bfloat16> & matC) {
-        pmatC = &matC;
+// 4 tiles located at C matrix (m,n) of size (valid_m, valid_n)
+//   tC00/tC01
+//   tC10/tC11
+// REGPP is register level post-process:
+//
+//   regpp(int n, __mm512 & low512, high512)
+//
+struct regpp_empty {
+    // n : index of the first output channel
+    // r : output[   n:n+16]
+    void operator()(int n, __m512& r) {
     }
+};
 
-    void postProcess32x32(float * psrc, int8_t * pdst, int stride, int valid_m, int valid_n) {
+// a helper callable for most frequenctly used pp kernels
+template<typename REGPP> 
+struct PP2bf16 {
+    tensor2D<bfloat16> & C;
+    REGPP regpp;
+    PP2bf16(tensor2D<bfloat16> & C, REGPP regpp) : C(C), regpp(regpp) {}
+    void operator()(tensor2D<float> & buffC, int m, int n, int valid_m, int valid_n) {
+        auto * psrc = &buffC(0,0);
+        int8_t * pdst = reinterpret_cast<int8_t*>(&(C(m, n)));
+        int stride = C.stride;
         __mmask32 k = _cvtu32_mask32(0xFFFFFFFF >> (32-valid_n));
         while(valid_m >= 16) {
             for(int i = 0; i < 16; i ++) {
-                auto b = _mm512_loadu_epi16(psrc);
-                auto a = _mm512_loadu_epi16(psrc + 16);
-                auto c = _mm512_cvtne2ps_pbh(a, b);
+                auto r0 = _mm512_loadu_ps(psrc);
+                auto r1 = _mm512_loadu_ps(psrc + 16);
+                regpp(n, r0);
+                regpp(n + 16, r1);
+                auto c = _mm512_cvtne2ps_pbh(r1, r0);
                 _mm512_mask_storeu_epi16(pdst, k, c);   // 32 bf16
                 pdst += stride;
                 psrc += 32;
@@ -559,21 +576,53 @@ struct Tiles2x2PostProcess {
             valid_m -= 16;
         }
         for(int i = 0; i < valid_m; i ++) {
-            auto b = _mm512_loadu_epi16(psrc);
-            auto a = _mm512_loadu_epi16(psrc + 16);
-            auto c = _mm512_cvtne2ps_pbh(a, b);
+            auto r0 = _mm512_loadu_ps(psrc);
+            auto r1 = _mm512_loadu_ps(psrc + 16);
+            regpp(n, r0);
+            regpp(n + 16, r1);
+            auto c = _mm512_cvtne2ps_pbh(r1, r0);
             _mm512_mask_storeu_epi16(pdst, k, c);   // 32 bf16
             pdst += stride;
             psrc += 32;
         }
     }
+};
 
-    // 4 tiles located at C matrix (m,n) of size (valid_m, valid_n)
-    //   tC00/tC01
-    //   tC10/tC11
-    virtual void operator()(tensor2D<float> & buffC, int m, int n, int valid_m, int valid_n) {
-        auto * pC = reinterpret_cast<int8_t*>(&((*pmatC)(m, n)));
-        postProcess32x32(&buffC(0,0), pC, pmatC->stride, valid_m, valid_n);
+template<typename REGPP> 
+struct PP2float {
+    tensor2D<float> & C;
+    REGPP regpp;
+    PP2float(tensor2D<float> & C, REGPP regpp) : C(C), regpp(regpp) {}
+    void operator()(tensor2D<float> & buffC, int m, int n, int valid_m, int valid_n) {
+        auto * psrc = &buffC(0,0);
+        int8_t * pdst = reinterpret_cast<int8_t*>(&(C(m, n)));
+        int stride = C.stride;
+        uint32_t mask = 0xFFFFFFFF >> (32-valid_n);
+        __mmask32 k0 = _cvtu32_mask32(mask & 0xFFFF);
+        __mmask32 k1 = _cvtu32_mask32(mask >> 16);
+        while(valid_m >= 16) {
+            for(int i = 0; i < 16; i ++) {
+                auto r0 = _mm512_loadu_ps(psrc);
+                auto r1 = _mm512_loadu_ps(psrc + 16);
+                regpp(n, r0);
+                regpp(n + 16, r1);
+                _mm512_mask_storeu_ps(pdst, k0, r0);
+                _mm512_mask_storeu_ps(pdst + 64, k1, r1);
+                pdst += stride;
+                psrc += 32;
+            }
+            valid_m -= 16;
+        }
+        for(int i = 0; i < valid_m; i ++) {
+            auto r0 = _mm512_loadu_ps(psrc);
+            auto r1 = _mm512_loadu_ps(psrc + 16);
+            regpp(n, r0);
+            regpp(n + 16, r1);
+            _mm512_mask_storeu_ps(pdst, k0, r0);
+            _mm512_mask_storeu_ps(pdst + 64, k1, r1);
+            pdst += stride;
+            psrc += 32;
+        }
     }
 };
 
@@ -585,25 +634,60 @@ struct Tiles2x2PostProcess {
 // into grid (better in unit with size of multiple of 32x32)
 // each grid is a considered as a independent matmul on
 // submatrix of A,B and C.
-template<typename PP>
+
 struct Matmul {
     KpackedB internalB;
     tensor2D<bfloat16> scratch;
     BlockIterator blk_it;
     bool constB;
     bool transposeB;
-    PP ppkernel;
     // 2x2 C tiles buffer
     tensor2D<float> buffC;
 
     Matmul(bool constB = false, bool transposeB = false) : 
         constB(constB), transposeB(transposeB), buffC(32, 32) {}
 
+    // REGPP kernel overload, simpler for caller
+    template<typename REGPP>
+    void operator()(tensor2D<bfloat16> & matA,
+                    tensor2D<bfloat16> & matB,
+                    tensor2D<bfloat16> & matC,
+                    REGPP regppkernel) {
+        PP2bf16<REGPP> ppkernel(matC, regppkernel);
+        (*this)(matA, matB, ppkernel);
+    }
+
+    template<typename REGPP>
+    void operator()(tensor2D<bfloat16> & matA,
+                    tensor2D<bfloat16> & matB,
+                    tensor2D<float> & matC,
+                    REGPP regppkernel) {
+        PP2float<REGPP> ppkernel(matC, regppkernel);
+        (*this)(matA, matB, ppkernel);
+    }
+
+    // empty PP
+    void operator()(tensor2D<bfloat16> & matA,
+                    tensor2D<bfloat16> & matB,
+                    tensor2D<bfloat16> & matC) {
+        PP2bf16<regpp_empty> ppkernel(matC, regpp_empty());
+        (*this)(matA, matB, ppkernel);
+    }
+
+    void operator()(tensor2D<bfloat16> & matA,
+                    tensor2D<bfloat16> & matB,
+                    tensor2D<float> & matC) {
+        PP2float<regpp_empty> ppkernel(matC, regpp_empty());
+        (*this)(matA, matB, ppkernel);
+    }
+
     // different ppkernel has difference runtime args
     // which is set by caller, since only caller knows
     // what setter methods to use for specific ppkernel
+    template<typename PP>
     void operator()(tensor2D<bfloat16> & matA,
-                    tensor2D<bfloat16> & matB) {
+                    tensor2D<bfloat16> & matB,
+                    PP ppkernel) {
         int M = matA.dims[0];
         int K = matA.dims[1];
         int N = matB.dims[transposeB ? 0 : 1];

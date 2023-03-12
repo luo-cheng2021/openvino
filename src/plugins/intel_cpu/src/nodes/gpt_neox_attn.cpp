@@ -4,6 +4,7 @@
 
 #include <string>
 #include <vector>
+#include <memory>
 
 #include "gpt_neox_attn.h"
 #include <ngraph/opsets/opset10.hpp>
@@ -427,6 +428,16 @@ void GPTNeoxAttn::prepareParams() {
         }
         rotaryKernel->create_ker();
     }
+    if (!mhaGPT) {
+        gpt::MHAGPT::CreateParam param = {
+            headNum, sizePerHead,
+            normalFactor, dataPrecision, maxSeqLen,
+        };
+        mhaGPT = std::move(std::unique_ptr<gpt::MHAGPT>(new gpt::MHAGPT()));
+        mhaGPT->create(param);
+        getSelectedPrimitiveDescriptor()->setImplementationType(mhaGPT->get_impl_type());
+    }
+
     auto env = std::getenv("USE_OFFSET");
     if (env) {
         g_seq_offset = std::stoi(env);
@@ -712,16 +723,6 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     }
     // attn_output = _attn(query, key, value)
     // attn_output = _merge_heads(attn_output, self.num_attention_heads, self.head_size)
-    auto& mha = mhaGPTs[(static_cast<size_t>(new_seq_offset) << 32) + static_cast<size_t>(seq_len)];
-    if (!mha) {
-        gpt::MHAGPT::CreateParam param = {
-            batch, headNum, seq_len, sizePerHead,
-            new_seq_offset + seq_len, normalFactor, dataPrecision, first_token, new_seq_offset + 1,
-        };
-        mha = std::make_shared<gpt::MHAGPT>();
-        mha->create(param);
-        getSelectedPrimitiveDescriptor()->setImplementationType(mha->get_impl_type());
-    }
     auto head_stride_in_q = sizePerHead * seq_len;
     auto batch_stride_in_q = head_stride_in_q * headNum;
     auto head_stride_in_kv = sizePerHead * maxSeqLen;
@@ -731,6 +732,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     // attention_mask: [batch, 1, 1, key_seq_len]
     // attn_output: [batch, query_seq_len, num_heads * head_size]
     gpt::MHAGPT::ExecParam param = {
+        batch, seq_len, seq_len + new_seq_offset, new_seq_offset + 1,
         queryTranspose.data(), current_k_bufs, first_token ? firstVBufs : current_v_bufs,
         &attnMasks[0],
         dst_data,
@@ -741,7 +743,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
         maxSeqLen
     };
 
-    mha->exec(param);
+    mhaGPT->exec(param);
     if (first_token) {
         // transpose v to [batch, num_attention_heads, head_size, seq_len]
         TransposeAppendFirstTokenV(current_v_bufs, new_seq_offset, vTranspose.data(), sizePerHead, sizePerHead, headNum, seq_len, maxSeqLen, batch, dataTypeSize);

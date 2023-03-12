@@ -57,13 +57,14 @@ namespace gpt {
 class MHAGPT {
 public:
     struct CreateParam {
-        size_t batch, num_heads, query_seq_len, head_size, key_seq_len;
+        size_t num_heads, head_size;
         float normal_factor;
         InferenceEngine::Precision qkv_precision;
-        bool need_select_transpose;
-        size_t first_valid_softmax_items; // only for 1x300: valid items in 1st row, next row will be increased by 1
+        size_t max_seq_len;
     };
     struct ExecParam {
+        size_t batch, query_seq_len, key_seq_len;
+        size_t first_valid_softmax_items; // only for 1x300: valid items in 1st row, next row will be increased by 1
         uint8_t* q;
         std::vector<uint8_t*>& k;
         std::vector<uint8_t*>& v;
