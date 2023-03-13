@@ -61,6 +61,7 @@ void AddCustom::prepareParams() {
     const auto& dims = getParentEdgeAt(0)->getMemoryPtr()->getStaticDims();
     totalElements =
         std::accumulate(dims.begin(), dims.end(), size_t(1), std::multiplies<size_t>());
+    //std::cout << "add use fast path: " << getName() << "\n";
 }
 
 void AddCustom::executeDynamicImpl(dnnl::stream strm) {

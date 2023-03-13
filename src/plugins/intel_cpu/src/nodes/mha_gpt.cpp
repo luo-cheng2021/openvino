@@ -604,9 +604,9 @@ struct MHAGPT::Impl {
     std::unique_ptr<jit_uni_convert_reorder_kernel> convertReorderKernel;
 
     size_t vec_size = 1;
-    std::vector<std::shared_ptr<executor_amx_bf16::GemAvB>> gemAvB;
-    std::vector<std::shared_ptr<executor_amx_bf16::Matmul>> qKtrGemm;
-    std::vector<std::shared_ptr<executor_amx_bf16::Matmul>> qKVGemm;
+    std::vector<std::shared_ptr<amx_bf16::GemAvB>> gemAvB;
+    std::vector<std::shared_ptr<amx_bf16::Matmul>> qKtrGemm;
+    std::vector<std::shared_ptr<amx_bf16::Matmul>> qKVGemm;
 };
 
 void MHAGPT::Impl::create(const CreateParam& param) {
@@ -624,15 +624,15 @@ void MHAGPT::Impl::create(const CreateParam& param) {
     size_t numThreads = parallel_get_max_threads();
     gemAvB.resize(numThreads);
     for (size_t i = 0; i < numThreads; i++) {
-        gemAvB[i] = std::make_shared<executor_amx_bf16::GemAvB>();
+        gemAvB[i] = std::make_shared<amx_bf16::GemAvB>();
     }
     qKtrGemm.resize(numThreads);
     for (size_t i = 0; i < numThreads; i++) {
-        qKtrGemm[i] = std::make_shared<executor_amx_bf16::Matmul>(false, true);
+        qKtrGemm[i] = std::make_shared<amx_bf16::Matmul>(false, true);
     }
     qKVGemm.resize(numThreads);
     for (size_t i = 0; i < numThreads; i++) {
-        qKVGemm[i] = std::make_shared<executor_amx_bf16::Matmul>(false, false);
+        qKVGemm[i] = std::make_shared<amx_bf16::Matmul>(false, false);
     }
 
     bufferMatMul0OutSize = _create_param.max_seq_len * rnd_up(_create_param.max_seq_len * sizeof(float), 64);
@@ -734,7 +734,6 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
 
     parallel_for2d(param.batch, _create_param.num_heads, [&](size_t i0, size_t i1) {
         size_t threadNum = parallel_get_thread_num();
-        tileconfig_t tfg(1, 0, 8, 16, 64);
 
         auto pQIn0_aux = pQIn0 + (i0 * param.batch_stride_in_q + i1 * param.head_stride_in_q) * _create_param.qkv_precision.size();
         auto pKIn0_aux = pKIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();

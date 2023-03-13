@@ -24,6 +24,8 @@
 #include <common/primitive_desc_iface.hpp>
 #include "onednn/dnnl.h"
 #include "cpu/x64/cpu_isa_traits.hpp"
+#include "ie_parallel.hpp"
+#include "common/dnnl_thread.hpp"
 
 using namespace dnnl;
 using namespace InferenceEngine;
@@ -283,6 +285,26 @@ void FullyConnected::prepareParams() {
     if (selected_pd == nullptr)
         IE_THROW() << "Preferable primitive descriptor is not set for node " << getName() << ".";
 
+    if (getOriginalInputPrecisionAtPort(DATA_ID) == Precision::BF16 &&
+        getInputShapeAtPort(0).getRank() == 3 && true
+        ) {
+        if (fusedWith.empty() ||
+            (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu)) {
+            useFastPath = true;
+            threadNum = parallel_get_max_threads();
+            opsFC.resize(threadNum);
+            for (size_t i = 0; i < threadNum; i++) {
+                opsFC[i] = std::make_shared<amx_bf16::Matmul>(true, true);
+            }
+            if (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu) {
+                useGelu = true;
+            }
+
+            //std::cout << "fc use fast path: " << getName() << "\n";
+            return;
+        }
+    }
+
     AttrPtr attr = std::make_shared<dnnl::primitive_attr>();
     setPostOps(*attr, dstMemPtr->getStaticDims());
     (*attr).set_scratchpad_mode(dnnl::scratchpad_mode::user);
@@ -472,6 +494,73 @@ void FullyConnected::setDynamicBatchLim(int lim) {
 }
 
 void FullyConnected::execute(dnnl::stream strm) {
+    if (useFastPath) {
+        auto srcPtr = getParentEdgeAt(0)->getMemoryPtr();
+        auto weightPtr = getParentEdgeAt(1)->getMemoryPtr();
+        auto* src = reinterpret_cast<uint8_t*>(srcPtr->GetPtr());
+        auto* weight = reinterpret_cast<uint8_t*>(weightPtr->GetPtr());
+        auto* dst = reinterpret_cast<uint8_t*>(getChildEdgeAt(0)->getMemoryPtr()->GetPtr());
+        auto& data_dims = srcPtr->getStaticDims();
+        auto& weight_dims = weightPtr->getStaticDims();
+        auto M = static_cast<size_t>(data_dims[0] * data_dims[1]);
+        auto K = data_dims[2];
+        auto N = weight_dims[0];
+        assert(K == weight_dims[1]);
+        auto work_amount = rndup(N, 32) / 32;
+        uint8_t* bias = nullptr;
+        if (withBiases) {
+            bias = reinterpret_cast<uint8_t*>(getParentEdgeAt(2)->getMemoryPtr()->GetPtr());
+            auto& bias_dims = getParentEdgeAt(2)->getMemoryPtr()->getStaticDims();
+            assert(bias_dims[0] == N);
+        }
+        tensor2D<bfloat16> matA(M, K, reinterpret_cast<bfloat16*>(src), K * sizeof(bfloat16));
+        tensor2D<bfloat16> matB(N, K, reinterpret_cast<bfloat16*>(weight), K * sizeof(bfloat16));
+        parallel_for(threadNum, [&](size_t tid) {
+            size_t start {0}, end {0};
+            dnnl::impl::balance211(work_amount, threadNum, tid, start, end);
+            int n0 = start * 32;
+            int n1 = std::min(end * 32, N);
+            if (n0 > N) return;
+
+            if (outputDataType == memory::data_type::bf16) {
+                tensor2D<bfloat16> matC(M, N, reinterpret_cast<bfloat16*>(dst), N * sizeof(bfloat16));
+                if (!bias) {
+                    if (useGelu) {
+                        amx_bf16::PP::Gelu_Store2bf16 ppkernel(matC);
+                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                    } else {
+                        amx_bf16::PP::Store2bf16 ppkernel(matC);
+                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                    }
+                } else {
+                    if (useGelu) {
+                        amx_bf16::PP::Addbias_Gelu_Store2bf16 ppkernel(matC, reinterpret_cast<float*>(bias));
+                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                    } else {
+                        amx_bf16::PP::Addbias_Store2bf16 ppkernel(matC, reinterpret_cast<float*>(bias));
+                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                    }
+                }
+            } else if (outputDataType == memory::data_type::f32) {
+                tensor2D<float> matC(M, N, reinterpret_cast<float*>(dst), N * sizeof(float));
+                if (!bias) {
+                    if (useGelu) {
+                        assert(false);
+                        std::cout << "xxx f32 gelu\n";
+                    } else {
+                        amx_bf16::PP::Store2float ppkernel(matC);
+                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                    }
+                } else {
+                    assert(false);
+                    std::cout << "xxx f32 bias\n";
+                }
+            }
+        });
+
+        return;
+    }
+
     if (!execPtr) {
         IE_THROW() << "Can't execute FullyConnected node with name: " << getName() << ", because executor is not compiled";
     }

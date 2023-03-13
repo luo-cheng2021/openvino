@@ -1338,7 +1338,7 @@ void MVN::prepareParams() {
         fusedWith.empty() && mvnAttrs.layout == MVNLayoutType::mvn_planar &&
         mvnAttrs.normalizeVariance_ == true) {
         fastBf16Path = true;
-        std::cout << "xxxxxxxxxxxxxxxxxxx use fast path\n";
+        //std::cout << "mvn use fast path: " << getName() << "\n";
         return;
     } else {
         std::cout << mvnAttrs.src_prc << " " << mvnAttrs.dst_prc << " "

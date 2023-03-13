@@ -98,6 +98,8 @@ void Gather::initSupportedPrimitiveDescriptors() {
         return;
 
     dataTypeSize = getOriginalInputPrecisionAtPort(GATHER_DATA).size();
+    if (x64::mayiuse(x64::avx512_core_bf16) && getOriginalInputPrecisionAtPort(GATHER_DATA) == Precision::FP32)
+        dataTypeSize = 2;
 
     const auto& dataDims = getInputShapeAtPort(GATHER_DATA).getDims();
     if (isAxisInputConst && isDataShapeStat) {
