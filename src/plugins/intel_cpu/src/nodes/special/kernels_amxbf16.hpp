@@ -1,9 +1,197 @@
 #pragma once
 
-#include "misc.hpp"
+/*
+https://www.intel.com/content/www/us/en/develop/documentation/cpp-compiler-developer-guide-and-reference/top/compiler-reference/intrinsics/intrinsics-for-amx-instructions/intrinsics-for-amx-tile-instructions/tile-loadconfig.html
 
-namespace amx_bf16
-{
+void _tile_loadconfig (const void * mem_addr)
+	format of memory payload. each field is a byte.
+		 0: palette_id
+		 1: startRow (8b)
+	 2-15: reserved (must be zero)
+	16-17: tile0.colsb -- bytes_per_row
+	18-19: tile1.colsb
+	20-21: tile2.colsb
+			...
+	46-47: tile15.colsb
+		48: tile0.rows
+		49: tile1.rows
+		50: tile2.rows
+			 ...
+		63: tile15.rows
+
+void _tile_storeconfig (void * mem_addr)
+    Stores the current tile configuration to a 64-byte memory location specified by "mem_addr".
+    The tile configuration format is specified below, and includes the tile type pallette,
+    the number of bytes per row, and the number of rows. If tiles are not configured,
+    all zeroes will be stored to memory.
+*/
+
+/*
+void _tile_loadd (__tile dst, const void * base, int stride)
+    Load tile rows from memory specifieid by "base" address and "stride"
+    into destination tile "dst" using the tile configuration previously
+    configured via "_tile_loadconfig".
+    Operation:
+        start := tileconfig.startRow
+        IF start == 0 // not restarting, zero incoming state
+            tilezero(dst)
+        FI
+        nbytes := dst.colsb
+        DO WHILE start < dst.rows
+            memptr := base + start * stride
+            write_row_and_zero(dst, start, read_memory(memptr, nbytes), nbytes)
+            start := start + 1
+        OD
+        zero_upper_rows(dst, dst.rows)
+        zero_tileconfig_start()
+
+void _tile_stored (__tile src, void * base, int stride)
+    Store the tile specified by "src" to memory specifieid by "base" address and "stride"
+    using the tile configuration previously configured via "_tile_loadconfig".
+    Operation:
+        start := tileconfig.startRow
+        DO WHILE start < src.rows
+            memptr := base + start * stride
+            write_memory(memptr, src.colsb, src.row[start])
+            start := start + 1
+        OD
+        zero_tileconfig_start()
+
+void _tile_stream_loadd (__tile dst, const void * base, int stride)
+    Load tile rows from memory specifieid by "base" address and "stride"
+    into destination tile "dst" using the tile configuration previously
+    configured via "_tile_loadconfig". This intrinsic provides a hint to
+    the implementation that the data will likely not be reused in the near
+    future and the data caching can be optimized accordingly.
+
+void _tile_zero (__tile tdest)
+    Zero the tile specified by "tdest".
+    Operation:
+        nbytes := palette_table[tileconfig.palette_id].bytes_per_row
+        FOR i := 0 TO palette_table[tileconfig.palette_id].max_rows-1
+            FOR j := 0 TO nbytes-1
+                tdest.row[i].byte[j] := 0
+            ENDFOR
+        ENDFOR
+	
+
+void _tile_release ()
+    Release the tile configuration to return to the init state, which releases all storage it currently holds.
+
+
+Instruction Throughput Latency
+LDTILECFG                204
+STTILECFG                19
+TILETRELEASE             13
+TDP / *          16      52
+TILELOADD         8      45
+TILELOADDT1      33      48
+TILESTORED       16
+TILEZERO          0      16
+
+Due to the high latency of the LDTILECFG instruction we recommend issuing a single pair
+of LDTILECFG and TILERELEASE operations per Intel AMX-based DL layer implementation.
+
+
+• A-tiles can have between 1-16 rows and 1-MAX_TILE_K columns.
+• B-tiles can have between 1-MAX_TILE_K rows and 1–16 columns.
+• C-tiles can have between 1-16 rows and 1–16 columns.
+
+MAX_TILE_K=64/sizeof(type_t)
+          = 32 BF16
+          = 64 INT8
+
+A tiles and B tiles contain data of type_t, which can be (u)int8 or bfloat16.
+• C tiles contain data of type res_type_t:
+• int32 if type_t=(u)int8
+• float if type_t=bfloat16
+
+Like the Intel® DL Boost use case, the B matrix must undergo a re-layout before it can be used within the
+corresponding Intel AMX multiply instruction.
+
+BF16    C_float_16x16 = A_bfloat16_16x32 * B_bfloat16_32x16 (re-layout as 16x16x2 Ab2a)
+INT8    C_int32_16x16 = A_int8_16x64 * B_int8_64x16 (re-layout as 16x16x4 Ab4a)
+
+
+
+FC:
+    (2,1~900,2560)x(2560,7680)
+    (2,1~900,2560)x(2560,2560)
+    (2,1~900,2560)x(2560,10240) GELU
+    (2,1~900,10240)x(10240,2560)
+
+matmul:
+    (1~990,80) * (80,1~990)
+    (1~990,1~990) * (1~990,80)
+
+    // (2,32,1~990,80)*(2,32,80,1~990)
+    // (2,32,1~990,1~990)(2,32,1~990,80)
+*/
+
+#include "misc.hpp"
+#include "block_iter.hpp"
+#include "tensor2D.hpp"
+
+#ifdef _WIN32
+#include <intrin.h>
+#else
+#include <x86intrin.h>
+#endif
+
+//===============================================================
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE         /* See feature_test_macros(7) */
+#endif
+#include <unistd.h>
+#include <sys/syscall.h>   /* For SYS_xxx definitions */
+
+#define XFEATURE_XTILECFG 17
+#define XFEATURE_XTILEDATA 18
+#define XFEATURE_MASK_XTILECFG (1 << XFEATURE_XTILECFG)
+#define XFEATURE_MASK_XTILEDATA (1 << XFEATURE_XTILEDATA)
+#define XFEATURE_MASK_XTILE (XFEATURE_MASK_XTILECFG | XFEATURE_MASK_XTILEDATA)
+#define ARCH_GET_XCOMP_PERM 0x1022
+#define ARCH_REQ_XCOMP_PERM 0x1023
+
+inline bool initXTILE() {
+    unsigned long bitmask = 0;
+    long status = syscall(SYS_arch_prctl, ARCH_GET_XCOMP_PERM, &bitmask);
+    if (0 != status) return false;
+    if (bitmask & XFEATURE_MASK_XTILEDATA) return true;
+
+    status = syscall(SYS_arch_prctl, ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA);
+    if (0 != status)
+        return false; // XFEATURE_XTILEDATA setup is failed, TMUL usage is not allowed
+    status = syscall(SYS_arch_prctl, ARCH_GET_XCOMP_PERM, &bitmask);
+
+    // XFEATURE_XTILEDATA setup is failed, can't use TMUL
+    if (0 != status || !(bitmask & XFEATURE_MASK_XTILEDATA)) return false;
+
+    // XFEATURE_XTILEDATA set successfully, TMUL usage is allowed
+    return true;
+}
+//===============================================================
+
+#include <openvino/core/type/bfloat16.hpp>
+
+using ov::bfloat16;
+
+namespace amx_bf16 {
+
+template<typename T, int tile>
+inline void tshow() {
+    if (std::is_same<bfloat16,T>::value) {
+        bfloat16 data[16*32];
+        _tile_stored(tile, data, 64);
+        show(data, 16, 32);
+    }
+    if (std::is_same<float,T>::value) {
+        float data[16*16];
+        _tile_stored(tile, data, 64);
+        show(data, 16, 16);
+    }
+}
+
 struct tileconfig_t {
     uint8_t palette_id;
     uint8_t startRow;
@@ -52,84 +240,6 @@ struct tileconfig_t {
         return out;
     }
 } __attribute__ ((__packed__));
-
-// BlockIterator: kernels can use this to
-//   - quickly go to some sequential index
-//   - move to next location
-
-struct BlockIterator {
-    struct blkloop {
-        int cnt;
-        int sz_m;
-        int sz_n;
-    };
-
-    int idx[16];  // index at each level of blocks
-    const blkloop *bloops;
-    int num_bloops;
-
-    int M;
-    int N;
-
-    int m;
-    int n;
-    int seq;
-    bool reach_end;
-
-    BlockIterator() = default;
-
-    void reset(const blkloop * _bloops, int _num_bloops, int _M, int _N) {
-        assert(_num_bloops <= 16);
-        bloops = _bloops;
-        num_bloops = _num_bloops;
-        M = _M;
-        N = _N;
-        // reset coordinates to sequence index
-        for(int i = 0; i < num_bloops; i++)
-            idx[i] = 0;
-        seq = 0;
-        m = 0;
-        n = 0;
-        reach_end = false;
-    }
-    // update coordinates
-    bool next() {
-        if (reach_end)
-            return false;
-        int carry_on = 1;
-        for(int i = 0; i < num_bloops; i++) {
-            const auto & bl = bloops[i];
-            if (idx[i] == (bl.cnt - 1)) {
-                // carry-on on block boundary, no contribution to m/n
-                m -= idx[i] * bl.sz_m;
-                n -= idx[i] * bl.sz_n;
-                idx[i] = 0;
-            } else {
-                // carry-on on matrix boundary
-                if (m + bl.sz_m >= M || n + bl.sz_n >= N) {
-                    m -= idx[i] * bl.sz_m;
-                    n -= idx[i] * bl.sz_n;
-                    idx[i] = 0;
-                } else {
-                    idx[i]++;
-                    m += bl.sz_m;
-                    n += bl.sz_n;
-                    carry_on = 0;
-                    break;
-                }
-            }
-        }
-        seq++;
-        if (carry_on) {
-            // after reach_end
-            //  - seq has the number of blocks
-            //  - idx are all zeros
-            reach_end = true;
-            return false;
-        }
-        return true;
-    }
-};
 
 
 // KpackedB is B matrix in block of 32x32 arranged in column-major
@@ -707,6 +817,7 @@ namespace PP {
 struct Matmul {
     KpackedB internalB;
     tensor2D<bfloat16> scratch;
+    tensor2D<bfloat16> scratch2;
     BlockIterator blk_it;
     bool constB;
     bool transposeB;
@@ -822,6 +933,32 @@ struct Matmul {
                 }
             }
         }
+
+        tensor2D<bfloat16> & Aktails = scratch2;
+        int ktails = K % 32;
+        int Kbody = (K/32)*32;
+        if (ktails > 0) {
+            Aktails.resize(32, 32);
+        }
+        __mmask32 ktail_mask = _cvtu32_mask32(0xFFFFFFFF >> (32-ktails));
+
+        auto load_Aktails = [&](bfloat16 * _src, int stride) {
+            auto * src = reinterpret_cast<uint8_t*>(_src);
+            auto * dst = &Aktails(0,0);
+            for(int r = 0; r < 32; r += 4) {
+                auto a0 = _mm512_maskz_loadu_epi16 (ktail_mask, src);
+                auto a1 = _mm512_maskz_loadu_epi16 (ktail_mask, src + stride);
+                auto a2 = _mm512_maskz_loadu_epi16 (ktail_mask, src + 2*stride);
+                auto a3 = _mm512_maskz_loadu_epi16 (ktail_mask, src + 3*stride);
+                _mm512_storeu_epi16(dst, a0);
+                _mm512_storeu_epi16(dst + 32, a1);
+                _mm512_storeu_epi16(dst + 32*2, a2);
+                _mm512_storeu_epi16(dst + 32*3, a3);
+                dst += 32*4;
+                src += 4*stride;
+            }
+        };
+
         // main loop
         tileconfig_t tfg(1, 0, 8, 16, 64);
         do
@@ -847,8 +984,19 @@ struct Matmul {
             _tile_zero(tC11);
             if (valid_m <= 16) {
                 // 1x2 is enough
-                for (int k = 0; k < K; k += 32) {
+                int k;
+                for (k = 0; k < Kbody; k += 32) {
                     _tile_loadd(tA0, pA0 + k, strideA);
+                    _tile_loadd(tB0, pB, 64); pB += (16*32);
+                    _tile_dpbf16ps(tC00, tA0, tB0);
+                    _tile_loadd(tB1, pB, 64); pB += (16*32);
+                    _tile_dpbf16ps(tC01, tA0, tB1);
+                }
+                // ktail
+                if (k < K) {
+                    load_Aktails(pA0 + k, strideA);
+                    auto * src = &Aktails(0,0);
+                    _tile_loadd(tA0, src, 64);
                     _tile_loadd(tB0, pB, 64); pB += (16*32);
                     _tile_dpbf16ps(tC00, tA0, tB0);
                     _tile_loadd(tB1, pB, 64); pB += (16*32);
@@ -859,7 +1007,8 @@ struct Matmul {
             } else {
                 // 2x2
                 _tile_loadd(tA0, pA0 + 0, strideA);
-                for (int k = 0; k < K; k += 32) {
+                int k;
+                for (k = 0; k < Kbody; k += 32) {
                     _tile_loadd(tB0, pB, 64); pB += (16*32);
                     _tile_dpbf16ps(tC00, tA0, tB0);
                     _tile_loadd(tA1, pA1 + k, strideA);
@@ -867,6 +1016,18 @@ struct Matmul {
                     _tile_loadd(tB1, pB, 64); pB += (16*32);
                     _tile_dpbf16ps(tC01, tA0, tB1);
                     _tile_loadd(tA0, pA0 + k + 32, strideA);    // balance load & dp. load next
+                    _tile_dpbf16ps(tC11, tA1, tB1);
+                }
+                if (k < K) {
+                    load_Aktails(pA0 + k, strideA);
+                    auto * src = &Aktails(0,0);
+                    _tile_loadd(tA0, src, 64);
+                    _tile_loadd(tB0, pB, 64); pB += (16*32);
+                    _tile_dpbf16ps(tC00, tA0, tB0);
+                    _tile_loadd(tA1, src + (16*32), 64);
+                    _tile_dpbf16ps(tC10, tA1, tB0);
+                    _tile_loadd(tB1, pB, 64); pB += (16*32);
+                    _tile_dpbf16ps(tC01, tA0, tB1);
                     _tile_dpbf16ps(tC11, tA1, tB1);
                 }
                 _tile_stored(tC00, &buffC(0,0), buffC.stride);
@@ -1160,3 +1321,4 @@ void Matmul(tensor2D<bfloat16> & matA,
 }
 #endif
 } // namespace amx_bf16
+

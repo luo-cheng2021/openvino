@@ -290,20 +290,23 @@ void FullyConnected::prepareParams() {
         ) {
         if (fusedWith.empty() ||
             (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu)) {
-            useFastPath = true;
-            threadNum = parallel_get_max_threads();
-            opsFC.resize(threadNum);
-            for (size_t i = 0; i < threadNum; i++) {
-                opsFC[i] = std::make_shared<amx_bf16::Matmul>(true, true);
-            }
-            if (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu) {
-                useGelu = true;
+            if (opsFC.empty()) {
+                useFastPath = true;
+                threadNum = parallel_get_max_threads();
+                opsFC.resize(threadNum);
+                for (size_t i = 0; i < threadNum; i++) {
+                    opsFC[i] = std::make_shared<amx_bf16::Matmul>(true, true);
+                }
+                if (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu) {
+                    useGelu = true;
+                }
             }
 
             //std::cout << "fc use fast path: " << getName() << "\n";
             return;
         }
     }
+    std::cout << "fc fallback: " << getName() << "\n";
 
     AttrPtr attr = std::make_shared<dnnl::primitive_attr>();
     setPostOps(*attr, dstMemPtr->getStaticDims());
@@ -872,6 +875,11 @@ void FullyConnected::initOptimalPrimitiveDescriptor() {
     auto config = selectedPD->getConfig();
     weightDescIP = config.inConfs[1].getMemDesc();
     config.inConfs[1].setMemDesc(selectedParentPD->getConfig().outConfs[0].getMemDesc());
+    if (config.inConfs[0].getMemDesc()->getPrecision() == InferenceEngine::Precision::BF16 &&
+        dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core_amx)) {
+        auto mem = config.inConfs[1].getMemDesc()->cloneWithNewPrecision(InferenceEngine::Precision::BF16);
+        config.inConfs[1].setMemDesc(mem);
+    }
     selectedPD->setConfig(config);
 }
 
