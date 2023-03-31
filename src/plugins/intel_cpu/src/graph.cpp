@@ -1535,12 +1535,12 @@ void Graph::EnforceBF16() {
      * Experiments show zero peformance impact on average */
     std::unordered_set<NodePtr> nodesToSkip;
     // starting from output nodes
-    for (const auto& entry : outputNodesMap) {
-        const auto& node = entry.second;
-        if (node->getOriginalInputPrecisionAtPort(0) == Precision::BF16)
-            continue;
-        searchForNodesToSkip(node, nodesToSkip);
-    }
+    // for (const auto& entry : outputNodesMap) {
+    //     const auto& node = entry.second;
+    //     if (node->getOriginalInputPrecisionAtPort(0) == Precision::BF16)
+    //         continue;
+    //     searchForNodesToSkip(node, nodesToSkip);
+    // }
 
     for (const auto& node : graphNodes) {
         if (nodesToSkip.count(node) && !node->enforceBF16evenForGraphTail)
