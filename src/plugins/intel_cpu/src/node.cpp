@@ -556,12 +556,22 @@ std::vector<memory::format_tag> Node::getAvailableFormatsForDims(const Shape &di
     return {memory::format_tag::any};
 }
 
-void Node::updateShapes() {
+void Node::updateShapes(std::unordered_map<std::string, std::array<uint64_t, 5>>& countersMap) {
     IE_ASSERT(isDynamicNode()) << "Node::updateShapes() is called to a static shape node of type: " << getTypeStr() << " with name: " << getName();
-    if (needShapeInfer()) {
+    auto start = std::chrono::steady_clock::now();
+    bool result = needShapeInfer();
+    auto end = std::chrono::steady_clock::now();
+    countersMap[getTypeStr()][0] += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+    if (result) {
+        start = std::chrono::steady_clock::now();
         auto result = shapeInfer();
+        end = std::chrono::steady_clock::now();
+        countersMap[getTypeStr()][0] += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         if (ShapeInferStatus::success == result.status) {
+            start = std::chrono::steady_clock::now();
             redefineOutputMemory(result.dims);
+            end = std::chrono::steady_clock::now();
+            countersMap[getTypeStr()][1] += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }
     }
 }

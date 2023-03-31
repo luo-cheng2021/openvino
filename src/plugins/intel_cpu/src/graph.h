@@ -272,6 +272,7 @@ private:
 
     void EnforceBF16();
     void resolveInPlaceDirection(const NodePtr& node) const;
+    mutable std::unordered_map<std::string, std::array<uint64_t, 5>> countersMap;
 };
 
 }   // namespace intel_cpu
