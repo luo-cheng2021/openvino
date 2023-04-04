@@ -13,6 +13,8 @@
 #include <map>
 #include <limits>
 #include <functional>
+#include <iomanip>
+#include <sstream>
 
 //#include "thread_pool.hpp"
 #include <openvino/core/type/bfloat16.hpp>
@@ -35,7 +37,6 @@
 #include <x86intrin.h>
 #endif
 #include <stdlib.h>
-
 
 #define rndup(x, n) (((x + n - 1)/n)*n)
 
@@ -75,3 +76,37 @@ struct ANSIcolor {
     }
 };
 
+
+struct pretty_size {
+    double sz;
+    std::string txt;
+    pretty_size(double sz) : sz(sz) {
+        std::stringstream ss;
+        ss << std::setprecision(5) << std::setw(5);
+        if (sz < 1024)
+            ss << sz;
+        else if (sz < 1024 * 1024)
+            ss << (sz / 1024) << " K";
+        else if (sz < 1024 * 1024 * 1024)
+            ss << (sz / 1024/1024) << " M";
+        else
+            ss << (sz / 1024 / 1024/1024) << " G";
+        txt = ss.str();
+    }
+    friend std::ostream& operator<<(std::ostream& os, const pretty_size& ps) {
+        os << ps.txt;
+        return os;
+    }
+};
+
+inline int readenv(const char * name) {
+    int v = 0;
+    auto * p = std::getenv(name);
+    if (p)
+        v = std::atoi(p);
+    std::cout << ANSIcolor("32") << "ENV: " << name << " = " << v << std::endl << ANSIcolor();
+    return v;
+}
+#ifdef ENABLE_NUMA
+static auto USE_NUMA = readenv("USE_NUMA");
+#endif

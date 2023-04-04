@@ -292,10 +292,28 @@ void FullyConnected::prepareParams() {
             (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu)) {
             if (opsFC.empty()) {
                 useFastPath = true;
+                // compute q/dq
+                float q, dq;
+                bool use_int8_weight = false;
+                if (use_int8_weight) {
+                    auto weightPtr = getParentEdgeAt(1)->getMemoryPtr();
+                    auto* weight = reinterpret_cast<bfloat16*>(weightPtr->GetPtr());
+                    auto& weight_dims = weightPtr->getStaticDims();
+                    float min, max;
+                    tensor2D<bfloat16> B(weight_dims[0], weight_dims[1], weight, weight_dims[1] * sizeof(bfloat16));
+                    amx_bf16::functional::get_min_max(B, min, max);
+                    max = std::max(std::abs(max), std::abs(min));
+                    q = 127 / max;
+                    dq = max / 127;
+                }
+
                 threadNum = parallel_get_max_threads();
                 opsFC.resize(threadNum);
                 for (size_t i = 0; i < threadNum; i++) {
-                    opsFC[i] = std::make_shared<amx_bf16::Matmul>(true, true);
+                    opsFC[i] = std::make_shared<amx_bf16::Matmul>(true, true,
+                        use_int8_weight ? amx_bf16::Matmul::Weight_INT8 : amx_bf16::Matmul::Weight_BF16);
+                    if (use_int8_weight)
+                        opsFC[i]->internalBI8.set_scale(q, dq);
                 }
                 if (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu) {
                     useGelu = true;
