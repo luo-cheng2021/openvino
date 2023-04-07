@@ -15,6 +15,7 @@
 
 namespace py = pybind11;
 
+static uint64_t total, times;
 inline py::dict run_sync_infer(InferRequestWrapper& self) {
     {
         py::gil_scoped_release release;
@@ -22,7 +23,12 @@ inline py::dict run_sync_infer(InferRequestWrapper& self) {
         self.m_request.infer();
         *self.m_end_time = Time::now();
     }
-    return Common::outputs_to_dict(self);
+    auto beg = Time::now();
+    auto x = Common::outputs_to_dict(self);
+    auto end = Time::now();
+    total += std::chrono::duration_cast<ns>(end - beg).count() / 1000;
+    times++;
+    return std::move(x);
 }
 
 void regclass_InferRequest(py::module m) {
@@ -723,6 +729,11 @@ void regclass_InferRequest(py::module m) {
             :return: Dictionary of results from output tensors with ports as keys.
             :rtype: Dict[openvino.runtime.ConstOutput, numpy.array]
         )");
+
+    cls.def("convert", [](const InferRequestWrapper& self) {
+        auto str = "tenosr->np: " + std::to_string(total) + "," + std::to_string(times);
+        return str;
+    });
 
     cls.def("__repr__", [](const InferRequestWrapper& self) {
         auto inputs_str = Common::docs::container_to_string(self.m_inputs, ",\n");
