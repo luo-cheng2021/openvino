@@ -155,21 +155,37 @@ void InferRequestBase::InferImpl() {
     auto graphLock = execNetwork->GetGraph();
     graph = &(graphLock._graph);
 
+    auto start = std::chrono::steady_clock::now();
     ThrowIfCanceled();
     convertBatchedInputBlobs();
+    auto end = std::chrono::steady_clock::now();
+    graph->update("convertBatchedInputBlobs", std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 
+    start = std::chrono::steady_clock::now();
     if (graph->hasDynamicInput()) {
         redefineMemoryForInputNodes();
     }
+    end = std::chrono::steady_clock::now();
+    graph->update("redefineMemoryForInputNodes", std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 
+    start = std::chrono::steady_clock::now();
     execDataPreprocessing(_inputs);
+    end = std::chrono::steady_clock::now();
+    graph->update("execDataPreprocessing", std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 
+    start = std::chrono::steady_clock::now();
     changeDefaultPtr();
 
     ThrowIfCanceled();
+    end = std::chrono::steady_clock::now();
+    graph->update("changeDefaultPtr", std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 
+    start = std::chrono::steady_clock::now();
     PushInputData();
+    end = std::chrono::steady_clock::now();
+    graph->update("PushInputData", std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 
+    start = std::chrono::steady_clock::now();
     if (memoryStates.size() != 0) {
         PushStates();
     }
@@ -179,10 +195,15 @@ void InferRequestBase::InferImpl() {
     if (memoryStates.size() != 0) {
         PullStates();
     }
+    end = std::chrono::steady_clock::now();
+    graph->update("Infer", std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 
+    start = std::chrono::steady_clock::now();
     ThrowIfCanceled();
 
     graph->PullOutputData(_outputs);
+    end = std::chrono::steady_clock::now();
+    graph->update("PullOutputData", std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
 }
 
 std::map<std::string, InferenceEngine::InferenceEngineProfileInfo> InferRequestBase::GetPerformanceCounts() const {

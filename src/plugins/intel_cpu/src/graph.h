@@ -201,6 +201,11 @@ public:
         dynBatch = newDynBatch;
     }
 
+    void update(const std::string& key, uint64_t tick) {
+        countersMap[key][3] += tick;
+        countersMap[key][4] += 1;
+    }
+
 protected:
     void VisitNode(NodePtr node, std::vector<NodePtr>& sortedNodes);
 
