@@ -781,19 +781,10 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
             }
         }
         auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
-        if (is_vector) {
-            // K: key_seq_len(stride is max_seq_len), N: head_size
-            // (q*k')[1, K] * v[K, N]    ==>
-            //      v[N, K] * (q*k')[K, 1]
-            // past_values aka v[head_size, key_seq_len] is already stored in this format
-            tensor2D<ov::bfloat16> matV(_create_param.head_size, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), param.value_seq_stride_in_v * sizeof(ov::bfloat16));
-            (*gemAvB_ops[threadNum])(matV, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), reinterpret_cast<ov::bfloat16*>(bufferMatMul1Out_local));
-        } else {
-            tensor2D<ov::bfloat16> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(bfloat16), 1));
-            tensor2D<ov::bfloat16> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
-            tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size * sizeof(float));
-            (*qKVGemm_ops[threadNum])(matQK, matV, matQKV);
-        }
+        tensor2D<ov::bfloat16> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(bfloat16), 1));
+        tensor2D<ov::bfloat16> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
+        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size * sizeof(float));
+        (*qKVGemm_ops[threadNum])(matQK, matV, matQKV);
         if (convertReorderKernel) {
             // matmul1: [batch, num_heads, query_seq_len, head_size]
             // attn_output: [batch, query_seq_len, num_heads * head_size]

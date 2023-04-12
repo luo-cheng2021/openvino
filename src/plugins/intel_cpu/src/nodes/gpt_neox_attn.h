@@ -92,8 +92,6 @@ private:
     std::vector<float> sinCached;
     std::vector<uint8_t> queryTranspose;
     std::unique_ptr<jit_uni_rotary_kernel> rotaryKernel;
-    std::vector<uint8_t> vTranspose;
-    std::vector<uint8_t*> firstVBufs;
 
     static constexpr size_t IN_QKV           = 0;
     static constexpr size_t IN_PAST_KEYS_NUM = 1;
