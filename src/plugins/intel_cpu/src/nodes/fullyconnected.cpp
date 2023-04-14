@@ -246,10 +246,10 @@ void FullyConnected::getSupportedDescriptors() {
         inputDataType = outputDataType = memory::data_type::f32;
     }
 
-    if (one_of(inputDataType , memory::data_type::u8, memory::data_type::s8)
-        && outputDataType == memory::data_type::bf16) {
-        outputDataType = memory::data_type::f32;
-    }
+    // if (one_of(inputDataType , memory::data_type::u8, memory::data_type::s8)
+    //     && outputDataType == memory::data_type::bf16) {
+    //     outputDataType = memory::data_type::f32;
+    // }
 
     if (inputDataType == memory::data_type::bf16
         && one_of(outputDataType , memory::data_type::u8, memory::data_type::s8)) {
@@ -324,7 +324,7 @@ void FullyConnected::prepareParams() {
             return;
         }
     }
-    std::cout << "fc fallback: " << getName() << "\n";
+    //std::cout << "fc fallback: " << getName() << "\n";
 
     AttrPtr attr = std::make_shared<dnnl::primitive_attr>();
     setPostOps(*attr, dstMemPtr->getStaticDims());

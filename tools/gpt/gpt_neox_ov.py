@@ -68,7 +68,17 @@ FakeConstDict = {
         np.zeros((INTERMEDIATE_SIZE, HIDDEN_SIZE), dtype=np.float32)
     ] * LAYER_NUM,
 }
-def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDict):
+def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDict, quant_dicts):
+    def make_fc(name, data, weights):
+        if name + '/fq_input_0' in quant_dicts:
+            info_data = quant_dicts[name + '/fq_input_0'][0]
+            info_weight = quant_dicts[name + '/fq_weights_1'][0]
+            q_d = opset.fake_quantize(data, info_data['il'], info_data['ih'], info_data['ol'], info_data['oh'], info_data['levels'], info_data['auto_broadcast'], name=f'{name}/fq_input_0')
+            q_w = opset.fake_quantize(weights, info_weight['il'], info_weight['ih'], info_weight['ol'], info_weight['oh'], info_weight['levels'], info_weight['auto_broadcast'], name=f'{name}/fq_weights_1')
+            node = opset.matmul(q_d, q_w, transpose_a=False, transpose_b=True, name=name) #wildcard [?,?,7680]
+        else:
+            node = opset.matmul(data, weights, transpose_a=False, transpose_b=True, name=name) #wildcard [?,?,7680]
+        return node
     input_layernorm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mvn')
     input_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.bias')
     input_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.weight')
@@ -78,7 +88,8 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
     ######### attention part begin
     query_key_value_bias = opset.constant(ConstDict['model.gpt_neox.layers.attention.query_key_value.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.attention.query_key_value.bias')
     query_key_value_weights = opset.constant(ConstDict['model.gpt_neox.layers.attention.query_key_value.weight'][layer_idx], Type.f32, name='model.gpt_neox.layers.attention.query_key_value.weight')
-    qkv_ = opset.matmul(input_layernorm, query_key_value_weights, transpose_a=False, transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/MatMul') #wildcard [?,?,7680]
+    name = f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/MatMul'
+    qkv_ = make_fc(name, input_layernorm, query_key_value_weights)
     qkv = opset.add(qkv_, query_key_value_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/Add') #wildcard [?,?,7680]
 
     # custom op
@@ -88,7 +99,8 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
 
     # attn_output = self.dense(attn_output) line: 157
     dense_weight = opset.constant(ConstDict['model.gpt_neox.layers.attention.dense.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.attention.dense.weight')
-    dense_ = opset.matmul(attn_output, dense_weight, transpose_a=False,transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/attention/dense/MatMul') #wildcard [?,?,HIDDEN_SIZE]
+    name = f'/model/gpt_neox/layers.{layer_idx}/attention/dense/MatMul'
+    dense_ = make_fc(name, attn_output, dense_weight)
     dense_bias = opset.constant(ConstDict['model.gpt_neox.layers.attention.dense.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.attention.dense.bias')
     dense = opset.add(dense_, dense_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/dense/Add') #wildcard [?,?,HIDDEN_SIZE]
     attn_output = dense
@@ -105,12 +117,14 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
     def mlp(states):
         dense_h_to_4h_bias = opset.constant(ConstDict['model.gpt_neox.layers.mlp.dense_h_to_4h.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.mlp.dense_h_to_4h.bias')
         dense_h_to_4h_weight = opset.constant(ConstDict['model.gpt_neox.layers.mlp.dense_h_to_4h.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.mlp.dense_h_to_4h.weight')
-        dense_h_to_4h_ = opset.matmul(states, dense_h_to_4h_weight, transpose_a=False,transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/MatMul') #wildcard [?,?,INTERMEDIATE_SIZE]
+        name = f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/MatMul'
+        dense_h_to_4h_ = make_fc(name, states, dense_h_to_4h_weight)
         dense_h_to_4h = opset.add(dense_h_to_4h_, dense_h_to_4h_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/Add') #wildcard [?,?,INTERMEDIATE_SIZE]
         gelu = opset.gelu(dense_h_to_4h, approximation_mode='erf', name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_h_to_4h/Gelu')
         dense_4h_to_h_bias = opset.constant(ConstDict['model.gpt_neox.layers.mlp.dense_4h_to_h.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.mlp.dense_4h_to_h.bias')
         dense_4h_to_h_weight = opset.constant(ConstDict['model.gpt_neox.layers.mlp.dense_4h_to_h.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.mlp.dense_4h_to_h.weight')
-        dense_4h_to_h_ = opset.matmul(gelu, dense_4h_to_h_weight, transpose_a=False,transpose_b=False, name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_4h_to_h/MatMul') #wildcard [?,?,HIDDEN_SIZE]
+        name = f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_4h_to_h/MatMul'
+        dense_4h_to_h_ = make_fc(name, gelu, dense_4h_to_h_weight)
         dense_4h_to_h = opset.add(dense_4h_to_h_, dense_4h_to_h_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/mlp/dense_4h_to_h/Add') #wildcard [?,?,HIDDEN_SIZE]
         return dense_4h_to_h
 
@@ -119,7 +133,7 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
     # return opset.add(hidden_states_tmp, hidden_states)
     return opset.add_custom(mlp_output, attn_output, hidden_states)
 
-def create_model(ConstDict):
+def create_model(ConstDict, quant_dicts):
     input_ids = opset.parameter([-1, -1], Type.i64, name='input_ids')
     past_keys_num = opset.parameter([1,], Type.i64, name='past_keys_num')
     beam_idx = opset.parameter([-1,], Type.i64, name='beam_idx')
@@ -129,7 +143,7 @@ def create_model(ConstDict):
     inputs_embeds = opset.gather(embed_in_const, indices=input_ids, axis=0) # name='/model/gpt_neox/embed_in/Gather') # [?,?,HIDDEN_SIZE]
     hidden_states = inputs_embeds
     for i in range(LAYER_NUM):
-        hidden_states = layer(hidden_states, past_keys_num, beam_idx, attn_mask, i, ConstDict)
+        hidden_states = layer(hidden_states, past_keys_num, beam_idx, attn_mask, i, ConstDict, quant_dicts)
     # final_layer_norm
     final_layer_norm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name='/model/gpt_neox/final_layer_norm/mvn')
     final_layer_norm_bias = opset.constant(ConstDict['model.gpt_neox.final_layer_norm.bias'], Type.f32)
@@ -138,7 +152,15 @@ def create_model(ConstDict):
     final_layer_norm = opset.add(final_layer_norm_mul, final_layer_norm_bias, auto_broadcast='numpy', name='/model/gpt_neox/final_layer_norm/add')
     # embed_out
     embed_out_weight = opset.constant(ConstDict['model.embed_out.weight'], Type.f32)
-    embed_out = opset.matmul(final_layer_norm, embed_out_weight, transpose_a=False,transpose_b=False, name='logits') #wildcard [?,?,VOCAB_SIZE]
+    name = 'logits'
+    if name + '/fq_input_0' in quant_dicts:
+        info_data = quant_dicts[name + '/fq_input_0'][0]
+        info_weight = quant_dicts[name + '/fq_weights_1'][0]
+        q_d = opset.fake_quantize(final_layer_norm, info_data['il'], info_data['ih'], info_data['ol'], info_data['oh'], info_data['levels'], info_data['auto_broadcast'], name=f'{name}/fq_input_0')
+        q_w = opset.fake_quantize(embed_out_weight, info_weight['il'], info_weight['ih'], info_weight['ol'], info_weight['oh'], info_weight['levels'], info_weight['auto_broadcast'], name=f'{name}/fq_weights_1')
+        embed_out = opset.matmul(q_d, q_w, transpose_a=False,transpose_b=True, name=name) #wildcard [?,?,VOCAB_SIZE]
+    else:
+        embed_out = opset.matmul(final_layer_norm, embed_out_weight, transpose_a=False,transpose_b=True, name=name) #wildcard [?,?,VOCAB_SIZE]
     embed_out_result = opset.result(embed_out, name='logits/sink_port_0') # [?,?,VOCAB_SIZE]
     return Model([embed_out_result], [input_ids, past_keys_num, beam_idx, attn_mask])
 
@@ -162,7 +184,7 @@ def get_params_from_model(path):
     VOCAB_SIZE = model.config.vocab_size
     ConstDict = {
         'model.gpt_neox.embed_in.weight': model.gpt_neox.embed_in.weight.detach().numpy(),
-        'model.embed_out.weight': model.embed_out.weight.detach().numpy().transpose(),
+        'model.embed_out.weight': model.embed_out.weight.detach().numpy(),
         'model.gpt_neox.final_layer_norm.bias': model.gpt_neox.final_layer_norm.bias.detach().numpy(),
         'model.gpt_neox.final_layer_norm.weight': model.gpt_neox.final_layer_norm.weight.detach().numpy(),
         'model.gpt_neox.layers.input_layernorm.bias': [
@@ -181,37 +203,94 @@ def get_params_from_model(path):
             l.attention.query_key_value.bias.detach().numpy() for l in model.gpt_neox.layers
         ],
         'model.gpt_neox.layers.attention.query_key_value.weight': [
-            l.attention.query_key_value.weight.detach().numpy().transpose() for l in model.gpt_neox.layers
+            l.attention.query_key_value.weight.detach().numpy() for l in model.gpt_neox.layers
         ],
         'model.gpt_neox.layers.attention.dense.bias': [
             l.attention.dense.bias.detach().numpy() for l in model.gpt_neox.layers
         ],
         'model.gpt_neox.layers.attention.dense.weight': [
-            l.attention.dense.weight.detach().numpy().transpose() for l in model.gpt_neox.layers
+            l.attention.dense.weight.detach().numpy() for l in model.gpt_neox.layers
         ],
         'model.gpt_neox.layers.mlp.dense_h_to_4h.bias': [
             l.mlp.dense_h_to_4h.bias.detach().numpy() for l in model.gpt_neox.layers
         ],
         'model.gpt_neox.layers.mlp.dense_h_to_4h.weight': [
-            l.mlp.dense_h_to_4h.weight.detach().numpy().transpose() for l in model.gpt_neox.layers
+            l.mlp.dense_h_to_4h.weight.detach().numpy() for l in model.gpt_neox.layers
         ],
         'model.gpt_neox.layers.mlp.dense_4h_to_h.bias': [
             l.mlp.dense_4h_to_h.bias.detach().numpy() for l in model.gpt_neox.layers
         ],
         'model.gpt_neox.layers.mlp.dense_4h_to_h.weight': [
-            l.mlp.dense_4h_to_h.weight.detach().numpy().transpose() for l in model.gpt_neox.layers
+            l.mlp.dense_4h_to_h.weight.detach().numpy() for l in model.gpt_neox.layers
         ],
     }
     return ConstDict
+
+def get_quant_params_from_model(path):
+    org_dicts = {}
+    core = Core()
+    net = core.read_model(model=path)
+    for op in net.get_ordered_ops():
+        if op.get_type_name() == 'FakeQuantize':
+            print(op.friendly_name, op.name, op.get_attributes())
+            org_dicts[op.friendly_name] = {}
+            # parants
+            parents_name = ['il', 'ih', 'ol', 'oh']
+            org_dicts[op.friendly_name]['levels'] = op.get_attributes()['levels']
+            org_dicts[op.friendly_name]['auto_broadcast'] = op.get_attributes()['auto_broadcast']
+            for i in range(1, 5):
+                const_node = op.input_value(i).get_node()
+                print(f'{parents_name[i - 1]} name:{const_node.name}, friend name:{const_node.friendly_name}, shape:{const_node.shape} data:{const_node.get_data()}')
+                org_dicts[op.friendly_name][parents_name[i - 1]] = const_node.get_data()
+    dicts = {}
+    maps = {
+        'attention/query_key_value/MatMul/fq_input_0': '/model/gpt_neox/layers.{}/attention/query_key_value/MatMul/fq_input_0',
+        'attention/query_key_value/MatMul/fq_weights_1': '/model/gpt_neox/layers.{}/attention/query_key_value/MatMul/fq_weights_1',
+        'attention/Transpose_4/fq_input_0': '/model/gpt_neox/layers.{}/attention/dense/MatMul/fq_input_0',
+        'attention/dense/MatMul/fq_weights_1': '/model/gpt_neox/layers.{}/attention/dense/MatMul/fq_weights_1',
+        'mlp/dense_h_to_4h/MatMul/fq_input_0': '/model/gpt_neox/layers.{}/mlp/dense_h_to_4h/MatMul/fq_input_0',
+        'mlp/dense_h_to_4h/MatMul/fq_weights_1': '/model/gpt_neox/layers.{}/mlp/dense_h_to_4h/MatMul/fq_weights_1',
+        'mlp/dense_4h_to_h/MatMul/fq_input_0': '/model/gpt_neox/layers.{}/mlp/dense_4h_to_h/MatMul/fq_input_0',
+        'mlp/dense_4h_to_h/MatMul/fq_weights_1': '/model/gpt_neox/layers.{}/mlp/dense_4h_to_h/MatMul/fq_weights_1',
+        
+        'attention/Concat_3/fq_input_0': "/model/gpt_neox/layers.{}/attention/attn/matmul1/fq_input_0",
+        #'attention/Slice/fq_input_0': "/model/gpt_neox/layers.{}/attention/attn/matmul1/fq_input_0",
+        'attention/Mul_5/fq_input_1': "/model/gpt_neox/layers.{}/attention/attn/matmul1/fq_input_1",
+        'attention/MatMul_1/fq_input_0': '/model/gpt_neox/layers.{}/attention/attn/matmul2/fq_input_0',
+        'attention/Slice/fq_input_0': '/model/gpt_neox/layers.{}/attention/attn/matmul2/fq_input_1',
+        'start_logits/fq_input_0': 'logits/fq_input_0',
+        'start_logits/fq_weights_1': 'logits/fq_weights_1'
+    }
+    for name, info in org_dicts.items():
+        token = '/gpt_neox/layers.'
+        i = name.find(token)
+        if i != -1:
+            t = name[len(token):].split('/')
+            idx = t[0]
+            key = '/'.join(t[1:])
+        else:
+            idx = None
+            key = name
+        if key in maps:
+            new_key = maps[key]
+            if idx:
+                new_key = new_key.format(idx)
+
+            dicts[new_key] = (info, name)
+    return dicts
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("")
     parser.add_argument("org_model_path")
     parser.add_argument("ov_model_path")
+    parser.add_argument("quant_model_path", default="")
     args = parser.parse_args()
 
+    quant_dicts = {}
+    if len(args.quant_model_path):
+        quant_dicts = get_quant_params_from_model(args.quant_model_path)
     dicts = get_params_from_model(args.org_model_path)
-    model2 = create_model(dicts)
+    model2 = create_model(dicts, quant_dicts)
     # model2 = create_model(FakeConstDict)
     print("====", "new model")
     show_io(model2)

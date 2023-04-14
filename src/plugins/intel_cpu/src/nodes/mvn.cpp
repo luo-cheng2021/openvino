@@ -1341,9 +1341,9 @@ void MVN::prepareParams() {
         //std::cout << "mvn use fast path: " << getName() << "\n";
         return;
     } else {
-        std::cout << mvnAttrs.src_prc << " " << mvnAttrs.dst_prc << " "
-            << mvnAttrs.initAcrossChannels_ << " " << getInputShapeAtPort(0).getRank()
-            << "\n";
+        // std::cout << "fallback mvn: " << getName() << " " << mvnAttrs.src_prc << " " << mvnAttrs.dst_prc << " "
+        //     << mvnAttrs.initAcrossChannels_ << " " << getInputShapeAtPort(0).getRank()
+        //     << "\n";
     }
     const SizeVector in_dims = srcMemPtr->getStaticDims();
     transformTo5DCase(in_dims);

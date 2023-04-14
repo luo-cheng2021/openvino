@@ -749,10 +749,10 @@ void GraphOptimizer::FuseFullyConnectedAndSimpleOperation(Graph &graph) {
         }
 
         //  BF16 Quantize Layer Fusing Disabling
-        if (BF16QuantizeNodeFusing(parentNode, childNode)) {
-            parent++;
-            continue;
-        }
+        // if (BF16QuantizeNodeFusing(parentNode, childNode)) {
+        //     parent++;
+        //     continue;
+        // }
 
         childNode->fuseInto(parentNode);
 
