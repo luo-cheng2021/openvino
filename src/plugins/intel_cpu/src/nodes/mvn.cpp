@@ -1173,6 +1173,30 @@ void MVN::initSupportedPrimitiveDescriptors() {
 
     if (!fusedWith.empty()) {
         outputPrecision = fusedWith[fusedWith.size() - 1]->getOriginalOutputPrecisionAtPort(0);
+        if (fusedWith.size() == 1) {
+            auto& node = fusedWith[0];
+            if (auto* fakeQuantizeNode = dynamic_cast<FakeQuantize*>(node.get())) {
+                auto quant = fakeQuantizeNode->getInputScale();
+                if (quant.size() != 1) {
+                    qkv_quant = std::move(quant);
+                    supportedPostops = Fastpath_Postops_FQ;
+                } else {
+                    auto& shape = getInputShapeAtPort(0);
+                    if (shape.getRank() == 3) {
+                        auto dim = shape.getDims()[2];
+                        if (dim != Shape::UNDEFINED_DIM) {
+                            // std::cout << "fq " << dim << " scale " << quant[0] << " out precision:"
+                            //     << outputPrecision << " \n";
+
+                            qkv_quant = std::vector<float>(dim, quant[0]);
+                            supportedPostops = Fastpath_Postops_FQ;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        supportedPostops = Fastpath_Postops_No;
     }
 
     // ref with float planar and no fusion
@@ -1333,17 +1357,18 @@ void MVN::prepareParams() {
     } else {
         mvnAttrs.layout = MVNLayoutType::mvn_block;
     }
-    if (mvnAttrs.src_prc == mvnAttrs.dst_prc && mvnAttrs.src_prc == Precision::BF16 &&
+    if (mvnAttrs.src_prc == Precision::BF16 && (mvnAttrs.dst_prc == Precision::BF16 || mvnAttrs.dst_prc == Precision::I8) &&
         mvnAttrs.initAcrossChannels_ == false && getInputShapeAtPort(0).getRank() == 3 &&
-        fusedWith.empty() && mvnAttrs.layout == MVNLayoutType::mvn_planar &&
-        mvnAttrs.normalizeVariance_ == true) {
+        mvnAttrs.layout == MVNLayoutType::mvn_planar &&
+        mvnAttrs.normalizeVariance_ == true &&
+        supportedPostops != Fastpath_Postops_NotSupport) {
         fastBf16Path = true;
         //std::cout << "mvn use fast path: " << getName() << "\n";
         return;
     } else {
-        // std::cout << "fallback mvn: " << getName() << " " << mvnAttrs.src_prc << " " << mvnAttrs.dst_prc << " "
-        //     << mvnAttrs.initAcrossChannels_ << " " << getInputShapeAtPort(0).getRank()
-        //     << "\n";
+        std::cout << "fallback mvn: " << getName() << " " << mvnAttrs.src_prc << " " << mvnAttrs.dst_prc << " "
+            << mvnAttrs.initAcrossChannels_ << " " << getInputShapeAtPort(0).getRank()
+            << "\n";
     }
     const SizeVector in_dims = srcMemPtr->getStaticDims();
     transformTo5DCase(in_dims);
@@ -1439,11 +1464,19 @@ void MVN::execute(dnnl::stream strm) {
         auto eps = mvnAttrs.epsValue_;
         bool inside_sqrt = mvnAttrs.epsMode_ == INSIDE_SQRT;
 
-        parallel_for2d(in_dims[0], in_dims[1], [&](size_t b, size_t c) {
-            auto offset = b * C2 + c * C1;
-            mvn_line(reinterpret_cast<bfloat16*>(src_data) + offset, in_dims[2], eps, inside_sqrt,
-                reinterpret_cast<bfloat16*>(dst_data) + offset);
-        });
+        if (supportedPostops == Fastpath_Postops_No) {
+            parallel_for2d(in_dims[0], in_dims[1], [&](size_t b, size_t c) {
+                auto offset = b * C2 + c * C1;
+                mvn_line(reinterpret_cast<bfloat16*>(src_data) + offset, in_dims[2], eps, inside_sqrt,
+                    reinterpret_cast<bfloat16*>(dst_data) + offset);
+            });
+        } else {
+            parallel_for2d(in_dims[0], in_dims[1], [&](size_t b, size_t c) {
+                auto offset = b * C2 + c * C1;
+                mvn_line(reinterpret_cast<bfloat16*>(src_data) + offset, in_dims[2], eps, inside_sqrt,
+                    reinterpret_cast<int8_t*>(dst_data) + offset, qkv_quant.data());
+            });
+        }
     } else {
         execPtr->exec(src_data, dst_data, postOpsDataPtrs.data());
     }

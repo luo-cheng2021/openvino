@@ -6,6 +6,8 @@
 #include <vector>
 #include <memory>
 
+#include "eltwise.h"
+#include "fake_quantize.h"
 #include "gpt_neox_attn.h"
 #include <ngraph/opsets/opset10.hpp>
 #include <utils/shape_inference/shape_inference_internal_dyn.hpp>
@@ -13,6 +15,7 @@
 #include "emitters/jit_dnnl_emitters.hpp"
 #include "emitters/jit_load_store_emitters.hpp"
 #include "ie_parallel.hpp"
+#include "special/quant_i8_custom.hpp"
 
 using namespace InferenceEngine;
 using namespace ov::intel_cpu;
@@ -55,6 +58,14 @@ private:
         uni_vpxor(vmm_k_src, vmm_k_src, vmm_k_src);
         uni_vpxor(vmm_cos, vmm_cos, vmm_cos);
         uni_vpxor(vmm_sin, vmm_sin, vmm_sin);
+        if (jcp_.dst_prc == Precision::I8) {
+            mov(reg_tmp, ptr[reg_params + GET_OFF(q_quant)]);
+            uni_vmovss(Xmm(vmm_q_scale.getIdx()), ptr[reg_tmp]);
+            uni_vbroadcastss(vmm_q_scale, Xmm(vmm_q_scale.getIdx()));
+            mov(reg_tmp, ptr[reg_params + GET_OFF(k_quant)]);
+            uni_vmovss(Xmm(vmm_k_scale.getIdx()), ptr[reg_tmp]);
+            uni_vbroadcastss(vmm_k_scale, Xmm(vmm_k_scale.getIdx()));
+        }
 
         auto half_rotary_ndims = jcp_.rotary_ndims / 2;
         for (size_t k = 0; k < jcp_.head_num; k++) {
@@ -80,7 +91,7 @@ private:
             add(reg_q_src, (jcp_.size_per_head * 3 - steps) * jcp_.src_prc.size());
             add(reg_k_src, (jcp_.size_per_head * 3 - steps) * jcp_.src_prc.size());
             add(reg_q_dst, reg_q_dst_stride);
-            add(reg_k_dst, (jcp_.max_seq_len * jcp_.size_per_head - steps) * jcp_.src_prc.size());
+            add(reg_k_dst, (jcp_.max_seq_len * jcp_.size_per_head - steps) * jcp_.dst_prc.size());
         }
 
         this->postamble();
@@ -116,14 +127,18 @@ private:
         vfmsub231ps(vmm_q_dst, vmm_q_src, vmm_cos);
         // k_src[i] * cos[i] - k_src[i + halfRotaryNdims] * sin[i]
         vfmsub231ps(vmm_k_dst, vmm_k_src, vmm_cos);
+        if (jcp_.dst_prc == Precision::I8) {
+            uni_vmulps(vmm_q_dst, vmm_q_dst, vmm_q_scale);
+            uni_vmulps(vmm_k_dst, vmm_k_dst, vmm_k_scale);
+        }
 
-        store(reg_q_dst_aux, vmm_q_dst, jcp_.src_prc, step);
-        store(reg_k_dst, vmm_k_dst, jcp_.src_prc, step);
+        store(reg_q_dst_aux, vmm_q_dst, jcp_.dst_prc, step);
+        store(reg_k_dst, vmm_k_dst, jcp_.dst_prc, step);
 
         add(reg_q_src, jcp_.src_prc.size() * step);
         add(reg_k_src, jcp_.src_prc.size() * step);
-        add(reg_q_dst_aux, jcp_.src_prc.size() * step);
-        add(reg_k_dst, jcp_.src_prc.size() * step);
+        add(reg_q_dst_aux, jcp_.dst_prc.size() * step);
+        add(reg_k_dst, jcp_.dst_prc.size() * step);
         add(reg_cos_aux, sizeof(float) * step);
         add(reg_sin_aux, sizeof(float) * step);
     }
@@ -151,15 +166,19 @@ private:
         vfmadd231ps(vmm_q_dst, vmm_q_src, vmm_cos);
         // k_src[i] * cos[i] + k_src[i - halfRotaryNdims] * sin[i]
         vfmadd231ps(vmm_k_dst, vmm_k_src, vmm_cos);
+        if (jcp_.dst_prc == Precision::I8) {
+            uni_vmulps(vmm_q_dst, vmm_q_dst, vmm_q_scale);
+            uni_vmulps(vmm_k_dst, vmm_k_dst, vmm_k_scale);
+        }
 
-        store(reg_q_dst_aux, vmm_q_dst, jcp_.src_prc, step);
-        store(reg_k_dst, vmm_k_dst, jcp_.src_prc, step);
+        store(reg_q_dst_aux, vmm_q_dst, jcp_.dst_prc, step);
+        store(reg_k_dst, vmm_k_dst, jcp_.dst_prc, step);
 
         if (!is_tail) {
             add(reg_q_src, jcp_.src_prc.size() * step);
             add(reg_k_src, jcp_.src_prc.size() * step);
-            add(reg_q_dst_aux, jcp_.src_prc.size() * step);
-            add(reg_k_dst, jcp_.src_prc.size() * step);
+            add(reg_q_dst_aux, jcp_.dst_prc.size() * step);
+            add(reg_k_dst, jcp_.dst_prc.size() * step);
             add(reg_cos_aux, sizeof(float) * step);
             add(reg_sin_aux, sizeof(float) * step);
         }
@@ -193,6 +212,8 @@ private:
     Vmm vmm_sin = Vmm(3);
     Vmm vmm_q_dst = Vmm(4);
     Vmm vmm_k_dst = Vmm(5);
+    Vmm vmm_q_scale = Vmm(6);
+    Vmm vmm_k_scale = Vmm(7);
 
     Reg64 reg_q_src = r8;
     Reg64 reg_k_src = r9;
@@ -242,7 +263,7 @@ public:
         auto& store = simpleKVStore[key];
         current_k_bufs.resize(beam_idx_num);
         current_v_bufs.resize(beam_idx_num);
-        // new_size_per_key_per_beam = headNum * maxSeqLen * sizePerHead * dataTypeSize
+        // new_size_per_key_per_beam = headNum * maxSeqLen * sizePerHead * inputDataTypeSize
         // not init
         if (store.key_buffer.size() < beam_idx_num) {
             store.key_buffer.resize(beam_idx_num);
@@ -400,19 +421,59 @@ GPTNeoxAttn::GPTNeoxAttn(const std::shared_ptr<ov::Node>& op, const GraphContext
     normalFactor = 1.0f / sqrtf(static_cast<float>(sizePerHead));
 
     rotaryNdims = static_cast<int>(sizePerHead * rotaryPct);
+
+    q_quant = attn_op->m_q_quant;
+    k_quant = attn_op->m_k_quant;
+    qk_quant = attn_op->m_qk_quant;
+    v_quant = attn_op->m_v_quant;
+    useInt8 = q_quant != 0.0f;
+}
+
+void GPTNeoxAttn::extractQuantParam() {
+    for (int i = 0; i < fusedWith.size(); ++i) {
+        auto& node = fusedWith[i];
+        bool isLastPostOp = (i == (fusedWith.size() - 1));
+
+        if (auto* eltwiseNode = dynamic_cast<Eltwise*>(node.get())) {
+            continue;
+        }
+
+        if (auto* fakeQuantizeNode = dynamic_cast<FakeQuantize*>(node.get())) {
+            qkv_quant = fakeQuantizeNode->getInputScale();
+            continue;
+        }
+    }
 }
 
 void GPTNeoxAttn::initSupportedPrimitiveDescriptors() {
-    dataPrecision = getOriginalInputPrecisionAtPort(IN_QKV);
-    dataTypeSize = dataPrecision.size();
+    inputDataType = getOriginalInputPrecisionAtPort(IN_QKV);
+    inputDataTypeSize = inputDataType.size();
+    outputDataType = inputDataType;
 
-    addSupportedPrimDesc({{LayoutType::ncsp, dataPrecision},
+    extractQuantParam();
+
+    if (useInt8) {
+        mhaInputDataType = Precision::I8;
+        mhaInputDataTypeSize = sizeof(int8_t);
+    } else {
+        mhaInputDataType = inputDataType;
+        mhaInputDataTypeSize = inputDataTypeSize;
+    }
+
+    if (!fusedWith.empty()) {
+        outputDataType = fusedWith[fusedWith.size() - 1]->getOriginalOutputPrecisionAtPort(0);
+        if (outputDataType == Precision::I8) {
+            assert(!qkv_quant.empty());
+        }
+    }
+
+    addSupportedPrimDesc({{LayoutType::ncsp, inputDataType},
                           {LayoutType::ncsp, Precision::I32},
                           {LayoutType::ncsp, Precision::I32},
                           {LayoutType::ncsp, Precision::I32}},
-                         {{LayoutType::ncsp, dataPrecision}},
+                         {{LayoutType::ncsp, outputDataType}},
                           impl_desc_type::ref_any);
-    GlobalContext::getInstance().init(headNum, sizePerHead, maxSeqLen, dataTypeSize);
+    GlobalContext::getInstance().init(headNum, sizePerHead, maxSeqLen, mhaInputDataTypeSize);
 }
 
 void GPTNeoxAttn::createPrimitive() {
@@ -433,13 +494,14 @@ void GPTNeoxAttn::prepareParams() {
     if (attnMasks.empty())
         attnMasks.resize(batch * maxSeqLen, 0.0f);
     // memory for query transpose destination
-    if (queryTranspose.size() < batch * maxSeqLen * hiddenSize * dataTypeSize) {
-        queryTranspose.resize(batch * maxSeqLen * hiddenSize * dataTypeSize);
+    if (queryTranspose.size() < batch * maxSeqLen * hiddenSize * mhaInputDataTypeSize) {
+        queryTranspose.resize(batch * maxSeqLen * hiddenSize * mhaInputDataTypeSize);
     }
 
     if (!rotaryKernel) {
         jit_rotary_compile_params jcp;
-        jcp.src_prc = dataPrecision;
+        jcp.src_prc = inputDataType;
+        jcp.dst_prc = mhaInputDataType;
         jcp.head_num = headNum;
         jcp.rotary_ndims = rotaryNdims;
         jcp.hidden_size = hiddenSize;
@@ -461,7 +523,7 @@ void GPTNeoxAttn::prepareParams() {
     if (!mhaGPT) {
         gpt::MHAGPT::CreateParam param = {
             headNum, sizePerHead,
-            normalFactor, dataPrecision, maxSeqLen,
+            normalFactor, mhaInputDataType, outputDataType, maxSeqLen, qkv_quant.size() == 1
         };
         mhaGPT = std::move(std::unique_ptr<gpt::MHAGPT>(new gpt::MHAGPT()));
         mhaGPT->create(param);
@@ -511,11 +573,11 @@ void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
 //     for (size_t m = 0; m < batch; m ++) {
 //         float* cos = cos_cached + offset * rotaryNdims;
 //         float* sin = sin_cached + offset * rotaryNdims;
-//         auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHead * dataTypeSize;
-//         auto k_dst_batch = k_dst + m * headNum * maxSeqLen * sizePerHead * dataTypeSize;
+//         auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHead * inputDataTypeSize;
+//         auto k_dst_batch = k_dst + m * headNum * maxSeqLen * sizePerHead * inputDataTypeSize;
 //         for (size_t n = 0; n < q_seq_len; n++) {
-//             auto q_dst_seq = q_dst_batch + n * sizePerHead * dataTypeSize;
-//             auto k_dst_seq = k_dst_batch + n * sizePerHead * dataTypeSize;
+//             auto q_dst_seq = q_dst_batch + n * sizePerHead * inputDataTypeSize;
+//             auto k_dst_seq = k_dst_batch + n * sizePerHead * inputDataTypeSize;
 //             for (size_t k = 0; k < headNum; k++) {
 //                 for (size_t i = 0; i < halfRotaryNdims; i++) {
 //                     q_dst_seq[i] = q_src[i] * cos[i] - q_src[i + halfRotaryNdims] * sin[i];
@@ -525,10 +587,10 @@ void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
 //                     q_dst_seq[i] = q_src[i] * cos[i] + q_src[i - halfRotaryNdims] * sin[i];
 //                     k_dst_seq[i] = k_src[i] * cos[i] + k_src[i - halfRotaryNdims] * sin[i];
 //                 }
-//                 q_src += sizePerHead * 3 * dataTypeSize;
-//                 k_src += sizePerHead * 3 * dataTypeSize;
-//                 q_dst_seq += q_seq_len * sizePerHead * dataTypeSize;
-//                 k_dst_seq += maxSeqLen * sizePerHead * dataTypeSize;
+//                 q_src += sizePerHead * 3 * inputDataTypeSize;
+//                 k_src += sizePerHead * 3 * inputDataTypeSize;
+//                 q_dst_seq += q_seq_len * sizePerHead * inputDataTypeSize;
+//                 k_dst_seq += maxSeqLen * sizePerHead * inputDataTypeSize;
 //             }
 //             cos += rotaryNdims;
 //             sin += rotaryNdims;
@@ -542,25 +604,27 @@ void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
 void GPTNeoxAttn::applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const std::vector<uint8_t*>& k_dst, size_t k_start,
                                     float* cos_cached, float* sin_cached, size_t batch, size_t q_seq_len, size_t offset) {
     jit_rotary_call_args call_args;
+    call_args.q_quant = &q_quant;
+    call_args.k_quant = &k_quant;
     for (size_t m = 0; m < batch; m ++) {
         float* cos = cos_cached + offset * rotaryNdims;
         float* sin = sin_cached + offset * rotaryNdims;
-        auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHead * dataTypeSize;
+        auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHead * mhaInputDataTypeSize;
         auto k_dst_batch = k_dst[m] + k_start;
         for (size_t n = 0; n < q_seq_len; n++) {
-            auto q_dst_seq = q_dst_batch + n * sizePerHead * dataTypeSize;
-            auto k_dst_seq = k_dst_batch + n * sizePerHead * dataTypeSize;
+            auto q_dst_seq = q_dst_batch + n * sizePerHead * mhaInputDataTypeSize;
+            auto k_dst_seq = k_dst_batch + n * sizePerHead * mhaInputDataTypeSize;
             call_args.q_src = q_src;
             call_args.k_src = k_src;
             call_args.cos = cos;
             call_args.sin = sin;
             call_args.q_dst = q_dst_seq;
             call_args.k_dst = k_dst_seq;
-            call_args.q_dst_stride = q_seq_len * sizePerHead * dataTypeSize;
+            call_args.q_dst_stride = q_seq_len * sizePerHead * mhaInputDataTypeSize;
 
             (*rotaryKernel)(&call_args);
-            q_src += hiddenSize * 3 * dataTypeSize;
-            k_src += hiddenSize * 3 * dataTypeSize;
+            q_src += hiddenSize * 3 * inputDataTypeSize;
+            k_src += hiddenSize * 3 * inputDataTypeSize;
             cos += rotaryNdims;
             sin += rotaryNdims;
         }
@@ -651,6 +715,68 @@ static void MemcpyStride(const std::vector<uint8_t*>& dst, size_t dst_start, voi
     });
 }
 
+static void MemcpyStrideQuant(void* dst, void* src, size_t copy_head_size, size_t head_size, size_t head_num, size_t seq_len,
+    size_t max_seq_len, size_t batch, size_t src_type_size, float scale) {
+    // for (size_t m = 0; m < batch; m++) {
+    //     auto* dst_batch = static_cast<uint8_t*>(dst) + m * head_num * max_seq_len * head_size * type_size;
+    //     auto* src_batch = static_cast<uint8_t*>(src) + m * head_num * seq_len * 3 * head_size * type_size;
+    //     for (size_t n = 0; n < head_num; n++) {
+    //         auto* dst_head = dst_batch + n * max_seq_len * head_size * type_size;
+    //         auto* src_head = src_batch + n * 3 * head_size * type_size;
+    //         for (size_t i = 0; i < seq_len; i++) {
+    //             memcpy(dst_head, src_head, copy_head_size * type_size);
+    //             dst_head += head_size * type_size;
+    //             src_head += head_num * 3 * head_size * type_size;
+    //         }
+    //     }
+    // }
+
+    parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+        auto* dst_batch = static_cast<uint8_t*>(dst) + b * head_num * max_seq_len * head_size;
+        auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * src_type_size;
+        auto* dst_head = dst_batch + h * max_seq_len * head_size;
+        auto* src_head = src_batch + h * 3 * head_size * src_type_size;
+        for (size_t i = 0; i < seq_len; i++) {
+            quant_i8(dst_head, src_head, copy_head_size, scale);
+            dst_head += head_size;
+            src_head += head_num * 3 * head_size * src_type_size;
+        }
+    });
+}
+
+// typical use:
+// 1, read from kv input and write to pask_keys, which needed by attention
+// 2, read from q input and write to q temp buffer
+// src: [batch, seq_len, num_attention_heads, 3, head_size]
+// dst: [batch, num_attention_heads, max_seq_len/seq_len, head_size]
+static void MemcpyStrideQuant(const std::vector<uint8_t*>& dst, size_t dst_start, void* src, size_t copy_head_size, size_t head_size,
+    size_t head_num, size_t seq_len, size_t max_seq_len, size_t batch, size_t src_type_size, float scale) {
+    // for (size_t m = 0; m < batch; m++) {
+    //     auto* dst_batch = dst[m] + dst_start;
+    //     auto* src_batch = static_cast<uint8_t*>(src) + m * head_num * seq_len * 3 * head_size * type_size;
+    //     for (size_t n = 0; n < head_num; n++) {
+    //         auto* dst_head = dst_batch + n * max_seq_len * head_size * type_size;
+    //         auto* src_head = src_batch + n * 3 * head_size * type_size;
+    //         for (size_t i = 0; i < seq_len; i++) {
+    //             memcpy(dst_head, src_head, copy_head_size * type_size);
+    //             dst_head += head_size * type_size;
+    //             src_head += head_num * 3 * head_size * type_size;
+    //         }
+    //     }
+    // }
+    parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+        auto* dst_batch = dst[b] + dst_start;
+        auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * src_type_size;
+        auto* dst_head = dst_batch + h * max_seq_len * head_size;
+        auto* src_head = src_batch + h * 3 * head_size * src_type_size;
+        for (size_t i = 0; i < seq_len; i++) {
+            quant_i8(dst_head, src_head, copy_head_size, scale);
+            dst_head += head_size;
+            src_head += head_num * 3 * head_size * src_type_size;
+        }
+    });
+}
+
 void GPTNeoxAttn::execute(dnnl::stream strm) {
     // [batch, seq_len, (num_heads * 3 * head_size)]
     auto* qkv = reinterpret_cast<uint8_t*>(getParentEdgeAt(IN_QKV)->getMemoryPtr()->GetPtr());
@@ -677,7 +803,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     // first token will write to pastKeys offset 0
     bool first_token = new_seq_offset == 0;
     // [2, batch, num_heads, maxSeqLen, head_size]
-    auto size_per_key_per_beam = headNum * maxSeqLen * sizePerHead * dataTypeSize;
+    auto size_per_key_per_beam = headNum * maxSeqLen * sizePerHead * mhaInputDataTypeSize;
     std::vector<uint8_t*> current_k_bufs, current_v_bufs;
     GlobalContext::getInstance().getOrCreateStore(getName() + std::to_string(model_id), size_per_key_per_beam, first_token ? nullptr : beam_idx, batch,
         current_k_bufs, current_v_bufs, new_seq_offset);
@@ -691,23 +817,35 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     // [batch, seq_len, (num_heads * 3 * head_size)]
     //   --> [batch, seq_len, num_heads, 3 * head_size]
     auto query = qkv;                                      // qkv[..., : self.head_size].permute(0, 2, 1, 3)
-    auto key = qkv + sizePerHead * dataTypeSize;           // qkv[..., self.head_size : 2 * self.head_size].permute(0, 2, 1, 3)
-    auto value = qkv + 2 * sizePerHead * dataTypeSize;     // qkv[..., 2 * self.head_size :].permute(0, 2, 1, 3)
+    auto key = qkv + sizePerHead * inputDataTypeSize;           // qkv[..., self.head_size : 2 * self.head_size].permute(0, 2, 1, 3)
+    auto value = qkv + 2 * sizePerHead * inputDataTypeSize;     // qkv[..., 2 * self.head_size :].permute(0, 2, 1, 3)
     // transpose + rotary embbeding:
     // transpose: [batch, seq_len, num_attention_heads, 3 * head_size] -->
     //          3 [batch, num_attention_heads, seq_len, head_size]
     // rotary embbeding: part of key will write to past_key, part of query will write to tempory buffer
-    applyRotaryPosEmb(query, key, queryTranspose.data(), current_k_bufs, dataTypeSize * new_seq_offset * sizePerHead,
+    applyRotaryPosEmb(query, key, queryTranspose.data(), current_k_bufs, mhaInputDataTypeSize * new_seq_offset * sizePerHead,
         &cosCached[0], &sinCached[0], batch, seq_len, new_seq_offset);
-    // query pass part(temp buffer): query = torch.cat((query, query_pass), dim=-1)
-    MemcpyStride(queryTranspose.data() + rotaryNdims * dataTypeSize, query + rotaryNdims * dataTypeSize, sizePerHead - rotaryNdims,
-        sizePerHead, headNum, seq_len, seq_len, batch, dataTypeSize);
-    // key pass part(past_key): key = torch.cat((key, key_pass), dim=-1)
-    MemcpyStride(current_k_bufs, (new_seq_offset * sizePerHead + rotaryNdims) * dataTypeSize, key + rotaryNdims * dataTypeSize,
-        sizePerHead - rotaryNdims, sizePerHead, headNum, seq_len, maxSeqLen, batch, dataTypeSize);
-    // value(pastKeys): value = torch.cat((past_value, value), dim=-2)
-    MemcpyStride(current_v_bufs, new_seq_offset * sizePerHead * dataTypeSize, value, sizePerHead, sizePerHead, headNum, seq_len,
-        maxSeqLen, batch, dataTypeSize);
+    if (useInt8) {
+        // query pass part(temp buffer): query = torch.cat((query, query_pass), dim=-1)
+        MemcpyStrideQuant(queryTranspose.data() + rotaryNdims * mhaInputDataTypeSize, query + rotaryNdims * inputDataTypeSize, sizePerHead - rotaryNdims,
+            sizePerHead, headNum, seq_len, seq_len, batch, inputDataTypeSize, q_quant);
+        // key pass part(past_key): key = torch.cat((key, key_pass), dim=-1)
+        MemcpyStrideQuant(current_k_bufs, (new_seq_offset * sizePerHead + rotaryNdims) * mhaInputDataTypeSize, key + rotaryNdims * inputDataTypeSize,
+            sizePerHead - rotaryNdims, sizePerHead, headNum, seq_len, maxSeqLen, batch, inputDataTypeSize, k_quant);
+        // value(pastKeys): value = torch.cat((past_value, value), dim=-2)
+        MemcpyStrideQuant(current_v_bufs, new_seq_offset * sizePerHead * mhaInputDataTypeSize, value, sizePerHead, sizePerHead, headNum, seq_len,
+            maxSeqLen, batch, inputDataTypeSize, v_quant);
+    } else {
+        // query pass part(temp buffer): query = torch.cat((query, query_pass), dim=-1)
+        MemcpyStride(queryTranspose.data() + rotaryNdims * inputDataTypeSize, query + rotaryNdims * inputDataTypeSize, sizePerHead - rotaryNdims,
+            sizePerHead, headNum, seq_len, seq_len, batch, inputDataTypeSize);
+        // key pass part(past_key): key = torch.cat((key, key_pass), dim=-1)
+        MemcpyStride(current_k_bufs, (new_seq_offset * sizePerHead + rotaryNdims) * inputDataTypeSize, key + rotaryNdims * inputDataTypeSize,
+            sizePerHead - rotaryNdims, sizePerHead, headNum, seq_len, maxSeqLen, batch, inputDataTypeSize);
+        // value(pastKeys): value = torch.cat((past_value, value), dim=-2)
+        MemcpyStride(current_v_bufs, new_seq_offset * sizePerHead * inputDataTypeSize, value, sizePerHead, sizePerHead, headNum, seq_len,
+            maxSeqLen, batch, inputDataTypeSize);
+    }
     // attn_output = _attn(query, key, value)
     // attn_output = _merge_heads(attn_output, self.num_attention_heads, self.head_size)
     auto head_stride_in_q = sizePerHead * seq_len;
@@ -727,7 +865,14 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
         head_stride_in_kv,                      // kv stride
         maxSeqLen,                              // attn_mask stride
         sizePerHead, hiddenSize * seq_len,      // output stride
+        1.0f / q_quant, 1.0f / k_quant, qk_quant, 1.0f / v_quant, qkv_quant
     };
 
     mhaGPT->exec(param);
+}
+
+bool GPTNeoxAttn::canFuse(const NodePtr& node) const {
+    if (q_quant != 0.0f)
+        return canFuseSimpleOperation(node);
+    return false;
 }

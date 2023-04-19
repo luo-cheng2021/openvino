@@ -79,6 +79,17 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
         else:
             node = opset.matmul(data, weights, transpose_a=False, transpose_b=True, name=name) #wildcard [?,?,7680]
         return node
+    def get_scale(prefix):
+        def scale(info):
+            return (info['levels'] - 1) / (info['ih'] - info['il'])
+        if prefix + 'matmul1/fq_input_0' in quant_dicts:
+            info_data0 = quant_dicts[prefix + 'matmul1/fq_input_0'][0]
+            info_data1 = quant_dicts[prefix + 'matmul1/fq_input_1'][0]
+            info_data2 = quant_dicts[prefix + 'matmul2/fq_input_0'][0]
+            info_data3 = quant_dicts[prefix + 'matmul2/fq_input_1'][0]
+            return scale(info_data0), scale(info_data1), scale(info_data2), scale(info_data3)
+        else:
+            return 0.0, 0.0, 0.0, 0.0
     input_layernorm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mvn')
     input_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.bias')
     input_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.weight')
@@ -93,9 +104,12 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
     qkv = opset.add(qkv_, query_key_value_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/attention/query_key_value/Add') #wildcard [?,?,7680]
 
     # custom op
+    q_quant, k_quant, qk_quant, v_quant = get_scale(f'/model/gpt_neox/layers.{layer_idx}/attention/attn/')
     attn_output = opset.gpt_neox_attn(qkv, past_keys_num, beam_idx, attn_mask,
             layer_num=LAYER_NUM, head_num=HEAD_NUM, size_per_head=SIZE_PER_HEAD, hidden_size=HIDDEN_SIZE, max_position_embeddings=MAX_POSITION_EMBEDDINGS,
-            rotary_emb_base=ROTARY_EMB_BASE, rotary_pct=ROTARY_PCT, max_seq_len=MAX_SEQ_LEN, name=f'/model/gpt_neox/layers.{layer_idx}/attention/attn')
+            rotary_emb_base=ROTARY_EMB_BASE, rotary_pct=ROTARY_PCT, max_seq_len=MAX_SEQ_LEN,
+            q_quant=q_quant, k_quant=k_quant, qk_quant=qk_quant, v_quant=v_quant,
+            name=f'/model/gpt_neox/layers.{layer_idx}/attention/attn')
 
     # attn_output = self.dense(attn_output) line: 157
     dense_weight = opset.constant(ConstDict['model.gpt_neox.layers.attention.dense.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.attention.dense.weight')

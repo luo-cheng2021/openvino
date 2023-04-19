@@ -187,6 +187,10 @@ def gpt_neox_attn(
     rotary_emb_base,
     rotary_pct,
     max_seq_len,
+    q_quant = 0.0,
+    k_quant = 0.0,
+    qk_quant = 0.0,
+    v_quant = 0.0,
     name: Optional[str] = None,
 ) -> Node:
     """ TODO
@@ -204,6 +208,10 @@ def gpt_neox_attn(
         "rotary_emb_base": rotary_emb_base,
         "rotary_pct": rotary_pct,
         "max_seq_len": max_seq_len,
+        "q_quant": q_quant,
+        "k_quant": k_quant,
+        "qk_quant": qk_quant,
+        "v_quant": v_quant
     }
     return _get_node_factory_opset10().create("GPTNeoxAttn", inputs, attributes)
 

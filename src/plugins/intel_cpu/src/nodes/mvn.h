@@ -130,6 +130,12 @@ private:
 
     MVNAttrs mvnAttrs;
     bool fastBf16Path = false;
+    enum Fastpath_Postops {
+        Fastpath_Postops_NotSupport,
+        Fastpath_Postops_No,
+        Fastpath_Postops_FQ
+    } supportedPostops = Fastpath_Postops_NotSupport;
+    std::vector<float> qkv_quant;     // next node quant scale
 
     class MVNExecutor {
     public:

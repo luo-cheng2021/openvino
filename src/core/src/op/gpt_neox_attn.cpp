@@ -10,7 +10,8 @@ namespace ov {
 op::v10::GPTNeoxAttn::GPTNeoxAttn(const Output<Node>& qkv, const Output<Node>& past_keys_num,
         const Output<Node>& beam_idx, const Output<Node>& attn_mask,
         int layer_num, int head_num, int size_per_head, int hidden_size, int max_position_embeddings,
-        int rotary_emb_base, float rotary_pct, int max_seq_len) :
+        int rotary_emb_base, float rotary_pct, int max_seq_len,
+        float q_quant, float k_quant, float qk_quant, float v_quant) :
         op::Op({qkv, past_keys_num, beam_idx, attn_mask}),
         m_layer_num(layer_num),
         m_head_num(head_num),
@@ -19,7 +20,11 @@ op::v10::GPTNeoxAttn::GPTNeoxAttn(const Output<Node>& qkv, const Output<Node>& p
         m_max_position_embeddings(max_position_embeddings),
         m_rotary_emb_base(rotary_emb_base),
         m_rotary_pct(rotary_pct),
-        m_max_seq_len(max_seq_len) {
+        m_max_seq_len(max_seq_len),
+        m_q_quant(q_quant),
+        m_k_quant(k_quant),
+        m_qk_quant(qk_quant),
+        m_v_quant(v_quant) {
     constructor_validate_and_infer_types();
 }
 
@@ -33,6 +38,10 @@ bool op::v10::GPTNeoxAttn::visit_attributes(AttributeVisitor& visitor) {
     visitor.on_attribute("rotary_emb_base", m_rotary_emb_base);
     visitor.on_attribute("rotary_pct", m_rotary_pct);
     visitor.on_attribute("max_seq_len", m_max_seq_len);
+    visitor.on_attribute("q_quant", m_q_quant);
+    visitor.on_attribute("k_quant", m_k_quant);
+    visitor.on_attribute("qk_quant", m_qk_quant);
+    visitor.on_attribute("v_quant", m_v_quant);
     return true;
 }
 
@@ -58,6 +67,11 @@ std::shared_ptr<Node> op::v10::GPTNeoxAttn::clone_with_new_inputs(const OutputVe
             m_max_position_embeddings,
             m_rotary_emb_base,
             m_rotary_pct,
-            m_max_seq_len);
+            m_max_seq_len,
+            m_q_quant,
+            m_k_quant,
+            m_qk_quant,
+            m_v_quant
+            );
 }
 }  // namespace ov

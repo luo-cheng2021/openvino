@@ -335,7 +335,8 @@ private:
 
         uni_vmulps(get_vmm_in(0), get_vmm_in(0), get_vmm_denom(0));
 
-        if (jcp_.src_prc == Precision::I32) {
+        //if (jcp_.src_prc == Precision::I32) 
+        {
             if (jcp_.with_scales1) {
                 if (!jcp_.broadcast_scales1) {
                     load(vmm_scales, reg_scales, Precision::FP32, step, is_tail);
@@ -587,6 +588,7 @@ struct MHAGPT::Impl {
     impl_desc_type _impl_desc_type;
 
     void mha_bf16(const ExecParam &param);
+    void mha_i8(const ExecParam &param);
 
     size_t bufferMatMul0OutSize;
     size_t bufferMatMul1OutSize;
@@ -622,17 +624,20 @@ void MHAGPT::Impl::create(const CreateParam& param) {
     bool isAMXSupported = mayiuse(avx512_core_bf16_amx_int8) || mayiuse(avx512_core_bf16_amx_bf16);
 
     size_t numThreads = parallel_get_max_threads();
-    gemAvB.resize(numThreads);
-    for (size_t i = 0; i < numThreads; i++) {
-        gemAvB[i] = std::make_shared<amx_bf16::GemAvB>();
-    }
-    qKtrGemm.resize(numThreads);
-    for (size_t i = 0; i < numThreads; i++) {
-        qKtrGemm[i] = std::make_shared<amx_bf16::Matmul>(false, true);
-    }
-    qKVGemm.resize(numThreads);
-    for (size_t i = 0; i < numThreads; i++) {
-        qKVGemm[i] = std::make_shared<amx_bf16::Matmul>(false, false);
+    if (_create_param.qkv_precision == Precision::I8) {
+    } else {
+        gemAvB.resize(numThreads);
+        for (size_t i = 0; i < numThreads; i++) {
+            gemAvB[i] = std::make_shared<amx_bf16::GemAvB>();
+        }
+        qKtrGemm.resize(numThreads);
+        for (size_t i = 0; i < numThreads; i++) {
+            qKtrGemm[i] = std::make_shared<amx_bf16::Matmul>(false, true);
+        }
+        qKVGemm.resize(numThreads);
+        for (size_t i = 0; i < numThreads; i++) {
+            qKVGemm[i] = std::make_shared<amx_bf16::Matmul>(false, false);
+        }
     }
 
     bufferMatMul0OutSize = _create_param.max_seq_len * rnd_up(_create_param.max_seq_len * sizeof(float), 64);
@@ -656,13 +661,13 @@ void MHAGPT::Impl::create(const CreateParam& param) {
         for (auto i = 0; i < vec_size; i++) {
             jit_mul_add_softmax_compile_params jcp;
             jcp.src_prc = Precision::FP32;
-            jcp.dst_prc = Precision::BF16;
+            jcp.dst_prc = _create_param.qkv_precision;
             jcp.with_mul_scales = !mulScales.empty();
             jcp.is_mul_first = true;
             jcp.with_scales0 = !fqScales1.empty();
             jcp.broadcast_scales0 = fqScales1.size() == 1;
-            jcp.with_scales1 = !fqScales2.empty();
-            jcp.broadcast_scales1 = fqScales2.size() == 1;
+            jcp.with_scales1 = _create_param.qkv_precision == Precision::I8;  // !fqScales2.empty();
+            jcp.broadcast_scales1 = true;                                     // fqScales2.size() == 1;
             jcp.tail_size = i;
 
             if (mayiuse(cpu_isa_t::avx512_core)) {
@@ -681,10 +686,10 @@ void MHAGPT::Impl::create(const CreateParam& param) {
         // attn_output: [batch, query_seq_len, num_heads * head_size]
         jit_convert_reorder_compile_params jcp;
         jcp.src_prc = Precision::FP32;
-        jcp.dst_prc = param.qkv_precision;
+        jcp.dst_prc = param.dst_precision;
         jcp.inner_work_amount = _create_param.head_size;     // head size(feature)
-        jcp.with_scales = !fqScales3.empty();
-        jcp.broadcast_scales = fqScales3.size() == 1;
+        jcp.with_scales = _create_param.dst_precision == Precision::I8;
+        jcp.broadcast_scales = _create_param.is_qkv_quant_per_tensor;
         jcp.src_stride = _create_param.head_size;
         jcp.dst_stride = _create_param.num_heads * _create_param.head_size;   // num_heads * head_size
 
@@ -799,13 +804,97 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
     });
 }
 
+void MHAGPT::Impl::mha_i8(const ExecParam &param) {
+    uint8_t* pQIn0 = param.q;
+    auto& pKIn0 = param.k;
+    float* pAddIn1 = param.attention_mask;
+    auto& pVIn0 = param.v;
+    uint8_t* pout = param.attn_output;
+
+    auto outPrcSize = _create_param.dst_precision.size();
+    auto& gemAvB_ops = gemAvB;
+    auto& qKtrGemm_ops = qKtrGemm;
+    auto& qKVGemm_ops = qKVGemm;
+    bool is_vector = param.query_seq_len == 1;
+
+    parallel_for2d(param.batch, _create_param.num_heads, [&](size_t i0, size_t i1) {
+        size_t threadNum = parallel_get_thread_num();
+
+        auto pQIn0_aux = pQIn0 + (i0 * param.batch_stride_in_q + i1 * param.head_stride_in_q) * _create_param.qkv_precision.size();
+        auto pKIn0_aux = pKIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
+        auto pVIn0_aux = pVIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
+
+        auto pAddIn1_aux = pAddIn1 + i0 * param.batch_stride_in_attn_mask;
+
+        auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.data() + threadNum * bufferMatMul0OutSize);
+        auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.data() + threadNum * bufferMatMul1OutSize);
+        
+        //------------------------
+        tensor2D<ov::bfloat16> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
+        if (is_vector) {
+            // N: key_seq_len, K: head_size
+            // q[1, K] * transpose(k[N, K])        ==>
+            //     k[N, K] * transpose(q[1, K])    ==>
+            //     k[N, K] * q[K, 1]
+            (*gemAvB_ops[threadNum])(matK, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local));
+        } else {
+            tensor2D<ov::bfloat16> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
+            tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 1));
+            (*qKtrGemm_ops[threadNum])(matQ, matK, matQK);
+        }
+        //----------------------
+
+        auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : mulScales.data());
+        auto pMatMul0Out = bufferMatMul0Out_local;
+        // loop along K dimension
+        auto valid_softmax_items = param.first_valid_softmax_items;
+        for (size_t m = 0; m < param.query_seq_len; m++) {
+            jit_mul_add_softmax_call_args call_args;
+            call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 1);
+            call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
+            call_args.p_add_in1 = pAddIn1_aux;
+            call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(int8_t), 1);
+            call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 1);
+            call_args.p_scales0 = fqScales1.data();
+            call_args.p_scales1 = &param.qk_quant;
+            call_args.work_amount = valid_softmax_items;
+
+            (*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
+            // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
+            if (param.key_seq_len > valid_softmax_items) {
+                auto *invalidPtr = static_cast<int8_t*>(call_args.p_out) + valid_softmax_items;
+                memset(invalidPtr, 0, (param.key_seq_len - valid_softmax_items) * _create_param.qkv_precision.size());
+                valid_softmax_items = std::min(valid_softmax_items + 1, param.key_seq_len);
+            }
+        }
+        auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
+        //-----------------------------------
+        tensor2D<ov::bfloat16> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(bfloat16), 1));
+        tensor2D<ov::bfloat16> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
+        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size * sizeof(float));
+        (*qKVGemm_ops[threadNum])(matQK, matV, matQKV);
+        //-----------------------------------
+        if (convertReorderKernel) {
+            // matmul1: [batch, num_heads, query_seq_len, head_size]
+            // attn_output: [batch, query_seq_len, num_heads * head_size]
+            jit_convert_reorder_call_args call_args;
+            call_args.p_in = bufferMatMul1Out_local;
+            call_args.p_out = pOut_aux;
+            call_args.p_scales = param.qkv_quant.data();
+            call_args.outter_work_amount = param.query_seq_len;
+
+            (*convertReorderKernel)(&call_args);
+        }
+    });
+}
+
 void MHAGPT::Impl::exec(const ExecParam& param) {
     if (_create_param.qkv_precision == Precision::FP32) {
         assert(false);
     } else if (_create_param.qkv_precision == Precision::BF16) {
         mha_bf16(param);
     } else if (_create_param.qkv_precision == Precision::I8) {
-        assert(false);
+        mha_i8(param);
     } else {
         THROW_ERROR << "doesn't support provided input precisions";
     }

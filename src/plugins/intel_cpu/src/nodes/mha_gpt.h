@@ -60,7 +60,9 @@ public:
         size_t num_heads, head_size;
         float normal_factor;
         InferenceEngine::Precision qkv_precision;
+        InferenceEngine::Precision dst_precision;
         size_t max_seq_len;
+        bool is_qkv_quant_per_tensor;
     };
     struct ExecParam {
         size_t batch, query_seq_len, key_seq_len;
@@ -76,6 +78,11 @@ public:
         size_t batch_stride_in_attn_mask;   // attn_mask stride for next batch
         size_t head_stride_in_attn;         // attn stride for next head
         size_t batch_stride_in_attn;        // attn stride for next batch
+        float q_dequant;
+        float k_dequant;
+        float qk_quant;
+        float v_dequant;
+        std::vector<float>& qkv_quant;
     };
     MHAGPT();
     static int query_scratch_size(const CreateParam& param);

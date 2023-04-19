@@ -32,7 +32,12 @@ public:
         int max_position_embeddings = 2048,
         int rotary_emb_base = 10000,
         float rotary_pct = 0.25,
-        int max_seq_len = 400);
+        int max_seq_len = 400,
+        float q_quant = 0.0f,
+        float k_quant = 0.0f,
+        float qk_quant = 0.0f,
+        float v_quant = 0.0f
+        );
 
     bool visit_attributes(AttributeVisitor& visitor) override;
     void validate_and_infer_types() override;
@@ -46,6 +51,10 @@ public:
     int m_rotary_emb_base = 10000;
     float m_rotary_pct = 0.25;
     int m_max_seq_len = 400;
+    float m_q_quant = 0.0f;
+    float m_k_quant = 0.0f;
+    float m_qk_quant = 0.0f;
+    float m_v_quant = 0.0f;
 };
 }  // namespace v10
 }  // namespace op
