@@ -267,6 +267,45 @@ void FullyConnected::getSupportedDescriptors() {
     }
 }
 
+void FullyConnected::extractQuantParam() {
+    if (getOriginalInputPrecisionAtPort(DATA_ID) != Precision::I8) {
+        return;
+    }
+    std::cout << "node: " << getName() << "size: " << fusedWith.size() << " output type: " << DnnlExtensionUtils::DataTypeToIEPrecision(outputDataType) << "\n";
+    const auto& weight_dims = getInputShapeAtPort(1).getStaticDims();
+    auto N = weight_dims[0];
+    for (int i = 0; i < fusedWith.size(); ++i) {
+        auto& node = fusedWith[i];
+        bool isLastPostOp = (i == (fusedWith.size() - 1));
+
+        if (auto* eltwiseNode = dynamic_cast<Eltwise*>(node.get())) {
+            if (eltwiseNode->getAlgorithm() == Algorithm::EltwiseGelu) {
+                useGelu = true;
+            } else if (eltwiseNode->getAlgorithm() == Algorithm::EltwiseMultiply) {
+                dequant = eltwiseNode->getScales();
+                if (dequant.size() == 1) {
+                    dequant = std::vector<float>(N, dequant[0]);
+                }
+            }
+            continue;
+        }
+
+        if (auto* fakeQuantizeNode = dynamic_cast<FakeQuantize*>(node.get())) {
+            if (isLastPostOp) {
+                requant = fakeQuantizeNode->getInputScale();
+                if (requant.size() == 1) {
+                    requant = std::vector<float>(N, requant[0]);
+                }
+                std::cout << "node: " << getName() << " got requant param: " << requant[0] << "\n";
+            } else {
+                dequant = fakeQuantizeNode->getInputScale();
+                std::cout << "node: " << getName() << " got dequant param: " << requant[0] << "\n";
+            }
+            continue;
+        }
+    }
+}
+
 void FullyConnected::prepareParams() {
     auto srcMemPtr = getParentEdgesAtPort(0)[0]->getMemoryPtr();
     auto dstMemPtr = getChildEdgesAtPort(0)[0]->getMemoryPtr();
@@ -290,30 +329,33 @@ void FullyConnected::prepareParams() {
         ) {
         if (fusedWith.empty() ||
             (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu)) {
-            if (opsFC.empty()) {
+            if (opsFC_BF16xBF16.empty()) {
                 useFastPath = true;
                 // compute q/dq
                 float q, dq;
                 bool use_int8_weight = false;
+                threadNum = parallel_get_max_threads();
                 if (use_int8_weight) {
                     auto weightPtr = getParentEdgeAt(1)->getMemoryPtr();
                     auto* weight = reinterpret_cast<bfloat16*>(weightPtr->GetPtr());
                     auto& weight_dims = weightPtr->getStaticDims();
                     float min, max;
                     tensor2D<bfloat16> B(weight_dims[0], weight_dims[1], weight, weight_dims[1] * sizeof(bfloat16));
-                    amx_bf16::functional::get_min_max(B, min, max);
+                    amx_kernel::functional::get_min_max(B, min, max);
                     max = std::max(std::abs(max), std::abs(min));
                     q = 127 / max;
                     dq = max / 127;
-                }
-
-                threadNum = parallel_get_max_threads();
-                opsFC.resize(threadNum);
-                for (size_t i = 0; i < threadNum; i++) {
-                    opsFC[i] = std::make_shared<amx_bf16::Matmul>(true, true,
-                        use_int8_weight ? amx_bf16::Matmul::Weight_INT8 : amx_bf16::Matmul::Weight_BF16);
-                    if (use_int8_weight)
-                        opsFC[i]->internalBI8.set_scale(q, dq);
+                    opsFC_BF16xi8.resize(threadNum);
+                    for (size_t i = 0; i < threadNum; i++) {
+                        opsFC_BF16xi8[i] = std::make_shared<amx_kernel::Matmul<ov::bfloat16, int8_t, float>>(true, true);
+                        opsFC_BF16xi8[i]->quant_scale_B = q;
+                        opsFC_BF16xi8[i]->dequant_scale_B = dq;
+                    }
+                } else {
+                    opsFC_BF16xBF16.resize(threadNum);
+                    for (size_t i = 0; i < threadNum; i++) {
+                        opsFC_BF16xBF16[i] = std::make_shared<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>(true, true);
+                    }
                 }
                 if (fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseGelu) {
                     useGelu = true;
@@ -324,7 +366,30 @@ void FullyConnected::prepareParams() {
             return;
         }
     }
-    //std::cout << "fc fallback: " << getName() << "\n";
+    if (getOriginalInputPrecisionAtPort(DATA_ID) == Precision::I8 &&
+        getInputShapeAtPort(0).getRank() == 3 && true
+        ) {
+        // if ((fusedWith.size() == 1 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseMultiply) || 
+        //     (fusedWith.size() == 3 && fusedWith[0]->getAlgorithm() == Algorithm::EltwiseMultiply &&
+        //                               fusedWith[1]->getAlgorithm() == Algorithm::EltwiseGelu &&
+        //                               fusedWith[2]->getAlgorithm() == Algorithm::FQQuantization)) {
+        {
+            if (opsFC_i8xi8.empty()) {
+                extractQuantParam();
+                threadNum = parallel_get_max_threads();
+                useFastPath = true;
+                opsFC_i8xi8.resize(threadNum);
+                for (size_t i = 0; i < threadNum; i++) {
+                    opsFC_i8xi8[i] = std::make_shared<amx_kernel::Matmul<int8_t, int8_t>>(true, true);
+                }
+            }
+
+            //std::cout << "fc use fast path: " << getName() << "\n";
+            return;
+        }
+    }
+
+    std::cout << "fc fallback: " << getName() << "\n";
 
     AttrPtr attr = std::make_shared<dnnl::primitive_attr>();
     setPostOps(*attr, dstMemPtr->getStaticDims());
@@ -527,57 +592,177 @@ void FullyConnected::execute(dnnl::stream strm) {
         auto K = data_dims[2];
         auto N = weight_dims[0];
         assert(K == weight_dims[1]);
-        auto work_amount = rndup(N, 32) / 32;
+        bool block_step = !opsFC_i8xi8.empty() ? 64 : 32;
+        auto work_amount = rndup(N, block_step) / block_step;
         uint8_t* bias = nullptr;
         if (withBiases) {
             bias = reinterpret_cast<uint8_t*>(getParentEdgeAt(2)->getMemoryPtr()->GetPtr());
             auto& bias_dims = getParentEdgeAt(2)->getMemoryPtr()->getStaticDims();
             assert(bias_dims[0] == N);
         }
-        tensor2D<bfloat16> matA(M, K, reinterpret_cast<bfloat16*>(src), K * sizeof(bfloat16));
-        tensor2D<bfloat16> matB(N, K, reinterpret_cast<bfloat16*>(weight), K * sizeof(bfloat16));
-        parallel_for(threadNum, [&](size_t tid) {
-            size_t start {0}, end {0};
-            dnnl::impl::balance211(work_amount, threadNum, tid, start, end);
-            int n0 = start * 32;
-            int n1 = std::min(end * 32, N);
-            if (n0 > N) return;
+        if (!opsFC_i8xi8.empty()) {
+            tensor2D<int8_t> matA(M, K, reinterpret_cast<int8_t*>(src), K * sizeof(int8_t));
+            tensor2D<int8_t> matB(N, K, reinterpret_cast<int8_t*>(weight), K * sizeof(int8_t));
+            parallel_for(threadNum, [&](size_t tid) {
+                size_t start {0}, end {0};
+                dnnl::impl::balance211(work_amount, threadNum, tid, start, end);
+                int n0 = start * 64;
+                int n1 = std::min(end * 64, N);
+                if (n0 >= N) return;
 
-            if (outputDataType == memory::data_type::bf16) {
-                tensor2D<bfloat16> matC(M, N, reinterpret_cast<bfloat16*>(dst), N * sizeof(bfloat16));
-                if (!bias) {
-                    if (useGelu) {
-                        amx_bf16::PP::Gelu_Store2bf16 ppkernel(matC);
-                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                if (outputDataType == memory::data_type::s8) {
+                    tensor2D<int8_t> matC(M, N, reinterpret_cast<int8_t*>(dst), N * sizeof(int8_t));
+                    if (!bias) {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_GELU_QUANT> ppkernel(matC);
+                            ppkernel.set_deq_scale(dequant[0]);
+                            ppkernel.set_q_scale(requant.data() + n0);
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_QUANT> ppkernel(matC);
+                            ppkernel.set_deq_scale(dequant[0]);
+                            ppkernel.set_q_scale(requant.data() + n0);
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
                     } else {
-                        amx_bf16::PP::Store2bf16 ppkernel(matC);
-                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_QUANT> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            ppkernel.set_deq_scale(dequant[0]);
+                            ppkernel.set_q_scale(requant.data() + n0);
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_BIAS_QUANT> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            ppkernel.set_deq_scale(dequant[0]);
+                            ppkernel.set_q_scale(requant.data() + n0);
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
                     }
-                } else {
-                    if (useGelu) {
-                        amx_bf16::PP::Addbias_Gelu_Store2bf16 ppkernel(matC, reinterpret_cast<float*>(bias));
-                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                } else if (outputDataType == memory::data_type::f32) {
+                    tensor2D<float> matC(M, N, reinterpret_cast<float*>(dst), N * sizeof(float));
+                    if (!bias) {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_GELU> ppkernel(matC);
+                            ppkernel.set_deq_scale(dequant[0]);
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT> ppkernel(matC);
+                            ppkernel.set_deq_scale(dequant[0]);
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
                     } else {
-                        amx_bf16::PP::Addbias_Store2bf16 ppkernel(matC, reinterpret_cast<float*>(bias));
-                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            ppkernel.set_deq_scale(dequant[0]);
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            ppkernel.set_deq_scale(dequant[0]);
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
                     }
                 }
-            } else if (outputDataType == memory::data_type::f32) {
-                tensor2D<float> matC(M, N, reinterpret_cast<float*>(dst), N * sizeof(float));
-                if (!bias) {
-                    if (useGelu) {
-                        assert(false);
-                        std::cout << "xxx f32 gelu\n";
+            });
+        } else if (!opsFC_BF16xBF16.empty()) {
+            tensor2D<bfloat16> matA(M, K, reinterpret_cast<bfloat16*>(src), K * sizeof(bfloat16));
+            tensor2D<bfloat16> matB(N, K, reinterpret_cast<bfloat16*>(weight), K * sizeof(bfloat16));
+            parallel_for(threadNum, [&](size_t tid) {
+                size_t start {0}, end {0};
+                dnnl::impl::balance211(work_amount, threadNum, tid, start, end);
+                int n0 = start * 32;
+                int n1 = std::min(end * 32, N);
+                if (n0 >= N) return;
+
+                if (outputDataType == memory::data_type::bf16) {
+                    tensor2D<bfloat16> matC(M, N, reinterpret_cast<bfloat16*>(dst), N * sizeof(bfloat16));
+                    if (!bias) {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::GELU> ppkernel(matC);
+                            (*opsFC_BF16xBF16[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::NONE> ppkernel(matC);
+                            (*opsFC_BF16xBF16[tid])(matA, matB, n0, n1, ppkernel);
+                        }
                     } else {
-                        amx_bf16::PP::Store2float ppkernel(matC);
-                        (*opsFC[tid])(matA, matB, n0, n1, ppkernel);
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::BIAS_GELU> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            (*opsFC_BF16xBF16[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::BIAS> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            (*opsFC_BF16xBF16[tid])(matA, matB, n0, n1, ppkernel);
+                        }
                     }
-                } else {
-                    assert(false);
-                    std::cout << "xxx f32 bias\n";
+                } else if (outputDataType == memory::data_type::f32) {
+                    tensor2D<float> matC(M, N, reinterpret_cast<float*>(dst), N * sizeof(float));
+                    if (!bias) {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::GELU> ppkernel(matC);
+                            (*opsFC_BF16xBF16[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> ppkernel(matC);
+                            (*opsFC_BF16xBF16[tid])(matA, matB, n0, n1, ppkernel);
+                        }
+                    } else {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::BIAS_GELU> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            (*opsFC_BF16xBF16[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::BIAS> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            (*opsFC_BF16xBF16[tid])(matA, matB, n0, n1, ppkernel);
+                        }
+                    }
                 }
-            }
-        });
+            });
+        } else {
+            tensor2D<bfloat16> matA(M, K, reinterpret_cast<bfloat16*>(src), K * sizeof(bfloat16));
+            tensor2D<bfloat16> matB(N, K, reinterpret_cast<bfloat16*>(weight), K * sizeof(bfloat16));
+            parallel_for(threadNum, [&](size_t tid) {
+                size_t start {0}, end {0};
+                dnnl::impl::balance211(work_amount, threadNum, tid, start, end);
+                int n0 = start * 32;
+                int n1 = std::min(end * 32, N);
+                if (n0 >= N) return;
+
+                if (outputDataType == memory::data_type::bf16) {
+                    tensor2D<bfloat16> matC(M, N, reinterpret_cast<bfloat16*>(dst), N * sizeof(bfloat16));
+                    if (!bias) {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::GELU> ppkernel(matC);
+                            (*opsFC_BF16xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::NONE> ppkernel(matC);
+                            (*opsFC_BF16xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
+                    } else {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::BIAS_GELU> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            (*opsFC_BF16xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<ov::bfloat16, amx_kernel::PP::Steps::BIAS> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            (*opsFC_BF16xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
+                    }
+                } else if (outputDataType == memory::data_type::f32) {
+                    tensor2D<float> matC(M, N, reinterpret_cast<float*>(dst), N * sizeof(float));
+                    if (!bias) {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::GELU> ppkernel(matC);
+                            (*opsFC_BF16xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> ppkernel(matC);
+                            (*opsFC_BF16xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
+                    } else {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::BIAS_GELU> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            (*opsFC_BF16xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::BIAS> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            (*opsFC_BF16xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
+                    }
+                }
+            });
+        }
 
         return;
     }

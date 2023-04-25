@@ -108,6 +108,7 @@ private:
 
     bool canBeExecutedInConv1x1() const;
     MemoryPtr prepareWeightMemory(const DnnlMemoryDescPtr weightDesc);
+    void extractQuantParam();
 
     // sparse weights
     bool useSparseWeights = false;
@@ -115,10 +116,14 @@ private:
     float minSparseRate = 1.f;
     float weiSparseRate = 0.f;
     bool useSparseWeightsDecompression();
-    std::vector<std::shared_ptr<amx_bf16::Matmul>> opsFC;
+    std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>> opsFC_BF16xBF16;
+    std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, int8_t, float>>> opsFC_BF16xi8;
+    std::vector<std::shared_ptr<amx_kernel::Matmul<int8_t, int8_t>>> opsFC_i8xi8;
     bool useFastPath = false;
     bool useGelu = false;
     size_t threadNum = 0;
+    std::vector<float> dequant;
+    std::vector<float> requant;
 };
 
 }   // namespace node

@@ -40,5 +40,16 @@ inline void quant_i8(void* dst, void* src, size_t ele_num, float scale) {
     }
 }
 
+// NOTE: did not handle tail because there should be enough room
+inline void cvt_i32_f32(float* dst, int32_t* src, size_t ele_num) {
+    for (int i = 0; i < (ele_num + 15) / 16 * 16; i += 16) {
+        auto a0 = _mm512_load_epi32(src);
+        auto a_f = _mm512_cvtepi32_ps(a0);
+        _mm512_storeu_ps(dst, a_f);
+        src += 16;
+        dst += 16;
+    }
+}
+
 }
 }

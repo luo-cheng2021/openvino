@@ -9,26 +9,38 @@
 
 #define rndup(x, n) (((x + n - 1)/n)*n)
 
+// https://stackoverflow.com/questions/570669/checking-if-a-double-or-float-is-nan-in-c/57770634#57770634
+static inline uint32_t load_ieee754_rep(float a) {
+    uint32_t r;
+    static_assert(sizeof r == sizeof a, "Unexpected sizes.");
+    std::memcpy(&r, &a, sizeof a); // Generates movd instruction.
+    return r;
+}
+constexpr uint32_t inf_float_shl1 = UINT32_C(0xff000000);
+// The shift left removes the sign bit. The exponent moves into the topmost bits,
+// so that plain unsigned comparison is enough.
+static inline bool isnan2(float a)     { return load_ieee754_rep(a) << 1  > inf_float_shl1; }
+static inline bool isinf2(float a)     { return load_ieee754_rep(a) << 1 == inf_float_shl1; }
+static inline bool isfinite2(float a)  { return load_ieee754_rep(a) << 1  < inf_float_shl1; }
+
 template<typename T>
 struct tensor2D {
-    int dims[2];
+    int dims[2] = {0};
     std::shared_ptr<T> data;
-    int capacity;
-    int stride;
-    int padded_dim1;
-    tensor2D() {
-        dims[0] = 0;
-        dims[1] = 0;
-        capacity = 0;
-    }
+    int64_t capacity = 0;
+    int stride = 0;
+    bool force_compact = false;
+    int padded_dim1 = 0;
+
+    tensor2D() = default;
 
     operator bool() {
         return dims[0] * dims[1] > 0;
     }
 
-    tensor2D(int d0, int d1) {
+    tensor2D(int d0, int d1, bool _force_compact = false) {
         capacity = 0;
-        resize(d0, d1);
+        resize(d0, d1, _force_compact);
         //fill_rnd();
     }
 
@@ -52,7 +64,7 @@ struct tensor2D {
     }
     tensor2D<T> clone() {
         tensor2D<T> ret;
-        ret.resize(dims[0], dims[1]);
+        ret.resize(dims[0], dims[1], force_compact);
         if (ret.stride == stride) {
             memcpy(ret.data.get(), data.get(), dims[0] * stride);
         }else{
@@ -62,20 +74,21 @@ struct tensor2D {
         }
         return ret;
     }
-    void resize(int d0, int d1) {
+    void resize(int d0, int d1, bool _force_compact = false) {
+        force_compact = _force_compact;
         dims[0] = d0;
         dims[1] = d1;
         stride = d1 * sizeof(T);
-        if (stride % 64) {
+        if ((stride % 64) && (!force_compact)) {
             auto stride_fix = rndup(stride, 64);
-            std::cout << "\tWarnning: stride " << stride << " is not aligned to cache line, will increase to " << stride_fix
+            logger() << "\tWarnning: stride " << stride << " is not aligned to cache line, will increase to " << stride_fix
                       << " (" << stride_fix/64 << " cache lines)\n";
             stride = stride_fix;
         }
         padded_dim1 = stride / sizeof(T);
 
-        // resize method never shrink capacity
-        auto need_capacity = dims[0] * stride;
+        // resize method never shrink capacity, and extra T is added to put nan as test
+        auto need_capacity = dims[0] * stride + sizeof(T);
         if (capacity < need_capacity) {
             capacity = need_capacity;
             // align begin address to cache line is vital, so tile load can
@@ -97,6 +110,13 @@ struct tensor2D {
             if (reinterpret_cast<uintptr_t>(data.get()) % 64)
                 std::cout << "WARNING: resize(), data is not cache-line aligned!" << std::endl;
         }
+        // put a NaN at the end to test over-read
+        // https://en.wikipedia.org/wiki/Bfloat16_floating-point_format
+        #define INF 0xff80 
+        #define NAN1 (INF + 1)
+        if (sizeof(T) == 2) {
+            *reinterpret_cast<uint16_t*>(data.get() + dims[0] * padded_dim1) = NAN1;
+        }
     }
 
     T & operator[](int i) {
@@ -117,9 +137,27 @@ struct tensor2D {
     }
 
     void fill_rnd() {
-        for(int i = 0; i<dims[0]*padded_dim1; i++) {
+        auto * p = data.get();
+        int i = 0;
+        int total = dims[0]*padded_dim1;
+        // +1 -1 for integer types
+        // 0.5 -0.5 for float point 
+        float scale = std::is_integral<T>::value ? 2:1;
+        for(i = 0; i + 8 <= total; i+=8) {
             // lower mantissa can help to avoid small errors in accuracy comparison
-            (*this)[i] = (rand() & 1) - 0.5;
+            auto num = rand() & 0xFF;
+            p[i]   = scale*((num & 1) - 0.5f); num>>=1;
+            p[i+1] = scale*((num & 1) - 0.5f); num>>=1;
+            p[i+2] = scale*((num & 1) - 0.5f); num>>=1;
+            p[i+3] = scale*((num & 1) - 0.5f); num>>=1;
+            p[i+4] = scale*((num & 1) - 0.5f); num>>=1;
+            p[i+5] = scale*((num & 1) - 0.5f); num>>=1;
+            p[i+6] = scale*((num & 1) - 0.5f); num>>=1;
+            p[i+7] = scale*((num & 1) - 0.5f); num>>=1;
+        }
+        for(; i<total; i++) {
+            auto num = rand();
+            p[i] = scale*((num & 1) - 0.5f);
         }
     }
 
@@ -128,7 +166,7 @@ struct tensor2D {
             (*this)[k] = v;
     }
 
-    void operator=(const tensor2D<T> & t2) {
+    tensor2D<T>& operator=(const tensor2D<T> & t2) {
         assert(dims[0]*dims[1] == t2.dims[0] * t2.dims[1]);
         for(int c0 = 0; c0 < dims[0]; c0++)
         for(int c1 = 0; c1 < dims[1]; c1++) {
@@ -137,23 +175,77 @@ struct tensor2D {
             auto c3 = k % t2.dims[1];
             (*this)(c0, c1) = t2(c2, c3);
         }
+        return *this;
     }
 
-    bool operator==(const tensor2D<T> & rhs) {
-        bool ok = true;
+    // move semantics
+    tensor2D(tensor2D<T> && t2) {
+        dims[0] = t2.dims[0];
+        dims[1] = t2.dims[1];
+        data = t2.data;
+        capacity = t2.capacity;
+        stride = t2.stride;
+        padded_dim1 = t2.padded_dim1;
+        force_compact = t2.force_compact;
+        t2.capacity = 0;
+        t2.data.reset();
+    }
+
+    tensor2D<T>&  operator=(tensor2D<T> && t2) {
+        dims[0] = t2.dims[0];
+        dims[1] = t2.dims[1];
+        data = t2.data;
+        capacity = t2.capacity;
+        stride = t2.stride;
+        padded_dim1 = t2.padded_dim1;
+        force_compact = t2.force_compact;
+        t2.capacity = 0;
+        t2.data.reset();
+        return *this;
+    }
+
+    bool operator==(const tensor2D<T> & rhs) const {
         if (dims[0] != rhs.dims[0] || dims[1] != rhs.dims[1])
             return false;
         for(int i0=0; i0<dims[0]; i0++)
         for(int i1=0; i1<dims[1]; i1++) {
-            if ((*this)(i0,i1) != rhs(i0,i1)) {
-                std::cout << " operator== failed at (" << i0 << ", " << i1 << ")  value "
-                          << (*this)(i0,i1) << "!=" << rhs(i0,i1) << std::endl;
-                ok = false;
-                return ok;
+            // with -ffast-math,  std::isnan, std::isinf,  x != x  always return false
+            // so we need special logic to test nan here
+            if (std::is_same<T, ov::bfloat16>::value ||
+                std::is_same<T, float>::value) {
+                float f0 = (*this)(i0,i1);
+                float f1 = rhs(i0,i1);
+                if (isnan2(f1) || isnan2(f0)) {
+                    std::cout << " nan is found: f0=" << f0 << ",  f1=" << f1 << std::endl;
+                    return false;
+                }
+            }
+
+            if ((*this)(i0,i1) == rhs(i0,i1))
+                continue;
+            std::cout << " operator== failed at (" << i0 << ", " << i1 << ")  value "
+                        << (*this)(i0,i1) << "!=" << rhs(i0,i1) << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    bool is_normal() {
+        for(int i0=0; i0<dims[0]; i0++)
+        for(int i1=0; i1<dims[1]; i1++) {
+            float f0 = (*this)(i0,i1);
+            if (isnan2(f0)) {
+                std::cout << " found nan at (" << i0 << "," << i1 << ")" << std::endl;
+                return false;
+            }
+            if (isinf2(f0)) {
+                std::cout << " found inf at (" << i0 << "," << i1 << ")" << std::endl;
+                return false;
             }
         }
-        return ok;
+        return true;
     }
+
     bool compare(const tensor2D<T> & rhs, float tolerance) {
         float max_abs_diff = 0;
         float max_rel_diff = 0;
@@ -176,7 +268,7 @@ struct tensor2D {
             out << "[" << i << "," << 0 << "]: ";
             int i1;
             for(i1=0; i1<obj.dims[1] && i1 < 8; i1++) {
-                out << obj(i0,i1) << ",";
+                out << +obj(i0,i1) << ",";
             }
             if (i1 < obj.dims[1]) out << "...";
             out << std::endl;
@@ -194,10 +286,10 @@ struct tensor2D {
 
 using func_act = std::function<float(float)>;
 
-template<typename T>
-void matmul(tensor2D<T> & A,
-            tensor2D<T> & B,
-            tensor2D<T> & C,
+template<typename TC>
+void matmul(tensor2D<ov::bfloat16> & A,
+            tensor2D<ov::bfloat16> & B,
+            tensor2D<TC> & C,
             float * bias = nullptr,
             func_act act = func_act()) {
     int M = C.dims[0];
@@ -219,6 +311,62 @@ void matmul(tensor2D<T> & A,
                 sum += (psum0 + psum1);
             }
             for(; k < K; k++) {
+                sum += static_cast<float>(A(m,k)) * static_cast<float>(B(k,n));
+            }
+            if (bias) {
+                sum += bias[n];
+            }
+            if (act) {
+                sum = act(sum);
+            }
+            //std::cout << m << "," << n << std::endl;
+            C(m,n) = sum;
+        }
+    }
+}
+
+inline void matmul(tensor2D<float> & A,
+            tensor2D<float> & B,
+            tensor2D<float> & C,
+            float * bias = nullptr,
+            func_act act = func_act()) {
+    int M = C.dims[0];
+    int N = C.dims[1];
+    int K = A.dims[1];
+    assert(B.dims[0] == K);
+    assert(B.dims[1] == N);
+    for(int m = 0; m < M; m++) {
+        for(int n = 0; n < N; n++) {
+            float sum = C(m,n);
+            for(int k = 0; k < K; k++) {
+                sum += static_cast<float>(A(m,k)) * static_cast<float>(B(k,n));
+            }
+            if (bias) {
+                sum += bias[n];
+            }
+            if (act) {
+                sum = act(sum);
+            }
+            C(m,n) = sum;
+        }
+    }
+}
+
+template<typename TC>
+void matmul(tensor2D<int8_t> & A,
+            tensor2D<int8_t> & B,
+            tensor2D<TC> & C,
+            float * bias = nullptr,
+            func_act act = func_act()) {
+    int M = C.dims[0];
+    int N = C.dims[1];
+    int K = A.dims[1];
+    assert(B.dims[0] == K);
+    assert(B.dims[1] == N);
+    for(int m = 0; m < M; m++) {
+        for(int n = 0; n < N; n++) {
+            float sum = C(m,n);
+            for(int k = 0; k < K; k++) {
                 sum += static_cast<float>(A(m,k)) * static_cast<float>(B(k,n));
             }
             if (bias) {

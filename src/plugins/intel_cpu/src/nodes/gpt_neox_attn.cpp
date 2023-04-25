@@ -16,6 +16,7 @@
 #include "emitters/jit_load_store_emitters.hpp"
 #include "ie_parallel.hpp"
 #include "special/quant_i8_custom.hpp"
+#include "special/gemm_custom.hpp"
 
 using namespace InferenceEngine;
 using namespace ov::intel_cpu;
@@ -212,8 +213,8 @@ private:
     Vmm vmm_sin = Vmm(3);
     Vmm vmm_q_dst = Vmm(4);
     Vmm vmm_k_dst = Vmm(5);
-    Vmm vmm_q_scale = Vmm(6);
-    Vmm vmm_k_scale = Vmm(7);
+    Vmm vmm_q_scale = Vmm(7);
+    Vmm vmm_k_scale = Vmm(8);
 
     Reg64 reg_q_src = r8;
     Reg64 reg_k_src = r9;
@@ -495,7 +496,7 @@ void GPTNeoxAttn::prepareParams() {
         attnMasks.resize(batch * maxSeqLen, 0.0f);
     // memory for query transpose destination
     if (queryTranspose.size() < batch * maxSeqLen * hiddenSize * mhaInputDataTypeSize) {
-        queryTranspose.resize(batch * maxSeqLen * hiddenSize * mhaInputDataTypeSize);
+        queryTranspose.resize(batch * maxSeqLen * hiddenSize * mhaInputDataTypeSize, 0);
     }
 
     if (!rotaryKernel) {
@@ -865,7 +866,11 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
         head_stride_in_kv,                      // kv stride
         maxSeqLen,                              // attn_mask stride
         sizePerHead, hiddenSize * seq_len,      // output stride
-        1.0f / q_quant, 1.0f / k_quant, qk_quant, 1.0f / v_quant, qkv_quant
+        q_quant != 0.0f ? 1.0f / q_quant : 0.0f,
+        k_quant != 0.0f ? 1.0f / k_quant : 0.0f,
+        qk_quant,
+        v_quant != 0.0f ? 1.0f / v_quant : 0.0f,
+        qkv_quant,
     };
 
     mhaGPT->exec(param);
