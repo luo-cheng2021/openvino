@@ -57,7 +57,7 @@ namespace gpt {
 class MHAGPT {
 public:
     struct CreateParam {
-        size_t num_heads, head_size;
+        size_t num_heads, head_size, head_size_aligned;
         float normal_factor;
         InferenceEngine::Precision qkv_precision;
         InferenceEngine::Precision dst_precision;

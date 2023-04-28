@@ -23,6 +23,7 @@ struct jit_rotary_compile_params {
     size_t hidden_size;
     size_t max_seq_len;
     size_t size_per_head;
+    size_t size_per_head_aligned;
 };
 
 struct jit_rotary_call_args {
@@ -87,6 +88,9 @@ private:
     size_t vocabSize = 50304;
     size_t maxSeqLen = 400;
     float normalFactor = 0.0f;
+    // aligned to cache line
+    size_t sizePerHeadAligned = 80;
+
 
     InferenceEngine::Precision inputDataType;
     InferenceEngine::Precision outputDataType;
@@ -95,10 +99,10 @@ private:
     int64_t mhaInputDataTypeSize = 1;
     int rotaryNdims = 0;
     std::unique_ptr<gpt::MHAGPT> mhaGPT;
-    std::vector<float> attnMasks;
-    std::vector<float> cosCached;
-    std::vector<float> sinCached;
-    std::vector<uint8_t> queryTranspose;
+    std::shared_ptr<float> attnMasks;
+    std::shared_ptr<float> cosCached;
+    std::shared_ptr<float> sinCached;
+    std::shared_ptr<uint8_t> queryTranspose;
     std::unique_ptr<jit_uni_rotary_kernel> rotaryKernel;
 
     float q_quant = 0.0f;

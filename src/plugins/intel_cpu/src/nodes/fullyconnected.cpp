@@ -592,8 +592,7 @@ void FullyConnected::execute(dnnl::stream strm) {
         auto K = data_dims[2];
         auto N = weight_dims[0];
         assert(K == weight_dims[1]);
-        bool block_step = !opsFC_i8xi8.empty() ? 64 : 32;
-        auto work_amount = rndup(N, block_step) / block_step;
+        auto work_amount = rndup(N, 32) / 32;
         uint8_t* bias = nullptr;
         if (withBiases) {
             bias = reinterpret_cast<uint8_t*>(getParentEdgeAt(2)->getMemoryPtr()->GetPtr());
@@ -606,8 +605,8 @@ void FullyConnected::execute(dnnl::stream strm) {
             parallel_for(threadNum, [&](size_t tid) {
                 size_t start {0}, end {0};
                 dnnl::impl::balance211(work_amount, threadNum, tid, start, end);
-                int n0 = start * 64;
-                int n1 = std::min(end * 64, N);
+                int n0 = start * 32;
+                int n1 = std::min(end * 32, N);
                 if (n0 >= N) return;
 
                 if (outputDataType == memory::data_type::s8) {
@@ -616,24 +615,24 @@ void FullyConnected::execute(dnnl::stream strm) {
                         if (useGelu) {
                             amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_GELU_QUANT> ppkernel(matC);
                             ppkernel.set_deq_scale(dequant[0]);
-                            ppkernel.set_q_scale(requant.data() + n0);
+                            ppkernel.set_q_scale(requant.data());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         } else {
                             amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_QUANT> ppkernel(matC);
                             ppkernel.set_deq_scale(dequant[0]);
-                            ppkernel.set_q_scale(requant.data() + n0);
+                            ppkernel.set_q_scale(requant.data());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         }
                     } else {
                         if (useGelu) {
                             amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_QUANT> ppkernel(matC, reinterpret_cast<float*>(bias));
                             ppkernel.set_deq_scale(dequant[0]);
-                            ppkernel.set_q_scale(requant.data() + n0);
+                            ppkernel.set_q_scale(requant.data());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         } else {
                             amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_BIAS_QUANT> ppkernel(matC, reinterpret_cast<float*>(bias));
                             ppkernel.set_deq_scale(dequant[0]);
-                            ppkernel.set_q_scale(requant.data() + n0);
+                            ppkernel.set_q_scale(requant.data());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         }
                     }

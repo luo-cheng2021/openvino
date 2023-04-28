@@ -594,8 +594,8 @@ struct MHAGPT::Impl {
     size_t bufferMatMul0OutSize;
     size_t bufferMatMul1OutSize;
 
-    std::vector<uint8_t> bufferMatMul0Out;
-    std::vector<uint8_t> bufferMatMul1Out;
+    std::shared_ptr<uint8_t> bufferMatMul0Out;
+    std::shared_ptr<uint8_t> bufferMatMul1Out;
 
     std::vector<float> mulScales;
     std::vector<float> fqScales0;
@@ -658,10 +658,14 @@ void MHAGPT::Impl::create(const CreateParam& param) {
     }
 
     bufferMatMul0OutSize = _create_param.max_seq_len * rnd_up(_create_param.max_seq_len * sizeof(float), 64);
-    bufferMatMul1OutSize = _create_param.max_seq_len * rnd_up(_create_param.head_size * sizeof(float), 64);
+    bufferMatMul1OutSize = _create_param.max_seq_len * _create_param.head_size_aligned * sizeof(float);
 
-    bufferMatMul0Out.resize(numThreads * bufferMatMul0OutSize);
-    bufferMatMul1Out.resize(numThreads * bufferMatMul1OutSize);
+    bufferMatMul0Out = std::shared_ptr<uint8_t>(
+                            reinterpret_cast<uint8_t*>(aligned_alloc(64, numThreads * bufferMatMul0OutSize)),
+                            [](void * p) { ::free(p); });
+    bufferMatMul1Out = std::shared_ptr<uint8_t>(
+                            reinterpret_cast<uint8_t*>(aligned_alloc(64, numThreads * bufferMatMul1OutSize)),
+                            [](void * p) { ::free(p); });
 
     {
         if (mayiuse(cpu_isa_t::avx512_core)) {
@@ -710,7 +714,7 @@ void MHAGPT::Impl::create(const CreateParam& param) {
         jcp.inner_work_amount = _create_param.head_size;     // head size(feature)
         jcp.with_scales = _create_param.dst_precision == Precision::I8;
         jcp.broadcast_scales = _create_param.is_qkv_quant_per_tensor;
-        jcp.src_stride = _create_param.head_size;
+        jcp.src_stride = _create_param.head_size_aligned;
         jcp.dst_stride = _create_param.num_heads * _create_param.head_size;   // num_heads * head_size
 
         if (mayiuse(cpu_isa_t::avx512_core)) {
@@ -766,10 +770,10 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
 
         auto pAddIn1_aux = pAddIn1 + i0 * param.batch_stride_in_attn_mask;
 
-        auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.data() + threadNum * bufferMatMul0OutSize);
-        auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.data() + threadNum * bufferMatMul1OutSize);
+        auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.get() + threadNum * bufferMatMul0OutSize);
+        auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.get() + threadNum * bufferMatMul1OutSize);
         
-        tensor2D<ov::bfloat16> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
+        tensor2D<ov::bfloat16> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
         if (is_vector) {
             // N: key_seq_len, K: head_size
             // q[1, K] * transpose(k[N, K])        ==>
@@ -777,8 +781,8 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
             //     k[N, K] * q[K, 1]
             (*gemAvB_ops[threadNum])(matK, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), reinterpret_cast<float*>(bufferMatMul0Out_local));
         } else {
-            tensor2D<ov::bfloat16> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
-            tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 1));
+            tensor2D<ov::bfloat16> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
+            tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 64));
             amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
             (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.query_seq_len, pp);
         }
@@ -789,11 +793,11 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
         auto valid_softmax_items = param.first_valid_softmax_items;
         for (size_t m = 0; m < param.query_seq_len; m++) {
             jit_mul_add_softmax_call_args call_args;
-            call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 1);
+            call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
             call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
             call_args.p_add_in1 = pAddIn1_aux;
-            call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(bfloat16), 1);
-            call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 1);
+            call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(bfloat16), 64);
+            call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
             call_args.p_scales0 = fqScales1.data();
             call_args.p_scales1 = fqScales2.data();
             call_args.work_amount = valid_softmax_items;
@@ -807,9 +811,9 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
             }
         }
         auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
-        tensor2D<ov::bfloat16> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(bfloat16), 1));
-        tensor2D<ov::bfloat16> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), _create_param.head_size * sizeof(ov::bfloat16));
-        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size * sizeof(float));
+        tensor2D<ov::bfloat16> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(bfloat16), 64));
+        tensor2D<ov::bfloat16> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
+        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size_aligned * sizeof(float));
         amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQKV);
         (*qKVGemm_ops[threadNum])(matQK, matV, 0, _create_param.head_size, pp);
         if (convertReorderKernel) {
@@ -854,10 +858,10 @@ void MHAGPT::Impl::mha_i8(const ExecParam &param) {
 
         auto pAddIn1_aux = pAddIn1 + i0 * param.batch_stride_in_attn_mask;
 
-        auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.data() + threadNum * bufferMatMul0OutSize);
-        auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.data() + threadNum * bufferMatMul1OutSize);
+        auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.get() + threadNum * bufferMatMul0OutSize);
+        auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.get() + threadNum * bufferMatMul1OutSize);
         
-        tensor2D<int8_t> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pKIn0_aux), _create_param.head_size * sizeof(int8_t));
+        tensor2D<int8_t> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
         if (is_vector) {
             // N: key_seq_len, K: head_size
             // q[1, K] * transpose(k[N, K])        ==>
@@ -866,8 +870,8 @@ void MHAGPT::Impl::mha_i8(const ExecParam &param) {
             (*gemAvB_ops[threadNum])(matK, reinterpret_cast<int8_t*>(pQIn0_aux), reinterpret_cast<int32_t*>(bufferMatMul0Out_local));
             cvt_i32_f32(reinterpret_cast<float*>(bufferMatMul0Out_local), reinterpret_cast<int32_t*>(bufferMatMul0Out_local), param.key_seq_len);
         } else {
-            tensor2D<int8_t> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pQIn0_aux), _create_param.head_size * sizeof(int8_t));
-            tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 1));
+            tensor2D<int8_t> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pQIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
+            tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 64));
             amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
             (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.query_seq_len, pp);
         }
@@ -878,11 +882,11 @@ void MHAGPT::Impl::mha_i8(const ExecParam &param) {
         auto valid_softmax_items = param.first_valid_softmax_items;
         for (size_t m = 0; m < param.query_seq_len; m++) {
             jit_mul_add_softmax_call_args call_args;
-            call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 1);
+            call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
             call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
             call_args.p_add_in1 = pAddIn1_aux;
-            call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(int8_t), 1);
-            call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 1);
+            call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(int8_t), 64);
+            call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
             call_args.p_scales0 = fqScales1.data();
             call_args.p_scales1 = &param.qk_quant;
             call_args.work_amount = valid_softmax_items;
@@ -896,9 +900,9 @@ void MHAGPT::Impl::mha_i8(const ExecParam &param) {
             }
         }
         auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
-        tensor2D<uint8_t> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<uint8_t*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(uint8_t), 1));
-        tensor2D<int8_t> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pVIn0_aux), _create_param.head_size * sizeof(int8_t));
-        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size * sizeof(float));
+        tensor2D<uint8_t> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<uint8_t*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(uint8_t), 64));
+        tensor2D<int8_t> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pVIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
+        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size_aligned * sizeof(float));
         amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQKV);
         (*qKVGemm_ops[threadNum])(matQK, matV, 0, _create_param.head_size, pp);
         if (convertReorderKernel) {

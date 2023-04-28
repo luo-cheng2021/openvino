@@ -297,7 +297,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("")
     parser.add_argument("org_model_path")
     parser.add_argument("ov_model_path")
-    parser.add_argument("quant_model_path", default="")
+    parser.add_argument("quant_model_path", nargs='?', default="")
     args = parser.parse_args()
 
     quant_dicts = {}

@@ -102,7 +102,7 @@ protected:
             configuration[InferenceEngine::PluginConfigParams::KEY_ENFORCE_BF16] = InferenceEngine::PluginConfigParams::YES;
         }
         if (inputShape[0].second[0][1] == 1) {
-            past_key_number = 10;
+            past_key_number = 33;
             padding_seq_len = 0;
         }
 
