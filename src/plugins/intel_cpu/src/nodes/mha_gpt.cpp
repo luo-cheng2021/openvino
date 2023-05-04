@@ -607,7 +607,7 @@ struct MHAGPT::Impl {
     std::unique_ptr<jit_uni_convert_reorder_kernel> convertReorderKernel;
 
     size_t vec_size = 1;
-    std::vector<std::shared_ptr<amx_kernel::GemAvB>> gemAvB;
+    std::vector<std::shared_ptr<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>>> gemAvB_BF16xBF16;
     std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>> qKtrGemm_BF16xBF16;
     std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>> qKVGemm_BF16xBF16;
 
@@ -643,9 +643,9 @@ void MHAGPT::Impl::create(const CreateParam& param) {
             gemAvB_i8xi8[i] = std::make_shared<amx_kernel::MatmulVector<int8_t, int8_t>>();
         }
     } else {
-        gemAvB.resize(numThreads);
+        gemAvB_BF16xBF16.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            gemAvB[i] = std::make_shared<amx_kernel::GemAvB>();
+            gemAvB_BF16xBF16[i] = std::make_shared<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>>();
         }
         qKtrGemm_BF16xBF16.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
@@ -756,7 +756,7 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
     uint8_t* pout = param.attn_output;
 
     auto outPrcSize = _create_param.qkv_precision.size();
-    auto& gemAvB_ops = gemAvB;
+    auto& gemAvB_ops = gemAvB_BF16xBF16;
     auto& qKtrGemm_ops = qKtrGemm_BF16xBF16;
     auto& qKVGemm_ops = qKVGemm_BF16xBF16;
     bool is_vector = param.query_seq_len == 1;

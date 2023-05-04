@@ -88,7 +88,7 @@ struct tensor2D {
         padded_dim1 = stride / sizeof(T);
 
         // resize method never shrink capacity, and extra T is added to put nan as test
-        auto need_capacity = dims[0] * stride + sizeof(T);
+        auto need_capacity = dims[0] * stride + sizeof(T) + 4096;
         if (capacity < need_capacity) {
             capacity = need_capacity;
             // align begin address to cache line is vital, so tile load can
@@ -107,16 +107,17 @@ struct tensor2D {
                             reinterpret_cast<T*>(aligned_alloc(64, capacity)),
                             [](void * p) { ::free(p); });
             }
+            memset(data.get(), 0, need_capacity);
             if (reinterpret_cast<uintptr_t>(data.get()) % 64)
                 std::cout << "WARNING: resize(), data is not cache-line aligned!" << std::endl;
         }
         // put a NaN at the end to test over-read
         // https://en.wikipedia.org/wiki/Bfloat16_floating-point_format
-        #define INF 0xff80 
-        #define NAN1 (INF + 1)
-        if (sizeof(T) == 2) {
-            *reinterpret_cast<uint16_t*>(data.get() + dims[0] * padded_dim1) = NAN1;
-        }
+        // #define INF 0xff80 
+        // #define NAN1 (INF + 1)
+        // if (sizeof(T) == 2) {
+        //     *reinterpret_cast<uint16_t*>(data.get() + dims[0] * padded_dim1) = NAN1;
+        // }
     }
 
     T & operator[](int i) {
