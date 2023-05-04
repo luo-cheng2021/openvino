@@ -53,7 +53,6 @@ private:
         mov(reg_sin, ptr[reg_params + GET_OFF(sin)]);
         mov(reg_q_dst, ptr[reg_params + GET_OFF(q_dst)]);
         mov(reg_k_dst, ptr[reg_params + GET_OFF(k_dst)]);
-        mov(reg_q_dst_stride, ptr[reg_params + GET_OFF(q_dst_stride)]);
 
         uni_vpxor(vmm_q_src, vmm_q_src, vmm_q_src);
         uni_vpxor(vmm_k_src, vmm_k_src, vmm_k_src);
@@ -69,30 +68,24 @@ private:
         }
 
         auto half_rotary_ndims = jcp_.rotary_ndims / 2;
-        for (size_t k = 0; k < jcp_.head_num; k++) {
-            mov(reg_q_dst_aux, reg_q_dst);
-            mov(reg_cos_aux, reg_cos);
-            mov(reg_sin_aux, reg_sin);
-            size_t steps = 0;
-            for (size_t i = 0; i < half_rotary_ndims / vec_size; i++) {
-                rotary_first_half(vec_size);
-                steps += vec_size;
-            }
-            if (half_rotary_ndims % vec_size != 0) {
-                rotary_first_half(half_rotary_ndims % vec_size);
-                steps += half_rotary_ndims % vec_size;
-            }
-            for (size_t i = 0; i < half_rotary_ndims / vec_size; i++) {
-                rotary_last_half(vec_size);
-                steps += vec_size;
-            }
-            if (half_rotary_ndims % vec_size != 0) {
-                rotary_last_half(half_rotary_ndims % vec_size);
-            }
-            add(reg_q_src, (jcp_.size_per_head * 3 - steps) * jcp_.src_prc.size());
-            add(reg_k_src, (jcp_.size_per_head * 3 - steps) * jcp_.src_prc.size());
-            add(reg_q_dst, reg_q_dst_stride);
-            add(reg_k_dst, (jcp_.max_seq_len * jcp_.size_per_head_aligned - steps) * jcp_.dst_prc.size());
+        mov(reg_q_dst_aux, reg_q_dst);
+        mov(reg_cos_aux, reg_cos);
+        mov(reg_sin_aux, reg_sin);
+        size_t steps = 0;
+        for (size_t i = 0; i < half_rotary_ndims / vec_size; i++) {
+            rotary_first_half(vec_size);
+            steps += vec_size;
+        }
+        if (half_rotary_ndims % vec_size != 0) {
+            rotary_first_half(half_rotary_ndims % vec_size);
+            steps += half_rotary_ndims % vec_size;
+        }
+        for (size_t i = 0; i < half_rotary_ndims / vec_size; i++) {
+            rotary_last_half(vec_size);
+            steps += vec_size;
+        }
+        if (half_rotary_ndims % vec_size != 0) {
+            rotary_last_half(half_rotary_ndims % vec_size);
         }
 
         this->postamble();
@@ -348,6 +341,8 @@ public:
         // second pass: shared items
         for (auto i = 0; i < beam_idx_num; i++) {
             if (ptrs_k[i] == nullptr) {
+                uint8_t* srcs[2];
+                uint8_t* dsts[2];
                 auto wanted_idx = beam_idx[i];
                 auto it = std::find_if(no_use_ptrs_k.begin(), no_use_ptrs_k.end(), [] (const buffer_t* p) {
                     return p != nullptr;
@@ -355,18 +350,18 @@ public:
                 ptrs_k[i] = *it;
                 *it = nullptr;
                 // memcpy(ptrs_k[i]->data(), store.current_k_bufs[wanted_idx]->data(), store.current_k_bufs[wanted_idx]->size());
-                auto *src = store.current_k_bufs[wanted_idx]->get();
-                auto *dst = ptrs_k[i]->get();
-                // buffer: [headNum, maxSeqLen, sizePerHead]
-                parallel_for(headNum, [&](size_t i0) {
-                    auto sub_src = src + i0 * maxSeqLen * sizePerHeadAligned * dataTypeLen;
-                    auto sub_dst = dst + i0 * maxSeqLen * sizePerHeadAligned * dataTypeLen;
-                    for (size_t k = 0; k < valid_histroy_seq_len; k++) {
-                        memcpy(sub_dst, sub_src, sizePerHead * dataTypeLen);
-                        sub_src += sizePerHeadAligned * dataTypeLen;
-                        sub_dst += sizePerHeadAligned * dataTypeLen;
-                    }
-                });
+                srcs[0] = store.current_k_bufs[wanted_idx]->get();
+                dsts[0] = ptrs_k[i]->get();
+                // // buffer: [headNum, maxSeqLen, sizePerHead]
+                // parallel_for(headNum, [&](size_t i0) {
+                //     auto sub_src = src + i0 * maxSeqLen * sizePerHeadAligned * dataTypeLen;
+                //     auto sub_dst = dst + i0 * maxSeqLen * sizePerHeadAligned * dataTypeLen;
+                //     for (size_t k = 0; k < valid_histroy_seq_len; k++) {
+                //         memcpy(sub_dst, sub_src, sizePerHead * dataTypeLen);
+                //         sub_src += sizePerHeadAligned * dataTypeLen;
+                //         sub_dst += sizePerHeadAligned * dataTypeLen;
+                //     }
+                // });
 
                 it = std::find_if(no_use_ptrs_v.begin(), no_use_ptrs_v.end(), [] (const buffer_t* p) {
                     return p != nullptr;
@@ -374,17 +369,24 @@ public:
                 ptrs_v[i] = *it;
                 *it = nullptr;
                 // memcpy(ptrs_v[i]->data(), store.current_v_bufs[wanted_idx]->data(), store.current_v_bufs[wanted_idx]->size());
-                src = store.current_v_bufs[wanted_idx]->get();
-                dst = ptrs_v[i]->get();
-                // buffer: [headNum, maxSeqLen, sizePerHead]
-                parallel_for(headNum, [&](size_t i0) {
-                    auto sub_src = src + i0 * maxSeqLen * sizePerHeadAligned * dataTypeLen;
-                    auto sub_dst = dst + i0 * maxSeqLen * sizePerHeadAligned * dataTypeLen;
-                    for (size_t k = 0; k < valid_histroy_seq_len; k++) {
-                        memcpy(sub_dst, sub_src, sizePerHead * dataTypeLen);
-                        sub_src += sizePerHeadAligned * dataTypeLen;
-                        sub_dst += sizePerHeadAligned * dataTypeLen;
-                    }
+                srcs[1] = store.current_v_bufs[wanted_idx]->get();
+                dsts[1] = ptrs_v[i]->get();
+                // // buffer: [headNum, maxSeqLen, sizePerHead]
+                // parallel_for(headNum, [&](size_t i0) {
+                //     auto sub_src = src + i0 * maxSeqLen * sizePerHeadAligned * dataTypeLen;
+                //     auto sub_dst = dst + i0 * maxSeqLen * sizePerHeadAligned * dataTypeLen;
+                //     for (size_t k = 0; k < valid_histroy_seq_len; k++) {
+                //         memcpy(sub_dst, sub_src, sizePerHead * dataTypeLen);
+                //         sub_src += sizePerHeadAligned * dataTypeLen;
+                //         sub_dst += sizePerHeadAligned * dataTypeLen;
+                //     }
+                // });
+                parallel_for3d(2, headNum, valid_histroy_seq_len, [&](size_t kv, size_t h, size_t s) {
+                    auto* src = srcs[kv];
+                    auto* dst = dsts[kv];
+                    auto sub_src = src + (h * maxSeqLen + s) * sizePerHeadAligned * dataTypeLen;
+                    auto sub_dst = dst + (h * maxSeqLen + s) * sizePerHeadAligned * dataTypeLen;
+                    memcpy(sub_dst, sub_src, sizePerHead * dataTypeLen);
                 });
             }
             current_k_bufs[i] = ptrs_k[i]->get();
@@ -606,18 +608,17 @@ void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
     // attnMasks = std::move(new_attn_masks);
 }
 
-// template <typename in1_type>
-// void GPTNeoxAttn::applyRotaryPosEmbImpl(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, uint8_t* k_dst, float* cos_cached,
-//     float* sin_cached, size_t batch, size_t q_seq_len, size_t offset) {
+// void GPTNeoxAttn::applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const std::vector<uint8_t*>& k_dst, size_t k_start,
+//                                     float* cos_cached, float* sin_cached, size_t batch, size_t q_seq_len, size_t offset) {
 //     auto halfRotaryNdims = rotaryNdims / 2;
 //     for (size_t m = 0; m < batch; m ++) {
 //         float* cos = cos_cached + offset * rotaryNdims;
 //         float* sin = sin_cached + offset * rotaryNdims;
-//         auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHead * inputDataTypeSize;
-//         auto k_dst_batch = k_dst + m * headNum * maxSeqLen * sizePerHead * inputDataTypeSize;
+//         auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
+//         auto k_dst_batch = k_dst[m] + k_start;
 //         for (size_t n = 0; n < q_seq_len; n++) {
-//             auto q_dst_seq = q_dst_batch + n * sizePerHead * inputDataTypeSize;
-//             auto k_dst_seq = k_dst_batch + n * sizePerHead * inputDataTypeSize;
+//             auto q_dst_seq = q_dst_batch + n * sizePerHeadAligned * mhaInputDataTypeSize;
+//             auto k_dst_seq = k_dst_batch + n * sizePerHeadAligned * mhaInputDataTypeSize;
 //             for (size_t k = 0; k < headNum; k++) {
 //                 for (size_t i = 0; i < halfRotaryNdims; i++) {
 //                     q_dst_seq[i] = q_src[i] * cos[i] - q_src[i + halfRotaryNdims] * sin[i];
@@ -629,8 +630,8 @@ void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
 //                 }
 //                 q_src += sizePerHead * 3 * inputDataTypeSize;
 //                 k_src += sizePerHead * 3 * inputDataTypeSize;
-//                 q_dst_seq += q_seq_len * sizePerHead * inputDataTypeSize;
-//                 k_dst_seq += maxSeqLen * sizePerHead * inputDataTypeSize;
+//                 q_dst_seq += q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
+//                 k_dst_seq += maxSeqLen * sizePerHeadAligned * mhaInputDataTypeSize;
 //             }
 //             cos += rotaryNdims;
 //             sin += rotaryNdims;
@@ -643,32 +644,62 @@ void GPTNeoxAttn::reinitAttentionMask(size_t batch, size_t max_seq_len) {
 // k_dst: [batch, num_heads, maxSeqLen, head_size]
 void GPTNeoxAttn::applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const std::vector<uint8_t*>& k_dst, size_t k_start,
                                     float* cos_cached, float* sin_cached, size_t batch, size_t q_seq_len, size_t offset) {
-    jit_rotary_call_args call_args;
-    call_args.q_quant = &q_quant;
-    call_args.k_quant = &k_quant;
-    for (size_t m = 0; m < batch; m ++) {
-        float* cos = cos_cached + offset * rotaryNdims;
-        float* sin = sin_cached + offset * rotaryNdims;
-        auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
-        auto k_dst_batch = k_dst[m] + k_start;
-        for (size_t n = 0; n < q_seq_len; n++) {
-            auto q_dst_seq = q_dst_batch + n * sizePerHeadAligned * mhaInputDataTypeSize;
-            auto k_dst_seq = k_dst_batch + n * sizePerHeadAligned * mhaInputDataTypeSize;
-            call_args.q_src = q_src;
-            call_args.k_src = k_src;
-            call_args.cos = cos;
-            call_args.sin = sin;
-            call_args.q_dst = q_dst_seq;
-            call_args.k_dst = k_dst_seq;
-            call_args.q_dst_stride = q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
+    // jit_rotary_call_args call_args;
+    // call_args.q_quant = &q_quant;
+    // call_args.k_quant = &k_quant;
+    // for (size_t m = 0; m < batch; m ++) {
+    //     float* cos = cos_cached + offset * rotaryNdims;
+    //     float* sin = sin_cached + offset * rotaryNdims;
+    //     auto q_dst_batch = q_dst + m * headNum * q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
+    //     auto k_dst_batch = k_dst[m] + k_start;
+    //     for (size_t n = 0; n < q_seq_len; n++) {
+    //         auto q_dst_seq = q_dst_batch + n * sizePerHeadAligned * mhaInputDataTypeSize;
+    //         auto k_dst_seq = k_dst_batch + n * sizePerHeadAligned * mhaInputDataTypeSize;
+    //         call_args.q_src = q_src;
+    //         call_args.k_src = k_src;
+    //         call_args.cos = cos;
+    //         call_args.sin = sin;
+    //         call_args.q_dst = q_dst_seq;
+    //         call_args.k_dst = k_dst_seq;
+    //         //call_args.q_dst_stride = q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
 
-            (*rotaryKernel)(&call_args);
-            q_src += hiddenSize * 3 * inputDataTypeSize;
-            k_src += hiddenSize * 3 * inputDataTypeSize;
-            cos += rotaryNdims;
-            sin += rotaryNdims;
-        }
-    }
+    //         for (size_t s = 0; s < headNum; s++) {
+    //             (*rotaryKernel)(&call_args);
+    //             q_src += sizePerHead * 3 * inputDataTypeSize;
+    //             k_src += sizePerHead * 3 * inputDataTypeSize;
+    //             q_dst_seq += q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
+    //             k_dst_seq += maxSeqLen * sizePerHeadAligned * mhaInputDataTypeSize;
+    //             call_args.q_src = q_src;
+    //             call_args.k_src = k_src;
+    //             call_args.q_dst = q_dst_seq;
+    //             call_args.k_dst = k_dst_seq;
+    //         }
+    //         cos += rotaryNdims;
+    //         sin += rotaryNdims;
+    //     }
+    // }
+    cos_cached += offset * rotaryNdims;
+    sin_cached += offset * rotaryNdims;
+    parallel_for3d(batch, headNum, q_seq_len, [&](size_t b, size_t h, size_t s) {
+        auto q_dst_batch = q_dst + b * headNum * q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
+        auto k_dst_batch = k_dst[b] + k_start;
+        auto q_src_batch = q_src + b * hiddenSize * 3 * q_seq_len * inputDataTypeSize;
+        auto k_src_batch = k_src + b * hiddenSize * 3 * q_seq_len * inputDataTypeSize;
+        auto q_dst_seq = q_dst_batch + s * sizePerHeadAligned * mhaInputDataTypeSize;
+        auto k_dst_seq = k_dst_batch + s * sizePerHeadAligned * mhaInputDataTypeSize;
+        auto q_src_seq = q_src_batch + s * hiddenSize * 3 * inputDataTypeSize;
+        auto k_src_seq = k_src_batch + s * hiddenSize * 3 * inputDataTypeSize;
+        jit_rotary_call_args call_args;
+        call_args.q_quant = &q_quant;
+        call_args.k_quant = &k_quant;
+        call_args.q_src = q_src_seq + h * sizePerHead * 3 * inputDataTypeSize;
+        call_args.k_src = k_src_seq + h * sizePerHead * 3 * inputDataTypeSize;
+        call_args.cos = cos_cached + s * rotaryNdims;
+        call_args.sin = sin_cached + s * rotaryNdims;
+        call_args.q_dst = q_dst_seq + h * q_seq_len * sizePerHeadAligned * mhaInputDataTypeSize;
+        call_args.k_dst = k_dst_seq + h * maxSeqLen * sizePerHeadAligned * mhaInputDataTypeSize;
+        (*rotaryKernel)(&call_args);
+    });
 }
 
 void GPTNeoxAttn::updateAttnMask(const int* attn_mask, size_t batch, size_t seq_len) {
@@ -709,16 +740,23 @@ static void MemcpyStride(void* dst, void* src, size_t copy_head_size, size_t hea
     //         }
     //     }
     // }
-    parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+    // parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+    //     auto* dst_batch = static_cast<uint8_t*>(dst) + b * head_num * max_seq_len * dst_head_stride * type_size;
+    //     auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * type_size;
+    //     auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride * type_size;
+    //     auto* src_head = src_batch + h * 3 * head_size * type_size;
+    //     for (size_t i = 0; i < seq_len; i++) {
+    //         memcpy(dst_head, src_head, copy_head_size * type_size);
+    //         dst_head += dst_head_stride * type_size;
+    //         src_head += head_num * 3 * head_size * type_size;
+    //     }
+    // });
+    parallel_for3d(batch, head_num, seq_len, [&](size_t b, size_t h, size_t s) {
         auto* dst_batch = static_cast<uint8_t*>(dst) + b * head_num * max_seq_len * dst_head_stride * type_size;
         auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * type_size;
-        auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride * type_size;
-        auto* src_head = src_batch + h * 3 * head_size * type_size;
-        for (size_t i = 0; i < seq_len; i++) {
-            memcpy(dst_head, src_head, copy_head_size * type_size);
-            dst_head += dst_head_stride * type_size;
-            src_head += head_num * 3 * head_size * type_size;
-        }
+        auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride * type_size + s * dst_head_stride * type_size;
+        auto* src_head = src_batch + h * 3 * head_size * type_size + s * head_num * 3 * head_size * type_size;
+        memcpy(dst_head, src_head, copy_head_size * type_size);
     });
 }
 
@@ -742,16 +780,23 @@ static void MemcpyStride(const std::vector<uint8_t*>& dst, size_t dst_start, voi
     //         }
     //     }
     // }
-    parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+    // parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+    //     auto* dst_batch = dst[b] + dst_start;
+    //     auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * type_size;
+    //     auto* dst_head = dst_batch + h * max_seq_len *  dst_head_stride * type_size;
+    //     auto* src_head = src_batch + h * 3 * head_size * type_size;
+    //     for (size_t i = 0; i < seq_len; i++) {
+    //         memcpy(dst_head, src_head, copy_head_size * type_size);
+    //         dst_head += dst_head_stride * type_size;
+    //         src_head += head_num * 3 * head_size * type_size;
+    //     }
+    // });
+    parallel_for3d(batch, head_num, seq_len, [&](size_t b, size_t h, size_t s) {
         auto* dst_batch = dst[b] + dst_start;
         auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * type_size;
-        auto* dst_head = dst_batch + h * max_seq_len *  dst_head_stride * type_size;
-        auto* src_head = src_batch + h * 3 * head_size * type_size;
-        for (size_t i = 0; i < seq_len; i++) {
-            memcpy(dst_head, src_head, copy_head_size * type_size);
-            dst_head += dst_head_stride * type_size;
-            src_head += head_num * 3 * head_size * type_size;
-        }
+        auto* dst_head = dst_batch + h * max_seq_len *  dst_head_stride * type_size + s * dst_head_stride * type_size;
+        auto* src_head = src_batch + h * 3 * head_size * type_size + s * head_num * 3 * head_size * type_size;
+        memcpy(dst_head, src_head, copy_head_size * type_size);
     });
 }
 
@@ -770,18 +815,24 @@ static void MemcpyStrideQuant(void* dst, void* src, size_t copy_head_size, size_
     //         }
     //     }
     // }
-
-    parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+    parallel_for3d(batch, head_num, seq_len, [&](size_t b, size_t h, size_t s) {
         auto* dst_batch = static_cast<uint8_t*>(dst) + b * head_num * max_seq_len * dst_head_stride;
         auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * src_type_size;
-        auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride;
-        auto* src_head = src_batch + h * 3 * head_size * src_type_size;
-        for (size_t i = 0; i < seq_len; i++) {
-            quant_i8(dst_head, src_head, copy_head_size, scale);
-            dst_head += dst_head_stride;
-            src_head += head_num * 3 * head_size * src_type_size;
-        }
+        auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride + s * dst_head_stride;
+        auto* src_head = src_batch + h * 3 * head_size * src_type_size + s * head_num * 3 * head_size * src_type_size;
+        quant_i8(dst_head, src_head, copy_head_size, scale);
     });
+    // parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+    //     auto* dst_batch = static_cast<uint8_t*>(dst) + b * head_num * max_seq_len * dst_head_stride;
+    //     auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * src_type_size;
+    //     auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride;
+    //     auto* src_head = src_batch + h * 3 * head_size * src_type_size;
+    //     for (size_t i = 0; i < seq_len; i++) {
+    //         quant_i8(dst_head, src_head, copy_head_size, scale);
+    //         dst_head += dst_head_stride;
+    //         src_head += head_num * 3 * head_size * src_type_size;
+    //     }
+    // });
 }
 
 // typical use:
@@ -804,16 +855,23 @@ static void MemcpyStrideQuant(const std::vector<uint8_t*>& dst, size_t dst_start
     //         }
     //     }
     // }
-    parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+    // parallel_for2d(batch, head_num, [&](size_t b, size_t h) {
+    //     auto* dst_batch = dst[b] + dst_start;
+    //     auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * src_type_size;
+    //     auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride;
+    //     auto* src_head = src_batch + h * 3 * head_size * src_type_size;
+    //     for (size_t i = 0; i < seq_len; i++) {
+    //         quant_i8(dst_head, src_head, copy_head_size, scale);
+    //         dst_head += dst_head_stride;
+    //         src_head += head_num * 3 * head_size * src_type_size;
+    //     }
+    // });
+    parallel_for3d(batch, head_num, seq_len, [&](size_t b, size_t h, size_t s) {
         auto* dst_batch = dst[b] + dst_start;
         auto* src_batch = static_cast<uint8_t*>(src) + b * head_num * seq_len * 3 * head_size * src_type_size;
-        auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride;
-        auto* src_head = src_batch + h * 3 * head_size * src_type_size;
-        for (size_t i = 0; i < seq_len; i++) {
-            quant_i8(dst_head, src_head, copy_head_size, scale);
-            dst_head += dst_head_stride;
-            src_head += head_num * 3 * head_size * src_type_size;
-        }
+        auto* dst_head = dst_batch + h * max_seq_len * dst_head_stride + s * dst_head_stride;
+        auto* src_head = src_batch + h * 3 * head_size * src_type_size + s * head_num * 3 * head_size * src_type_size;
+        quant_i8(dst_head, src_head, copy_head_size, scale);
     });
 }
 
