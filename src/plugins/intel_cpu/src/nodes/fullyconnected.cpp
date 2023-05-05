@@ -282,24 +282,39 @@ void FullyConnected::extractQuantParam() {
             if (eltwiseNode->getAlgorithm() == Algorithm::EltwiseGelu) {
                 useGelu = true;
             } else if (eltwiseNode->getAlgorithm() == Algorithm::EltwiseMultiply) {
-                dequant = eltwiseNode->getScales();
-                if (dequant.size() == 1) {
-                    dequant = std::vector<float>(N, dequant[0]);
+                const auto& quant = eltwiseNode->getScales();
+                auto capacity = rnd_up(N * sizeof(float), 64);
+                dequant = std::shared_ptr<float>(
+                                    reinterpret_cast<float*>(aligned_alloc(64, capacity)),
+                                    [](void * p) { ::free(p); });
+                memset(dequant.get(), 0, capacity);
+                
+                if (quant.size() == 1) {
+                    std::fill(dequant.get(), dequant.get() + N, quant[0]);
+                } else {
+                    memcpy(dequant.get(), quant.data(), quant.size() * sizeof(float));
                 }
+                std::cout << "node: " << getName() << " got dequant param: " << quant[0] << "(" << quant.size() << ")\n";
             }
             continue;
         }
 
         if (auto* fakeQuantizeNode = dynamic_cast<FakeQuantize*>(node.get())) {
             if (isLastPostOp) {
-                requant = fakeQuantizeNode->getInputScale();
-                if (requant.size() == 1) {
-                    requant = std::vector<float>(N, requant[0]);
+                auto capacity = rnd_up(N * sizeof(float), 64);
+                requant = std::shared_ptr<float>(
+                                    reinterpret_cast<float*>(aligned_alloc(64, capacity)),
+                                    [](void * p) { ::free(p); });
+                memset(requant.get(), 0, capacity);
+
+                auto& quant = fakeQuantizeNode->getInputScale();
+                
+                if (quant.size() == 1) {
+                    std::fill(requant.get(), requant.get() + N, quant[0]);
+                } else {
+                    memcpy(requant.get(), quant.data(), quant.size() * sizeof(float));
                 }
-                std::cout << "node: " << getName() << " got requant param: " << requant[0] << "\n";
-            } else {
-                dequant = fakeQuantizeNode->getInputScale();
-                std::cout << "node: " << getName() << " got dequant param: " << requant[0] << "\n";
+                std::cout << "node: " << getName() << " got requant param: " << quant[0] << "(" << quant.size() << ")\n";
             }
             continue;
         }
@@ -619,25 +634,48 @@ void FullyConnected::execute(dnnl::stream strm) {
                     if (!bias) {
                         if (useGelu) {
                             amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_GELU_QUANT> ppkernel(matC);
-                            ppkernel.set_deq_scale(dequant[0]);
-                            ppkernel.set_q_scale(requant.data());
+                            ppkernel.set_deq_scale(dequant.get());
+                            ppkernel.set_q_scale(requant.get());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         } else {
                             amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_QUANT> ppkernel(matC);
-                            ppkernel.set_deq_scale(dequant[0]);
-                            ppkernel.set_q_scale(requant.data());
+                            ppkernel.set_deq_scale(dequant.get());
+                            ppkernel.set_q_scale(requant.get());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         }
                     } else {
                         if (useGelu) {
                             amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU_QUANT> ppkernel(matC, reinterpret_cast<float*>(bias));
-                            ppkernel.set_deq_scale(dequant[0]);
-                            ppkernel.set_q_scale(requant.data());
+                            ppkernel.set_deq_scale(dequant.get());
+                            ppkernel.set_q_scale(requant.get());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         } else {
                             amx_kernel::PP::BiasGeluStore<int8_t, amx_kernel::PP::Steps::DEQUANT_BIAS_QUANT> ppkernel(matC, reinterpret_cast<float*>(bias));
-                            ppkernel.set_deq_scale(dequant[0]);
-                            ppkernel.set_q_scale(requant.data());
+                            ppkernel.set_deq_scale(dequant.get());
+                            ppkernel.set_q_scale(requant.get());
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
+                    }
+                } else if (outputDataType == memory::data_type::bf16) {
+                    tensor2D<bfloat16> matC(M, N, reinterpret_cast<bfloat16*>(dst), N * sizeof(bfloat16));
+                    if (!bias) {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT_GELU> ppkernel(matC);
+                            ppkernel.set_deq_scale(dequant.get());
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT> ppkernel(matC);
+                            ppkernel.set_deq_scale(dequant.get());
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        }
+                    } else {
+                        if (useGelu) {
+                            amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            ppkernel.set_deq_scale(dequant.get());
+                            (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
+                        } else {
+                            amx_kernel::PP::BiasGeluStore<bfloat16, amx_kernel::PP::Steps::DEQUANT_BIAS> ppkernel(matC, reinterpret_cast<float*>(bias));
+                            ppkernel.set_deq_scale(dequant.get());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         }
                     }
@@ -646,21 +684,21 @@ void FullyConnected::execute(dnnl::stream strm) {
                     if (!bias) {
                         if (useGelu) {
                             amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_GELU> ppkernel(matC);
-                            ppkernel.set_deq_scale(dequant[0]);
+                            ppkernel.set_deq_scale(dequant.get());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         } else {
                             amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT> ppkernel(matC);
-                            ppkernel.set_deq_scale(dequant[0]);
+                            ppkernel.set_deq_scale(dequant.get());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         }
                     } else {
                         if (useGelu) {
                             amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS_GELU> ppkernel(matC, reinterpret_cast<float*>(bias));
-                            ppkernel.set_deq_scale(dequant[0]);
+                            ppkernel.set_deq_scale(dequant.get());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         } else {
                             amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::DEQUANT_BIAS> ppkernel(matC, reinterpret_cast<float*>(bias));
-                            ppkernel.set_deq_scale(dequant[0]);
+                            ppkernel.set_deq_scale(dequant.get());
                             (*opsFC_i8xi8[tid])(matA, matB, n0, n1, ppkernel);
                         }
                     }

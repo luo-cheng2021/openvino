@@ -572,10 +572,17 @@ namespace PP {
             bias = _bias;
         }
 
-        float deq_scale = 1.0f;
+        float deq_scale_common = 1.0f;
+        float * deq_scale_per_oc = nullptr;
         void set_deq_scale(float scale = 1.0f) {
             assert (steps & DEQUANT);
-            deq_scale = scale;
+            deq_scale_common = scale;
+            deq_scale_per_oc = nullptr;
+        }
+        void set_deq_scale(float * scale_per_oc) {
+            assert (steps & DEQUANT);
+            deq_scale_common = 0;
+            deq_scale_per_oc = scale_per_oc;
         }
 
         float q_scale_common = 0.0f;
@@ -606,9 +613,16 @@ namespace PP {
 
             __m512  m512_q_scale0;
             __m512  m512_q_scale1;
-            __m512  m512_deq_scale;
+            __m512  m512_deq_scale0;
+            __m512  m512_deq_scale1;
             if (steps & DEQUANT) {
-                m512_deq_scale = _mm512_set1_ps(deq_scale);
+                if (deq_scale_per_oc) {
+                    m512_deq_scale0 = _mm512_loadu_ps(deq_scale_per_oc + n);
+                    m512_deq_scale1 = _mm512_loadu_ps(deq_scale_per_oc + n + 16);
+                } else {
+                    m512_deq_scale0 = _mm512_set1_ps(deq_scale_common);
+                    m512_deq_scale1 = _mm512_set1_ps(deq_scale_common);
+                }
             }
             if (steps & QUANT) {
                 if (q_scale_per_oc) {
@@ -642,8 +656,8 @@ namespace PP {
                     r1 = _mm512_cvtepi32_ps(_mm512_castps_si512(r1));   // cvt i32=>f32
                 }
                 if (steps & DEQUANT) {
-                    r0 = _mm512_mul_ps(r0, m512_deq_scale);   // dequantize
-                    r1 = _mm512_mul_ps(r1, m512_deq_scale);   // dequantize
+                    r0 = _mm512_mul_ps(r0, m512_deq_scale0);   // dequantize
+                    r1 = _mm512_mul_ps(r1, m512_deq_scale1);   // dequantize
                 }
                 if (steps & BIAS) {
                     r0 = _mm512_add_ps(r0, bias0);

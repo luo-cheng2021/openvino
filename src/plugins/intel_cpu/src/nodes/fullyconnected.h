@@ -122,8 +122,8 @@ private:
     bool useFastPath = false;
     bool useGelu = false;
     size_t threadNum = 0;
-    std::vector<float> dequant;
-    std::vector<float> requant;
+    std::shared_ptr<float> dequant;
+    std::shared_ptr<float> requant;
 };
 
 }   // namespace node
