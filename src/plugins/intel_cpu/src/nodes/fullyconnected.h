@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 #include "common/dnnl_executor.h"
-#include "special/gemm_custom.hpp"
+#include "special/fc_custom.hpp"
 
 namespace ov {
 namespace intel_cpu {
@@ -116,9 +116,9 @@ private:
     float minSparseRate = 1.f;
     float weiSparseRate = 0.f;
     bool useSparseWeightsDecompression();
-    std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>> opsFC_BF16xBF16;
-    std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, int8_t, float>>> opsFC_BF16xi8;
-    std::vector<std::shared_ptr<amx_kernel::Matmul<int8_t, int8_t>>> opsFC_i8xi8;
+    std::shared_ptr<FC> opsFC_BF16xBF16;
+    std::shared_ptr<FC> opsFC_BF16xi8;
+    std::shared_ptr<FC> opsFC_i8xi8;
     bool useFastPath = false;
     bool useGelu = false;
     size_t threadNum = 0;

@@ -60,7 +60,8 @@ ie_mark_target_as_cc(${TARGET_NAME})
 target_link_libraries(${TARGET_NAME} PRIVATE dnnl
                                              ov_shape_inference
                                              openvino::pugixml
-                                             inference_engine_snippets)
+                                             inference_engine_snippets
+                                             ${CMAKE_SOURCE_DIR}/bin/intel64/Release/libcustom.so)
 
 target_compile_definitions(${TARGET_NAME} PRIVATE IMPLEMENT_INFERENCE_EXTENSION_API)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -79,8 +80,10 @@ cross_compiled_file(${TARGET_NAME}
 )
 
 ie_add_api_validator_post_build_step(TARGET ${TARGET_NAME})
-ie_add_compiler_flags(-march=sapphirerapids)
+#ie_add_compiler_flags(-march=sapphirerapids -g -O0)
+#ie_add_compiler_flags(-march=sapphirerapids -g)
 
+link_directories(${CMAKE_SOURCE_DIR}/bin/intel64/Release/)
 #  add test object library
 
 if(BUILD_SHARED_LIBS)

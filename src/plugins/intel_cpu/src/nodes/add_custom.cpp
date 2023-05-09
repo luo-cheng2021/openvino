@@ -11,7 +11,7 @@
 #include <cpu/x64/jit_generator.hpp>
 #include "emitters/jit_dnnl_emitters.hpp"
 #include "emitters/jit_load_store_emitters.hpp"
-#include "special/add_custom.hpp"
+#include "special/misc_custom.hpp"
 #include "ie_parallel.hpp"
 
 using namespace InferenceEngine;
@@ -81,6 +81,9 @@ void AddCustom::execute(dnnl::stream strm) {
     auto count = total / 1024;
     parallel_for(count, [&](int i) {
         size_t size = 1024 * i > total ? total - 1024 * i : 1024;
-        add3(node0 + i * 1024, node1 + i * 1024, node2 + i * 1024, dst + i * 1024, size);
-    });    
+        add3(reinterpret_cast<int8_t*>(node0 + i * 1024),
+             reinterpret_cast<int8_t*>(node1 + i * 1024),
+             reinterpret_cast<int8_t*>(node2 + i * 1024),
+             reinterpret_cast<int8_t*>(dst + i * 1024), size);
+    });
 }

@@ -17,8 +17,7 @@
 #include "ngraph_transformations/op/mha.hpp"
 #include "dnnl_extension_utils.h"
 #include <ie_ngraph_utils.hpp>
-#include "special/gemm_custom.hpp"
-#include "special/quant_i8_custom.hpp"
+#include "special/matmul_custom.hpp"
 
 using namespace InferenceEngine;
 using namespace InferenceEngine::details;
@@ -607,13 +606,13 @@ struct MHAGPT::Impl {
     std::unique_ptr<jit_uni_convert_reorder_kernel> convertReorderKernel;
 
     size_t vec_size = 1;
-    std::vector<std::shared_ptr<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>>> gemAvB_BF16xBF16;
-    std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>> qKtrGemm_BF16xBF16;
-    std::vector<std::shared_ptr<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>> qKVGemm_BF16xBF16;
+    std::vector<std::shared_ptr<Matmul>> gemAvB_BF16xBF16;
+    std::vector<std::shared_ptr<Matmul>> qKtrGemm_BF16xBF16;
+    std::vector<std::shared_ptr<Matmul>> qKVGemm_BF16xBF16;
 
-    std::vector<std::shared_ptr<amx_kernel::Matmul<int8_t, int8_t>>> qKtrGemm_i8xi8;
-    std::vector<std::shared_ptr<amx_kernel::Matmul<uint8_t, int8_t>>> qKVGemm_u8xi8;
-    std::vector<std::shared_ptr<amx_kernel::MatmulVector<int8_t, int8_t>>> gemAvB_i8xi8;
+    std::vector<std::shared_ptr<Matmul>> qKtrGemm_i8xi8;
+    std::vector<std::shared_ptr<Matmul>> qKVGemm_u8xi8;
+    std::vector<std::shared_ptr<Matmul>> gemAvB_i8xi8;
 };
 
 void MHAGPT::Impl::create(const CreateParam& param) {
@@ -632,28 +631,28 @@ void MHAGPT::Impl::create(const CreateParam& param) {
     if (_create_param.qkv_precision == Precision::I8) {
         qKtrGemm_i8xi8.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            qKtrGemm_i8xi8[i] = std::make_shared<amx_kernel::Matmul<int8_t, int8_t>>(false, true);
+            qKtrGemm_i8xi8[i] = std::make_shared<Matmul>(Matmul::Type_S8, true);
         }
         qKVGemm_u8xi8.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            qKVGemm_u8xi8[i] = std::make_shared<amx_kernel::Matmul<uint8_t, int8_t>>(false, false);
+            qKVGemm_u8xi8[i] = std::make_shared<Matmul>(Matmul::Type_U8, false);
         }
         gemAvB_i8xi8.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            gemAvB_i8xi8[i] = std::make_shared<amx_kernel::MatmulVector<int8_t, int8_t>>();
+            gemAvB_i8xi8[i] = std::make_shared<Matmul>(Matmul::Type_S8_v, false);
         }
     } else {
         gemAvB_BF16xBF16.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            gemAvB_BF16xBF16[i] = std::make_shared<amx_kernel::MatmulVector<ov::bfloat16, ov::bfloat16>>();
+            gemAvB_BF16xBF16[i] = std::make_shared<Matmul>(Matmul::Type_BF16_v, false);
         }
         qKtrGemm_BF16xBF16.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            qKtrGemm_BF16xBF16[i] = std::make_shared<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>(false, true);
+            qKtrGemm_BF16xBF16[i] = std::make_shared<Matmul>(Matmul::Type_BF16, true);
         }
         qKVGemm_BF16xBF16.resize(numThreads);
         for (size_t i = 0; i < numThreads; i++) {
-            qKVGemm_BF16xBF16[i] = std::make_shared<amx_kernel::Matmul<ov::bfloat16, ov::bfloat16>>(false, false);
+            qKVGemm_BF16xBF16[i] = std::make_shared<Matmul>(Matmul::Type_BF16, false);
         }
     }
 
@@ -761,73 +760,73 @@ void MHAGPT::Impl::mha_bf16(const ExecParam &param) {
     auto& qKVGemm_ops = qKVGemm_BF16xBF16;
     bool is_vector = param.query_seq_len == 1;
 
-    parallel_for2d(param.batch, _create_param.num_heads, [&](size_t i0, size_t i1) {
-        size_t threadNum = parallel_get_thread_num();
+    // parallel_for2d(param.batch, _create_param.num_heads, [&](size_t i0, size_t i1) {
+    //     size_t threadNum = parallel_get_thread_num();
 
-        auto pQIn0_aux = pQIn0 + (i0 * param.batch_stride_in_q + i1 * param.head_stride_in_q) * _create_param.qkv_precision.size();
-        auto pKIn0_aux = pKIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
-        auto pVIn0_aux = pVIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
+    //     auto pQIn0_aux = pQIn0 + (i0 * param.batch_stride_in_q + i1 * param.head_stride_in_q) * _create_param.qkv_precision.size();
+    //     auto pKIn0_aux = pKIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
+    //     auto pVIn0_aux = pVIn0[i0] + i1 * param.head_stride_in_kv * _create_param.qkv_precision.size();
 
-        auto pAddIn1_aux = pAddIn1 + i0 * param.batch_stride_in_attn_mask;
+    //     auto pAddIn1_aux = pAddIn1 + i0 * param.batch_stride_in_attn_mask;
 
-        auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.get() + threadNum * bufferMatMul0OutSize);
-        auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.get() + threadNum * bufferMatMul1OutSize);
+    //     auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.get() + threadNum * bufferMatMul0OutSize);
+    //     auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.get() + threadNum * bufferMatMul1OutSize);
         
-        tensor2D<ov::bfloat16> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
-        if (is_vector) {
-            // N: key_seq_len, K: head_size
-            // q[1, K] * transpose(k[N, K])        ==>
-            //     k[N, K] * transpose(q[1, K])    ==>
-            //     k[N, K] * q[K, 1]
-            (*gemAvB_ops[threadNum])(matK, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), reinterpret_cast<float*>(bufferMatMul0Out_local));
-        } else {
-            tensor2D<ov::bfloat16> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
-            tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 64));
-            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
-            (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.query_seq_len, pp);
-        }
+    //     tensor2D<ov::bfloat16> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
+    //     if (is_vector) {
+    //         // N: key_seq_len, K: head_size
+    //         // q[1, K] * transpose(k[N, K])        ==>
+    //         //     k[N, K] * transpose(q[1, K])    ==>
+    //         //     k[N, K] * q[K, 1]
+    //         (*gemAvB_ops[threadNum])(matK, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), reinterpret_cast<float*>(bufferMatMul0Out_local));
+    //     } else {
+    //         tensor2D<ov::bfloat16> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pQIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
+    //         tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 64));
+    //         amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
+    //         (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.query_seq_len, pp);
+    //     }
 
-        auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : mulScales.data());
-        auto pMatMul0Out = bufferMatMul0Out_local;
-        // loop along K dimension
-        auto valid_softmax_items = param.first_valid_softmax_items;
-        for (size_t m = 0; m < param.query_seq_len; m++) {
-            jit_mul_add_softmax_call_args call_args;
-            call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
-            call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
-            call_args.p_add_in1 = pAddIn1_aux;
-            call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(bfloat16), 64);
-            call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
-            call_args.p_scales0 = fqScales1.data();
-            call_args.p_scales1 = fqScales2.data();
-            call_args.work_amount = valid_softmax_items;
+    //     auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : mulScales.data());
+    //     auto pMatMul0Out = bufferMatMul0Out_local;
+    //     // loop along K dimension
+    //     auto valid_softmax_items = param.first_valid_softmax_items;
+    //     for (size_t m = 0; m < param.query_seq_len; m++) {
+    //         jit_mul_add_softmax_call_args call_args;
+    //         call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
+    //         call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
+    //         call_args.p_add_in1 = pAddIn1_aux;
+    //         call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(bfloat16), 64);
+    //         call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
+    //         call_args.p_scales0 = fqScales1.data();
+    //         call_args.p_scales1 = fqScales2.data();
+    //         call_args.work_amount = valid_softmax_items;
 
-            (*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
-            // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
-            if (param.key_seq_len > valid_softmax_items) {
-                auto *invalidPtr = static_cast<bfloat16*>(call_args.p_out) + valid_softmax_items;
-                memset(invalidPtr, 0, (param.key_seq_len - valid_softmax_items) * _create_param.qkv_precision.size());
-                valid_softmax_items = std::min(valid_softmax_items + 1, param.key_seq_len);
-            }
-        }
-        auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
-        tensor2D<ov::bfloat16> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(bfloat16), 64));
-        tensor2D<ov::bfloat16> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
-        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size_aligned * sizeof(float));
-        amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQKV);
-        (*qKVGemm_ops[threadNum])(matQK, matV, 0, _create_param.head_size, pp);
-        if (convertReorderKernel) {
-            // matmul1: [batch, num_heads, query_seq_len, head_size]
-            // attn_output: [batch, query_seq_len, num_heads * head_size]
-            jit_convert_reorder_call_args call_args;
-            call_args.p_in = bufferMatMul1Out_local;
-            call_args.p_out = pOut_aux;
-            call_args.p_scales = fqScales3.data();
-            call_args.outter_work_amount = param.query_seq_len;
+    //         (*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
+    //         // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
+    //         if (param.key_seq_len > valid_softmax_items) {
+    //             auto *invalidPtr = static_cast<bfloat16*>(call_args.p_out) + valid_softmax_items;
+    //             memset(invalidPtr, 0, (param.key_seq_len - valid_softmax_items) * _create_param.qkv_precision.size());
+    //             valid_softmax_items = std::min(valid_softmax_items + 1, param.key_seq_len);
+    //         }
+    //     }
+    //     auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
+    //     tensor2D<ov::bfloat16> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<ov::bfloat16*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(bfloat16), 64));
+    //     tensor2D<ov::bfloat16> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<ov::bfloat16*>(pVIn0_aux), _create_param.head_size_aligned * sizeof(ov::bfloat16));
+    //     tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size_aligned * sizeof(float));
+    //     amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQKV);
+    //     (*qKVGemm_ops[threadNum])(matQK, matV, 0, _create_param.head_size, pp);
+    //     if (convertReorderKernel) {
+    //         // matmul1: [batch, num_heads, query_seq_len, head_size]
+    //         // attn_output: [batch, query_seq_len, num_heads * head_size]
+    //         jit_convert_reorder_call_args call_args;
+    //         call_args.p_in = bufferMatMul1Out_local;
+    //         call_args.p_out = pOut_aux;
+    //         call_args.p_scales = fqScales3.data();
+    //         call_args.outter_work_amount = param.query_seq_len;
 
-            (*convertReorderKernel)(&call_args);
-        }
-    });
+    //         (*convertReorderKernel)(&call_args);
+    //     }
+    // });
 }
 
 void MHAGPT::Impl::mha_i8(const ExecParam &param) {
@@ -861,19 +860,19 @@ void MHAGPT::Impl::mha_i8(const ExecParam &param) {
         auto bufferMatMul0Out_local = reinterpret_cast<uint8_t*>(bufferMatMul0Out.get() + threadNum * bufferMatMul0OutSize);
         auto bufferMatMul1Out_local = reinterpret_cast<uint8_t*>(bufferMatMul1Out.get() + threadNum * bufferMatMul1OutSize);
         
-        tensor2D<int8_t> matK(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pKIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
         if (is_vector) {
             // N: key_seq_len, K: head_size
             // q[1, K] * transpose(k[N, K])        ==>
             //     k[N, K] * transpose(q[1, K])    ==>
             //     k[N, K] * q[K, 1]
-            (*gemAvB_ops[threadNum])(matK, reinterpret_cast<int8_t*>(pQIn0_aux), reinterpret_cast<int32_t*>(bufferMatMul0Out_local));
-            cvt_i32_f32(reinterpret_cast<float*>(bufferMatMul0Out_local), reinterpret_cast<int32_t*>(bufferMatMul0Out_local), param.key_seq_len);
+            gemAvB_ops[threadNum]->gemAvB_s8s8f32(reinterpret_cast<int8_t*>(pKIn0_aux), reinterpret_cast<int8_t*>(pQIn0_aux), reinterpret_cast<float*>(bufferMatMul0Out_local),
+                _create_param.head_size_aligned * sizeof(int8_t), param.key_seq_len, _create_param.head_size);
         } else {
-            tensor2D<int8_t> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pQIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
-            tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 64));
-            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
-            (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.query_seq_len, pp);
+            qKtrGemm_ops[threadNum]->matmul_s8s8f32(reinterpret_cast<int8_t*>(pQIn0_aux), reinterpret_cast<int8_t*>(pKIn0_aux), reinterpret_cast<float*>(bufferMatMul0Out_local),
+                _create_param.head_size_aligned * sizeof(int8_t), // lda
+                _create_param.head_size_aligned * sizeof(int8_t), // ldb
+                rnd_up(param.key_seq_len * sizeof(float), 64),
+                param.query_seq_len, param.key_seq_len, _create_param.head_size);
         }
 
         auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : &mul_scales);
@@ -900,11 +899,11 @@ void MHAGPT::Impl::mha_i8(const ExecParam &param) {
             }
         }
         auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
-        tensor2D<uint8_t> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<uint8_t*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(uint8_t), 64));
-        tensor2D<int8_t> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pVIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
-        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size_aligned * sizeof(float));
-        amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQKV);
-        (*qKVGemm_ops[threadNum])(matQK, matV, 0, _create_param.head_size, pp);
+        qKVGemm_ops[threadNum]->matmul_u8s8f32(reinterpret_cast<uint8_t*>(bufferMatMul0Out_local), reinterpret_cast<int8_t*>(pVIn0_aux), reinterpret_cast<float*>(bufferMatMul1Out_local),
+            rnd_up(param.key_seq_len * sizeof(uint8_t), 64),  // lda
+            _create_param.head_size_aligned * sizeof(int8_t), // ldb
+            _create_param.head_size_aligned * sizeof(float),  // ldc
+            param.query_seq_len, _create_param.head_size, param.key_seq_len);
         if (convertReorderKernel) {
             // matmul1: [batch, num_heads, query_seq_len, head_size]
             // attn_output: [batch, query_seq_len, num_heads * head_size]

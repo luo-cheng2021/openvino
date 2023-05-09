@@ -15,8 +15,7 @@
 #include "emitters/jit_dnnl_emitters.hpp"
 #include "emitters/jit_load_store_emitters.hpp"
 #include "ie_parallel.hpp"
-#include "special/quant_i8_custom.hpp"
-#include "special/gemm_custom.hpp"
+#include "special/misc_custom.hpp"
 
 using namespace InferenceEngine;
 using namespace ov::intel_cpu;

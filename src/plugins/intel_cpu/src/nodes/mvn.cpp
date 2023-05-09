@@ -25,7 +25,7 @@
 #include <ngraph/opsets/opset6.hpp>
 #include "memory_desc/dnnl_blocked_memory_desc.h"
 #include "utils/cpu_utils.hpp"
-#include "special/mvn_custom.hpp"
+#include "special/misc_custom.hpp"
 
 using namespace dnnl;
 using namespace InferenceEngine;
@@ -1467,13 +1467,13 @@ void MVN::execute(dnnl::stream strm) {
         if (supportedPostops == Fastpath_Postops_No) {
             parallel_for2d(in_dims[0], in_dims[1], [&](size_t b, size_t c) {
                 auto offset = b * C2 + c * C1;
-                mvn_line(reinterpret_cast<bfloat16*>(src_data) + offset, in_dims[2], eps, inside_sqrt,
-                    reinterpret_cast<bfloat16*>(dst_data) + offset);
+                mvn_line(reinterpret_cast<int8_t*>(src_data) + offset * 2, in_dims[2], eps, inside_sqrt,
+                    reinterpret_cast<int8_t*>(dst_data) + offset * 2);
             });
         } else {
             parallel_for2d(in_dims[0], in_dims[1], [&](size_t b, size_t c) {
                 auto offset = b * C2 + c * C1;
-                mvn_line(reinterpret_cast<bfloat16*>(src_data) + offset, in_dims[2], eps, inside_sqrt,
+                mvn_line(reinterpret_cast<int8_t*>(src_data) + offset * 2, in_dims[2], eps, inside_sqrt,
                     reinterpret_cast<int8_t*>(dst_data) + offset, qkv_quant.data());
             });
         }
