@@ -15,6 +15,7 @@
 #include <functional>
 #include <iomanip>
 #include <sstream>
+#include <initializer_list>
 
 //#include "thread_pool.hpp"
 #include <openvino/core/type/bfloat16.hpp>
@@ -176,6 +177,24 @@ std::vector<std::pair<T0, T1>> zip_vector(const std::vector<T0> & v0, const std:
     return ret;
 }
 
+template<typename T, size_t N>
+std::array<std::pair<T, T>, N> zip_array(const std::array<T, N> & v0, int v1) {
+    std::array<std::pair<T, T>, N> ret;
+    auto sz = N;
+    for(decltype(sz) i=0; i<sz; i++)
+        ret[i] = {v0[i], v1};
+    return ret;
+}
+
+template<typename T, size_t N>
+std::array<std::pair<T, T>, N> zip_array(T v0, T v1) {
+    std::array<std::pair<T, T>, N> ret;
+    auto sz = N;
+    for(decltype(sz) i=0; i<sz; i++)
+        ret[i] = {v0, v1};
+    return ret;
+}
+
 struct tileconfig_t {
     uint8_t palette_id;
     uint8_t startRow;
@@ -184,29 +203,61 @@ struct tileconfig_t {
     uint8_t rows[16];
     tileconfig_t() = default;
 
-    tileconfig_t(int palette, int _startRow, const std::vector<std::pair<int, int>> &_rows_columnsBytes) {
+    tileconfig_t(int palette, int _startRow, const std::initializer_list<std::pair<int, int>> &_rows_columnsBytes) {
         palette_id = palette;
         startRow = _startRow;
         int i;
         for(i = 0; i < 14; i++) {
             reserved[i] = 0;
         }
-        for(i = 0; i < _rows_columnsBytes.size(); i++) {
-            rows[i] = _rows_columnsBytes[i].first;
-            cols[i] = _rows_columnsBytes[i].second;
+        i = 0;
+        for (const auto& ele : _rows_columnsBytes) {
+            rows[i] = ele.first;
+            cols[i] = ele.second;
+            i++;
         }
         for(; i < 16; i++) {
             cols[i] = 0;
             rows[i] = 0;
         }
-        load();        
+        load();
     }
 
-    tileconfig_t(int palette, int _startRow, const std::vector<int> &_rows, int columnsBytes):
-        tileconfig_t(palette, _startRow, zip_vector(_rows, std::vector<int>(_rows.size(), columnsBytes))) {
+    tileconfig_t(int palette, int _startRow, const std::initializer_list<int> &_rows, int columnsBytes) {
+        palette_id = palette;
+        startRow = _startRow;
+        int i;
+        for(i = 0; i < 14; i++) {
+            reserved[i] = 0;
         }
-    tileconfig_t(int palette, int _startRow, int numTiles, int _rows, int columnsBytes) :
-        tileconfig_t(palette, _startRow, std::vector<std::pair<int, int>>(numTiles, {_rows, columnsBytes})) {
+        i = 0;
+        for (const auto ele : _rows) {
+            rows[i] = ele;
+            cols[i] = columnsBytes;
+            i++;
+        }
+        for(; i < 16; i++) {
+            cols[i] = 0;
+            rows[i] = 0;
+        }
+        load();
+    }
+    tileconfig_t(int palette, int _startRow, int numTiles, int _rows, int columnsBytes) {
+        palette_id = palette;
+        startRow = _startRow;
+        int i;
+        for(i = 0; i < 14; i++) {
+            reserved[i] = 0;
+        }
+        for(i = 0; i < numTiles; i++) {
+            rows[i] = _rows;
+            cols[i] = columnsBytes;
+        }
+        for(; i < 16; i++) {
+            cols[i] = 0;
+            rows[i] = 0;
+        }
+        load();
     }
 
     ~tileconfig_t() {

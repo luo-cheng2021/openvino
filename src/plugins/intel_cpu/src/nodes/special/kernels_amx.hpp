@@ -774,8 +774,7 @@ void loop2D_opt_Mtail(int M, int N, int mc, F f) {
 // Bo is layout as axb where a=(N_padded/32) b=(K_padded*32)
 //
 template<class T>
-tensor2D<T> repackB_1x2(const tensor2D<T> &Bi, bool transpose) {
-    tensor2D<T> Bo;
+void repackB_1x2(const tensor2D<T> &Bi, bool transpose, tensor2D<T>& Bo, bool is_const) {
     int K = Bi.dims[transpose?1:0];
     int N = Bi.dims[transpose?0:1];
 
@@ -790,7 +789,7 @@ tensor2D<T> repackB_1x2(const tensor2D<T> &Bi, bool transpose) {
     int N_padded = (N + N_unit - 1)/N_unit * N_unit;
 
     // Bo(ni, 0) is a vector flattened from a slice of shape [K_padded x N_unit]
-    Bo.resize(N_padded/N_unit, K_padded * N_unit);
+    Bo.resize(N_padded/N_unit, K_padded * N_unit, false, is_const);
 
     if (transpose) {
         for(int n = 0; n < N; n += N_unit) {
@@ -827,7 +826,6 @@ tensor2D<T> repackB_1x2(const tensor2D<T> &Bi, bool transpose) {
             }
         }
     }
-    return Bo;
 }
 
 template<class T = void>
@@ -1203,7 +1201,7 @@ struct Matmul {
         // for non-constB, internalB is updated every time
         // for constB, internalB is updated once
         if (!constB || (internalB.capacity == 0)) {
-            internalB = repackB_1x2(matB, transposeB);
+            repackB_1x2(matB, transposeB, internalB, constB);
         }
 
         // special case when whole B matrix can fit in 6 tiles
@@ -1243,18 +1241,18 @@ struct Matmul {
                 int8_t * pA0 = reinterpret_cast<int8_t*>(&matA[0]);
                 for(k=0; k<Kbody; k+=kStep) {
                     _tile_loadd(2, pA0, strideA); pA0 += 64;  // tile A Mx32/Mx64, cols is always 64
-                    prefetch_bytes<1024, _MM_HINT_T1, 4096*48>(pB0);
+                    // prefetch_bytes<1024, _MM_HINT_T1, 4096*48>(pB0);
                     _tile_loadd(3, pB0, 64); pB0 += 1024;     // tile B0 32x16(16x16x2)/64x16(16x16x4) is always 1KB
-                    prefetch_bytes<1024, _MM_HINT_T1, 4096*48>(pB0);
+                    // prefetch_bytes<1024, _MM_HINT_T1, 4096*48>(pB0);
                     _tile_loadd(4, pB0, 64); pB0 += 1024;     // tile B1 32x16(16x16x2)/64x16(16x16x4) is always 1KB
                     TILE_DP(0, 2, 3); // C0 += A*B0
                     TILE_DP(1, 2, 4); // C1 += A*B1
                 }
                 if (Ktails) {
                     _tile_loadd(2, pA0 - KbackoffBytes, strideA);
-                    prefetch_bytes<1024, _MM_HINT_T1, 4096*48>(pB0);
+                    // prefetch_bytes<1024, _MM_HINT_T1, 4096*48>(pB0);
                     _tile_loadd(3, pB0, 64); pB0 += 1024;
-                    prefetch_bytes<1024, _MM_HINT_T1, 4096*48>(pB0);
+                    // prefetch_bytes<1024, _MM_HINT_T1, 4096*48>(pB0);
                     _tile_loadd(4, pB0, 64); pB0 += 1024;
                     TILE_DP(0, 2, 3); // C0 += A*B0
                     TILE_DP(1, 2, 4); // C1 += A*B1
@@ -1277,13 +1275,13 @@ struct Matmul {
             for (int k = 0; k < Kbody; k += kStep) {
                 _tile_loadd(4, pA0, strideA); pA0 += 64;
                 _tile_loadd(6, pB, 64); pB += 1024;
-                prefetch_bytes<1024>(pB);
+                // prefetch_bytes<1024>(pB);
                 TILE_DP(0, 4, 6);
 
                 _tile_loadd(5, pA1, strideA); pA1 += 64;
                 TILE_DP(2, 5, 6);
                 _tile_loadd(7, pB, 64); pB += 1024;
-                prefetch_bytes<1024>(pB);
+                // prefetch_bytes<1024>(pB);
                 TILE_DP(1, 4, 7);
 
                 TILE_DP(3, 5, 7);
@@ -1291,13 +1289,13 @@ struct Matmul {
             if (Ktails) {
                 _tile_loadd(4, pA0 - KbackoffBytes, strideA);
                 _tile_loadd(6, pB, 64); pB += 1024;
-                prefetch_bytes<1024>(pB);
+                // prefetch_bytes<1024>(pB);
                 TILE_DP(0, 4, 6);
 
                 _tile_loadd(5, pA1 - KbackoffBytes, strideA);
                 TILE_DP(2, 5, 6);
                 _tile_loadd(7, pB, 64); pB += 1024;
-                prefetch_bytes<1024>(pB);
+                // prefetch_bytes<1024>(pB);
                 TILE_DP(1, 4, 7);
 
                 TILE_DP(3, 5, 7);
@@ -1387,7 +1385,8 @@ struct Matmul<ov::bfloat16, int8_t, float> {
             // quant_scale_B = 127 / max;
             // dequant_scale_B = max / 127;
 
-            auto internalTmpB = repackB_1x2(matB, transposeB);
+            tensor2D<ov::bfloat16> internalTmpB;
+            repackB_1x2(matB, transposeB, internalTmpB, constB);
             functional::bf16_to_i8_tensor(internalBI8, internalTmpB, quant_scale_B);
         }
 

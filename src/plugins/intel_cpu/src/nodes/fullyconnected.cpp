@@ -601,8 +601,8 @@ void FullyConnected::setDynamicBatchLim(int lim) {
 
 void FullyConnected::execute(dnnl::stream strm) {
     if (useFastPath) {
-        auto srcPtr = getParentEdgeAt(0)->getMemoryPtr();
-        auto weightPtr = getParentEdgeAt(1)->getMemoryPtr();
+        auto& srcPtr = getParentEdgeAt(0)->getMemoryPtr();
+        auto& weightPtr = getParentEdgeAt(1)->getMemoryPtr();
         auto* src = reinterpret_cast<uint8_t*>(srcPtr->GetPtr());
         auto* weight = reinterpret_cast<uint8_t*>(weightPtr->GetPtr());
         auto* dst = reinterpret_cast<uint8_t*>(getChildEdgeAt(0)->getMemoryPtr()->GetPtr());
