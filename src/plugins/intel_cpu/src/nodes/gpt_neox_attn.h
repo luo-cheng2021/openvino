@@ -73,6 +73,10 @@ protected:
     void reinitAttentionMask(size_t batch, size_t max_seq_len);
     void applyRotaryPosEmb(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const std::vector<uint8_t*>& k_dst, size_t k_start,
                            float* cos_cached, float* sin_cached, size_t batch, size_t qSeqLen, size_t offset);
+    void applyRotaryPosEmbMemcpy(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const sv::small_vector<uint8_t*, 4>& k_dst, size_t k_start,
+                           float* cos_cached, float* sin_cached, size_t batch, size_t qSeqLen, size_t offset, uint8_t* v_src, const sv::small_vector<uint8_t*, 4>& v_dst);
+    void applyRotaryPosEmbMemcpyQuant(uint8_t* q_src, uint8_t* k_src, uint8_t* q_dst, const sv::small_vector<uint8_t*, 4>& k_dst, size_t k_start,
+                           float* cos_cached, float* sin_cached, size_t batch, size_t qSeqLen, size_t offset, uint8_t* v_src, const sv::small_vector<uint8_t*, 4>& v_dst);
     void updateAttnMask(const int* attn_mask, size_t batch, size_t seq_len);
     bool canFuse(const NodePtr& node) const override;
 
@@ -90,7 +94,6 @@ private:
     float normalFactor = 0.0f;
     // aligned to cache line
     size_t sizePerHeadAligned = 80;
-
 
     InferenceEngine::Precision inputDataType;
     InferenceEngine::Precision outputDataType;
