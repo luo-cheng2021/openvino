@@ -358,7 +358,16 @@ public:
         }
         // third pass: copy, only first layer does the copy
         if (!copy_pairs.empty() && key.find("layers.0") != std::string::npos) {
-            parallel_for3d(simpleKVStore.size(), headNum, valid_histroy_seq_len, [&](size_t layer_idx, size_t h, size_t s) {
+            int layers = simpleKVStore.size();
+            int works = layers * headNum * valid_histroy_seq_len;
+            // same size memory will cost different time on different cores(Test on SPR HBM). use load balance one
+            tbb::parallel_for(0, works, [&](int cur_work) {
+                int layer_idx;
+                int h;
+                int s;
+
+                parallel_it_init(cur_work, layer_idx, layers, h, headNum, s, valid_histroy_seq_len);
+
                 auto it = simpleKVStore.begin();
                 for (size_t i = 0; i < layer_idx; i++) ++it;
                 auto& layer = (*it).second;
