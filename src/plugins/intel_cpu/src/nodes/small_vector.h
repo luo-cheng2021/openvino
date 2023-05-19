@@ -304,7 +304,7 @@ public:
       return i;
     }
     const value_type &operator*() { return *ptr_; }
-    const pointer operator->() { return ptr_; }
+    pointer operator->() { return ptr_; }
     bool operator==(const self_type &rhs) { return ptr_ == rhs.ptr_; }
     bool operator!=(const self_type &rhs) { return ptr_ != rhs.ptr_; }
   };

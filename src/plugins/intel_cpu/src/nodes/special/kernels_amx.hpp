@@ -1183,7 +1183,8 @@ struct Matmul {
     void operator()(tensor2D<TA> & matA,
                     tensor2D<TB> & _matB,
                     int n0, int n1,
-                    PP ppkernel) {
+                    PP ppkernel,
+                    bool skip_repack = false) {
         auto matB = getSubMatB(_matB, n0, n1, transposeB);
         int M = matA.dims[0];
         int K = matA.dims[1];
@@ -1200,7 +1201,7 @@ struct Matmul {
 
         // for non-constB, internalB is updated every time
         // for constB, internalB is updated once
-        if (!constB || (internalB.capacity == 0)) {
+        if ((!constB && !skip_repack) || (internalB.capacity == 0)) {
             repackB_1x2(matB, transposeB, internalB, constB);
         }
 
