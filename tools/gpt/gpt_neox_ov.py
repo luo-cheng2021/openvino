@@ -291,6 +291,19 @@ def get_quant_params_from_model(path):
                 new_key = new_key.format(idx)
 
             dicts[new_key] = (info, name)
+    # union matmul1 fq parameter
+    def combine_fqinfo(fq_info1, fq_info2):
+        fq = fq_info1
+        fq[0]['il'] = np.minimum(fq[0]['il'], fq_info2[0]['il'])
+        fq[0]['ol'] = np.minimum(fq[0]['ol'], fq_info2[0]['ol'])
+        fq[0]['ih'] = np.maximum(fq[0]['ih'], fq_info2[0]['ih'])
+        fq[0]['oh'] = np.maximum(fq[0]['oh'], fq_info2[0]['oh'])
+        return fq
+
+    for i in range(LAYER_NUM):
+        fq_info1 = dicts[f'/model/gpt_neox/layers.{i}/attention/attn/matmul1/fq_input_0']
+        fq_info2 = dicts[f'/model/gpt_neox/layers.{i}/attention/attn/matmul2/fq_input_1']
+        dicts[f'/model/gpt_neox/layers.{i}/attention/attn/matmul1/fq_input_0'] = combine_fqinfo(fq_info1, fq_info2)
     return dicts
 
 if __name__ == "__main__":

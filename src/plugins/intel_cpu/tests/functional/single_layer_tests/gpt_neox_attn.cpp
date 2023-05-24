@@ -124,7 +124,7 @@ protected:
 
         auto gpt = std::make_shared<ov::opset10::GPTNeoxAttn>(input_ids, num, beam_idx, attn_mask, 32, head_num, size_per_head,
             head_num * size_per_head, 2048, 10000, rotary_pct, max_seq_length);
-        gpt->set_friendly_name("gpt");
+        gpt->set_friendly_name("gpt/layers.0/attn");
         gpt->get_rt_info() = getCPUInfo();
 
         auto function = std::make_shared<ov::Model>(gpt->outputs(), ov::ParameterVector{input_ids, num, beam_idx, attn_mask}, "gpt");

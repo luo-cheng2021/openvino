@@ -245,37 +245,45 @@ public:
         static GlobalContext instance;
         return instance;
     }
-    void init(size_t head_num, size_t size_per_head, size_t size_per_head_aligned, size_t max_seq_len, size_t data_type_len) {
+    void init(size_t head_num, size_t size_per_head, size_t size_per_head_aligned, size_t max_seq_len, size_t data_type_len, size_t layer_num) {
         headNum = head_num;
         sizePerHead = size_per_head;
         sizePerHeadAligned = size_per_head_aligned;
         maxSeqLen = max_seq_len;
         dataTypeLen = data_type_len;
+        layerNum = layer_num;
+        simpleKVStore.resize(layerNum);
     }
-    void getOrCreateStore(const std::string& key, size_t new_size_per_key_per_beam, const int* beam_idx, size_t beam_idx_num,
+    void getOrCreateStore(int layer_idx, size_t new_size_per_key_per_beam, const int* beam_idx, size_t beam_idx_num,
         sv::small_vector<uint8_t*, 4>& current_k_bufs, sv::small_vector<uint8_t*, 4>& current_v_bufs, size_t valid_histroy_seq_len) {
         // expected buffer: [2, beam_num/batch, headNum, maxSeqLen, sizePerHead]
-        auto& store = simpleKVStore[key];
+        auto& store = simpleKVStore[layer_idx];
         current_k_bufs.resize(beam_idx_num);
         current_v_bufs.resize(beam_idx_num);
         // new_size_per_key_per_beam = headNum * maxSeqLen * sizePerHead * inputDataTypeSize
         // not init
         if (store.key_buffer.size() < beam_idx_num) {
-            store.key_buffer.resize(beam_idx_num);
-            store.value_buffer.resize(beam_idx_num);
-            store.current_k_bufs.resize(beam_idx_num);
-            store.current_v_bufs.resize(beam_idx_num);
+            int works = layerNum;
+            tbb::parallel_for(0, works, [&](int cur_idx) {
+                auto& layer = simpleKVStore[cur_idx];
+                layer.key_buffer.resize(beam_idx_num);
+                layer.value_buffer.resize(beam_idx_num);
+                layer.current_k_bufs.resize(beam_idx_num);
+                layer.current_v_bufs.resize(beam_idx_num);
+                for (auto i = 0; i < beam_idx_num; i++) {
+                    layer.key_buffer[i] = std::shared_ptr<uint8_t>(
+                                reinterpret_cast<uint8_t*>(aligned_alloc(64, new_size_per_key_per_beam)),
+                                [](void * p) { ::free(p); });
+                    memset(layer.key_buffer[i].get(), 0, new_size_per_key_per_beam);
+                    layer.value_buffer[i] = std::shared_ptr<uint8_t>(
+                                reinterpret_cast<uint8_t*>(aligned_alloc(64, new_size_per_key_per_beam)),
+                                [](void * p) { ::free(p); });
+                    memset(layer.value_buffer[i].get(), 0, new_size_per_key_per_beam);
+                    layer.current_k_bufs[i] = &layer.key_buffer[i];
+                    layer.current_v_bufs[i] = &layer.value_buffer[i];
+                }
+            }, tbb::static_partitioner());
             for (auto i = 0; i < beam_idx_num; i++) {
-                store.key_buffer[i] = std::shared_ptr<uint8_t>(
-                            reinterpret_cast<uint8_t*>(aligned_alloc(64, new_size_per_key_per_beam)),
-                            [](void * p) { ::free(p); });
-                memset(store.key_buffer[i].get(), 0, new_size_per_key_per_beam);
-                store.value_buffer[i] = std::shared_ptr<uint8_t>(
-                            reinterpret_cast<uint8_t*>(aligned_alloc(64, new_size_per_key_per_beam)),
-                            [](void * p) { ::free(p); });
-                memset(store.value_buffer[i].get(), 0, new_size_per_key_per_beam);
-                store.current_k_bufs[i] = &store.key_buffer[i];
-                store.current_v_bufs[i] = &store.value_buffer[i];
                 current_k_bufs[i] = store.current_k_bufs[i]->get();
                 current_v_bufs[i] = store.current_v_bufs[i]->get();
             }
@@ -285,24 +293,26 @@ public:
         assert(store.key_buffer.size() == beam_idx_num);
         // max seq becomes larger
         if (sizePerKeyPerBeam < new_size_per_key_per_beam) {
-            auto tmpSizePerKeyPerBeam = new_size_per_key_per_beam * 2;
-            for (auto i = 0; i < beam_idx_num; i++) {
-                auto new_k_store = std::shared_ptr<uint8_t>(
-                            reinterpret_cast<uint8_t*>(aligned_alloc(64, tmpSizePerKeyPerBeam)),
-                            [](void * p) { ::free(p); });
-                memset(new_k_store.get(), 0, tmpSizePerKeyPerBeam);
-                memcpy(new_k_store.get(), store.key_buffer[i].get(), sizePerKeyPerBeam);
-                store.key_buffer[i] = std::move(new_k_store);
-                auto new_v_store = std::shared_ptr<uint8_t>(
-                            reinterpret_cast<uint8_t*>(aligned_alloc(64, tmpSizePerKeyPerBeam)),
-                            [](void * p) { ::free(p); });
-                memset(new_v_store.get(), 0, tmpSizePerKeyPerBeam);
-                memcpy(new_v_store.get(), store.value_buffer[i].get(), sizePerKeyPerBeam);
-                store.value_buffer[i] = std::move(new_v_store);
-                store.current_k_bufs[i] = &store.key_buffer[i];
-                store.current_v_bufs[i] = &store.value_buffer[i];
-            }
-            sizePerKeyPerBeam = tmpSizePerKeyPerBeam;
+            // TODO: need to support
+            assert(false);
+            // auto tmpSizePerKeyPerBeam = new_size_per_key_per_beam * 2;
+            // for (auto i = 0; i < beam_idx_num; i++) {
+            //     auto new_k_store = std::shared_ptr<uint8_t>(
+            //                 reinterpret_cast<uint8_t*>(aligned_alloc(64, tmpSizePerKeyPerBeam)),
+            //                 [](void * p) { ::free(p); });
+            //     memset(new_k_store.get(), 0, tmpSizePerKeyPerBeam);
+            //     memcpy(new_k_store.get(), store.key_buffer[i].get(), sizePerKeyPerBeam);
+            //     store.key_buffer[i] = std::move(new_k_store);
+            //     auto new_v_store = std::shared_ptr<uint8_t>(
+            //                 reinterpret_cast<uint8_t*>(aligned_alloc(64, tmpSizePerKeyPerBeam)),
+            //                 [](void * p) { ::free(p); });
+            //     memset(new_v_store.get(), 0, tmpSizePerKeyPerBeam);
+            //     memcpy(new_v_store.get(), store.value_buffer[i].get(), sizePerKeyPerBeam);
+            //     store.value_buffer[i] = std::move(new_v_store);
+            //     store.current_k_bufs[i] = &store.key_buffer[i];
+            //     store.current_v_bufs[i] = &store.value_buffer[i];
+            // }
+            // sizePerKeyPerBeam = tmpSizePerKeyPerBeam;
         }
         for (auto i = 0; i < beam_idx_num; i++) {
             current_k_bufs[i] = store.current_k_bufs[i]->get();
@@ -357,33 +367,25 @@ public:
             current_v_bufs[i] = ptrs_v[i]->get();
         }
         // third pass: copy, only first layer does the copy
-        if (!copy_pairs.empty() && key.find("layers.0") != std::string::npos) {
-            int layers = simpleKVStore.size();
-            int works = layers * headNum * valid_histroy_seq_len;
-            // same size memory will cost different time on different cores(Test on SPR HBM). use load balance one
+        if (!copy_pairs.empty() && layer_idx == 0) {
+            int works = layerNum;
             tbb::parallel_for(0, works, [&](int cur_work) {
-                int layer_idx;
-                int h;
-                int s;
-
-                parallel_it_init(cur_work, layer_idx, layers, h, headNum, s, valid_histroy_seq_len);
-
-                auto it = simpleKVStore.begin();
-                for (size_t i = 0; i < layer_idx; i++) ++it;
-                auto& layer = (*it).second;
+                auto& layer = simpleKVStore[cur_work];
                 for (auto& item: copy_pairs) {
-                    auto* src = layer.current_k_bufs[item.first]->get();
-                    auto* dst = layer.current_k_bufs[item.second]->get();
-                    auto sub_src = src + (h * maxSeqLen + s) * sizePerHeadAligned * dataTypeLen;
-                    auto sub_dst = dst + (h * maxSeqLen + s) * sizePerHeadAligned * dataTypeLen;
-                    memcpy(sub_dst, sub_src, sizePerHead * dataTypeLen);
-                    src = layer.current_v_bufs[item.first]->get();
-                    dst = layer.current_v_bufs[item.second]->get();
-                    sub_src = src + (h * maxSeqLen + s) * sizePerHeadAligned * dataTypeLen;
-                    sub_dst = dst + (h * maxSeqLen + s) * sizePerHeadAligned * dataTypeLen;
-                    memcpy(sub_dst, sub_src, sizePerHead * dataTypeLen);
+                    auto* src_k = layer.current_k_bufs[item.first]->get();
+                    auto* dst_k = layer.current_k_bufs[item.second]->get();
+                    auto* src_v = layer.current_v_bufs[item.first]->get();
+                    auto* dst_v = layer.current_v_bufs[item.second]->get();
+                    for (int h = 0; h < headNum; h++) {
+                        auto sub_src_k = src_k + (h * maxSeqLen) * sizePerHeadAligned * dataTypeLen;
+                        auto sub_dst_k = dst_k + (h * maxSeqLen) * sizePerHeadAligned * dataTypeLen;
+                        memcpy(sub_dst_k, sub_src_k, sizePerHeadAligned * dataTypeLen * valid_histroy_seq_len);
+                        auto* sub_src_v = src_v + (h * maxSeqLen) * sizePerHeadAligned * dataTypeLen;
+                        auto* sub_dst_v = dst_v + (h * maxSeqLen) * sizePerHeadAligned * dataTypeLen;
+                        memcpy(sub_dst_v, sub_src_v, sizePerHeadAligned * dataTypeLen * valid_histroy_seq_len);
+                    }
                 }
-            });
+            }, tbb::static_partitioner());
         }
 
         for (auto i = 0; i < beam_idx_num; i++) {
@@ -393,12 +395,13 @@ public:
     }
 
 private:
-    std::unordered_map<std::string, PastKVStore> simpleKVStore;
+    std::vector<PastKVStore> simpleKVStore;
     size_t headNum;
     size_t sizePerHead;
     size_t sizePerHeadAligned;
     size_t maxSeqLen;
     size_t dataTypeLen;
+    size_t layerNum;
     size_t sizePerKeyPerBeam;
 };
 
@@ -445,6 +448,15 @@ GPTNeoxAttn::GPTNeoxAttn(const std::shared_ptr<ov::Node>& op, const GraphContext
     } else {
         sizePerHeadAligned = rnd_up(sizePerHead, 32);
     }
+    // TODO: remove the urgly code
+    const auto& name = getName();
+    auto pos = name.find("layers.");
+    if (pos == std::string::npos) {
+        THROW_ERROR << "name format needs to be 'layers.N'";
+    }
+    auto end_pos = name.find('/', pos);
+    auto layer_str = name.substr(pos, end_pos - pos);
+    layerIdx = std::atoi(layer_str.c_str() + std::strlen("layers."));
 }
 
 void GPTNeoxAttn::extractQuantParam() {
@@ -491,7 +503,7 @@ void GPTNeoxAttn::initSupportedPrimitiveDescriptors() {
                           {LayoutType::ncsp, Precision::I32}},
                          {{LayoutType::ncsp, outputDataType}},
                           impl_desc_type::ref_any);
-    GlobalContext::getInstance().init(headNum, sizePerHead, sizePerHeadAligned, maxSeqLen, mhaInputDataTypeSize);
+    GlobalContext::getInstance().init(headNum, sizePerHead, sizePerHeadAligned, maxSeqLen, mhaInputDataTypeSize, layerNum);
 }
 
 void GPTNeoxAttn::createPrimitive() {
@@ -819,7 +831,7 @@ void GPTNeoxAttn::execute(dnnl::stream strm) {
     // [2, batch, num_heads, maxSeqLen, head_size]
     auto size_per_key_per_beam = headNum * maxSeqLen * sizePerHeadAligned * mhaInputDataTypeSize;
     sv::small_vector<uint8_t*, 4> current_k_bufs, current_v_bufs;
-    GlobalContext::getInstance().getOrCreateStore(getName(), size_per_key_per_beam, first_token ? nullptr : beam_idx, batch,
+    GlobalContext::getInstance().getOrCreateStore(layerIdx, size_per_key_per_beam, first_token ? nullptr : beam_idx, batch,
         current_k_bufs, current_v_bufs, new_seq_offset);
 
     // TODO: support the sentence length is longer than maxSeqLen

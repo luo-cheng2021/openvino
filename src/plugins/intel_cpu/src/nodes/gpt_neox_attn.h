@@ -94,6 +94,7 @@ private:
     float normalFactor = 0.0f;
     // aligned to cache line
     size_t sizePerHeadAligned = 80;
+    int layerIdx = -1;
 
     InferenceEngine::Precision inputDataType;
     InferenceEngine::Precision outputDataType;
