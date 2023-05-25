@@ -230,3 +230,36 @@ def add_custom(
     inputs = as_nodes(node1, node2, node3)
     
     return _get_node_factory_opset10().create("AddCustom", inputs, {})
+
+
+@nameable_op
+def mvn_custom(
+    data: Node,
+    axes: Node,
+    weight: Node,
+    bias: Node,
+    normalize_variance: bool,
+    eps: float,
+    eps_mode: str,
+    name: Optional[str] = None,
+) -> Node:
+    """Return a node which performs MeanVarianceNormalization (MVN).
+
+    :param data: The node with data tensor.
+    :param axes: The node with axes to reduce on.
+    :param normalize_variance: Denotes whether to perform variance normalization.
+    :param eps: The number added to the variance to avoid division by zero
+               when normalizing the value. Scalar value.
+    :param eps_mode: how eps is applied (`inside_sqrt` or `outside_sqrt`)
+    :param name: Optional output node name.
+    :return: The new node performing a MVN operation on input tensor.
+    """
+    inputs = as_nodes(data, axes, weight, bias)
+
+    attributes = {
+        "normalize_variance": normalize_variance,
+        "eps": eps,
+        "eps_mode": eps_mode,
+    }
+
+    return _get_node_factory_opset10().create("MVNCustom", inputs, attributes)

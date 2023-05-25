@@ -200,6 +200,7 @@ _OPENVINO_OP_REG(MulticlassNms, ov::op::v9)
 // New operations added in opset10
 _OPENVINO_OP_REG(GPTNeoxAttn, ov::op::v10)
 _OPENVINO_OP_REG(AddCustom, ov::op::v10)
+_OPENVINO_OP_REG(MVNCustom, ov::op::v10)
 _OPENVINO_OP_REG(IsFinite, ov::op::v10)
 _OPENVINO_OP_REG(IsInf, ov::op::v10)
 _OPENVINO_OP_REG(IsNaN, ov::op::v10)

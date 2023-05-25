@@ -94,6 +94,7 @@
 #include "nodes/unique.hpp"
 #include "nodes/gpt_neox_attn.h"
 #include "nodes/add_custom.h"
+#include "nodes/mvn_custom.h"
 
 namespace ov {
 namespace intel_cpu {
@@ -200,6 +201,7 @@ Node::NodesFactory::NodesFactory()
     INTEL_CPU_NODE(Unique, Type::Unique);
     INTEL_CPU_NODE(GPTNeoxAttn, Type::GPTNeoxAttn);
     INTEL_CPU_NODE(AddCustom, Type::AddCustom);
+    INTEL_CPU_NODE(MVNCustom, Type::MVNCustom);
 }
 
 #undef INTEL_CPU_NODE

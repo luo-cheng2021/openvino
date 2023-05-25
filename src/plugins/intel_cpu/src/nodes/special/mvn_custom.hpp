@@ -8,6 +8,8 @@ namespace intel_cpu {
 
 void mvn_line(bfloat16* src, size_t ele_num, float eps, bool inside_sqrt, bfloat16 *dst);
 void mvn_line(bfloat16* src, size_t ele_num, float eps, bool inside_sqrt, int8_t *dst, float* quant);
+void mvn_line_weight_bias(bfloat16* src, size_t ele_num, float eps, bool inside_sqrt, bfloat16 *dst, float* weight, float* bias);
+void mvn_line_weight_bias(bfloat16* src, size_t ele_num, float eps, bool inside_sqrt, int8_t *dst, float* quant, float* weight, float* bias);
 
 }
 }

@@ -90,11 +90,9 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
             return scale(info_data0), scale(info_data1), scale(info_data2), scale(info_data3)
         else:
             return 0.0, 0.0, 0.0, 0.0
-    input_layernorm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mvn')
     input_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.bias')
     input_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.input_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.input_layernorm.weight')
-    input_layernorm_mul = opset.multiply(input_layernorm_mvn, input_layernorm_weight, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mul')
-    input_layernorm = opset.add(input_layernorm_mul, input_layernorm_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/add')
+    input_layernorm = opset.mvn_custom(hidden_states, axes=[-1], weight=input_layernorm_weight, bias=input_layernorm_bias, normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/input_layernorm/mvn')
 
     ######### attention part begin
     query_key_value_bias = opset.constant(ConstDict['model.gpt_neox.layers.attention.query_key_value.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.attention.query_key_value.bias')
@@ -121,11 +119,9 @@ def layer(hidden_states, past_keys_num, beam_idx, attn_mask, layer_idx, ConstDic
     ######### attention part end
     # use_parallel_residual
     assert(USE_PARALLEL_RESIDUAL == True)
-    post_attention_layernorm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/mvn')
     post_attention_layernorm_bias = opset.constant(ConstDict['model.gpt_neox.layers.post_attention_layernorm.bias'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.post_attention_layernorm.bias')
     post_attention_layernorm_weight = opset.constant(ConstDict['model.gpt_neox.layers.post_attention_layernorm.weight'][layer_idx], Type.f32, name=f'model.gpt_neox.layers.{layer_idx}.post_attention_layernorm.weight')
-    post_attention_layernorm_mul = opset.multiply(post_attention_layernorm_mvn, post_attention_layernorm_weight, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/mul')
-    post_attention_layernorm = opset.add(post_attention_layernorm_mul, post_attention_layernorm_bias, auto_broadcast='numpy', name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/add')
+    post_attention_layernorm = opset.mvn_custom(hidden_states, axes=[-1], weight=post_attention_layernorm_weight, bias=post_attention_layernorm_bias, normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name=f'/model/gpt_neox/layers.{layer_idx}/post_attention_layernorm/mvn')
 
     # mlp
     def mlp(states):
@@ -159,11 +155,9 @@ def create_model(ConstDict, quant_dicts):
     for i in range(LAYER_NUM):
         hidden_states = layer(hidden_states, past_keys_num, beam_idx, attn_mask, i, ConstDict, quant_dicts)
     # final_layer_norm
-    final_layer_norm_mvn = opset.mvn(hidden_states, axes=[-1], normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name='/model/gpt_neox/final_layer_norm/mvn')
     final_layer_norm_bias = opset.constant(ConstDict['model.gpt_neox.final_layer_norm.bias'], Type.f32)
     final_layer_norm_weight = opset.constant(ConstDict['model.gpt_neox.final_layer_norm.weight'], Type.f32)
-    final_layer_norm_mul = opset.multiply(final_layer_norm_mvn, final_layer_norm_weight, auto_broadcast='numpy', name='/model/gpt_neox/final_layer_norm/mul')
-    final_layer_norm = opset.add(final_layer_norm_mul, final_layer_norm_bias, auto_broadcast='numpy', name='/model/gpt_neox/final_layer_norm/add')
+    final_layer_norm = opset.mvn_custom(hidden_states, axes=[-1], weight=final_layer_norm_weight, bias=final_layer_norm_bias, normalize_variance=True, eps=LAYER_NORM_EPS, eps_mode="inside_sqrt", name='/model/gpt_neox/final_layer_norm/mvn')
     # embed_out
     embed_out_weight = opset.constant(ConstDict['model.embed_out.weight'], Type.f32)
     name = 'logits'

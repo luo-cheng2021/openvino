@@ -114,6 +114,7 @@ enum class Type {
     Unique,
     GPTNeoxAttn,
     AddCustom,
+    MVNCustom,
 };
 
 enum class Algorithm {

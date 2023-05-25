@@ -109,6 +109,7 @@
 #include "openvino/op/multiclass_nms.hpp"
 #include "openvino/op/multiply.hpp"
 #include "openvino/op/mvn.hpp"
+#include "openvino/op/mvn_custom.hpp"
 #include "openvino/op/negative.hpp"
 #include "openvino/op/non_max_suppression.hpp"
 #include "openvino/op/non_zero.hpp"

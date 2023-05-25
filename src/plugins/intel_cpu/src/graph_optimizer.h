@@ -33,6 +33,7 @@ private:
     void FusePoolingAndFakeQuantize(Graph &graph);
     void FuseConvolutionSumAndConvolutionSumActivation(Graph &graph);
     void FuseMVNAndSimpleOperation(Graph &graph);
+    void FuseMVNCustomAndSimpleOperation(Graph &graph);
     void FuseInterpolateAndSimpleOperation(Graph &graph);
     void FuseNormalizeL2AndSimpleOperation(Graph &graph);
     void FuseReduceAndSimpleOperation(Graph &graph);

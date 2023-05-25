@@ -138,6 +138,10 @@ void GraphOptimizer::ApplyCommonGraphOptimizations(Graph &graph) {
     FuseGPTNeoxAttnAndSimpleOperation(graph);
     graph.RemoveDroppedNodes();
 
+    OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMVNCustomAndSimpleOperation");
+    FuseMVNCustomAndSimpleOperation(graph);
+    graph.RemoveDroppedNodes();
+
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMVNAndSimpleOperation");
     FuseMVNAndSimpleOperation(graph);
     graph.RemoveDroppedNodes();
@@ -842,6 +846,44 @@ void GraphOptimizer::FuseGPTNeoxAttnAndSimpleOperation(Graph &graph) {
             for (auto &parentEdge : parentEdges) {
                 auto p_edge = parentEdge.lock();
                 if (p_edge->getParent()->getType() == Type::GPTNeoxAttn)
+                    continue;
+
+                graph.RemoveEdge(p_edge);
+            }
+        }
+
+        graph.DropNode(childNode);
+    }
+}
+
+void GraphOptimizer::FuseMVNCustomAndSimpleOperation(Graph &graph) {
+    auto& graphNodes = graph.GetNodes();
+
+    auto isSutableParentNode = [](const NodePtr& node) {
+        return node->getType() == Type::MVNCustom && node->getChildEdges().size() == 1;
+    };
+
+    auto parent = graphNodes.begin();
+    while (parent != graphNodes.end()) {
+        auto parentNode = *parent;
+        if (!isSutableParentNode(parentNode)) {
+            parent++;
+            continue;
+        }
+
+        auto childNode = parentNode->getChildEdgeAt(0)->getChild();
+        if (!parentNode->canFuse(childNode)) {
+            parent++;
+            continue;
+        }
+
+        childNode->fuseInto(parentNode);
+
+        if (childNode->getType() == Type::FakeQuantize || childNode->getType() == Type::Eltwise) {
+            auto parentEdges = childNode->parentEdges;
+            for (auto &parentEdge : parentEdges) {
+                auto p_edge = parentEdge.lock();
+                if (p_edge->getParent()->getType() == Type::MVNCustom)
                     continue;
 
                 graph.RemoveEdge(p_edge);

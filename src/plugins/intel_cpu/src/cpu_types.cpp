@@ -207,7 +207,8 @@ const InferenceEngine::details::caseless_unordered_map<std::string, Type> type_t
         { "MHA", Type::MHA},
         { "Unique", Type::Unique},
         { "GPTNeoxAttn", Type::GPTNeoxAttn},
-        { "AddCustom", Type::AddCustom}
+        { "AddCustom", Type::AddCustom},
+        { "MVNCustom", Type::MVNCustom},
 };
 
 Type TypeFromName(const std::string& type) {
@@ -411,6 +412,8 @@ std::string NameFromType(const Type type) {
             return "GPTNeoxAttn";
         case Type::AddCustom:
             return "AddCustom";
+        case Type::MVNCustom:
+            return "MVNCustom";
         default:
             return "Unknown";
     }
