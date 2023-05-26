@@ -271,7 +271,6 @@ void FullyConnected::extractQuantParam() {
     if (getOriginalInputPrecisionAtPort(DATA_ID) != Precision::I8) {
         return;
     }
-    std::cout << "node: " << getName() << "size: " << fusedWith.size() << " output type: " << DnnlExtensionUtils::DataTypeToIEPrecision(outputDataType) << "\n";
     const auto& weight_dims = getInputShapeAtPort(1).getStaticDims();
     auto N = weight_dims[0];
     for (int i = 0; i < fusedWith.size(); ++i) {
@@ -294,7 +293,6 @@ void FullyConnected::extractQuantParam() {
                 } else {
                     memcpy(dequant.get(), quant.data(), quant.size() * sizeof(float));
                 }
-                std::cout << "node: " << getName() << " got dequant param: " << quant[0] << "(" << quant.size() << ")\n";
             }
             continue;
         }
@@ -314,7 +312,6 @@ void FullyConnected::extractQuantParam() {
                 } else {
                     memcpy(requant.get(), quant.data(), quant.size() * sizeof(float));
                 }
-                std::cout << "node: " << getName() << " got requant param: " << quant[0] << "(" << quant.size() << ")\n";
             }
             continue;
         }
