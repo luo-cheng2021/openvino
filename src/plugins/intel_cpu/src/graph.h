@@ -206,6 +206,10 @@ public:
         countersMap[key][4] += 1;
     }
 
+    void resetCounter() {
+        countersMap.clear();
+    }
+
 protected:
     void VisitNode(NodePtr node, std::vector<NodePtr>& sortedNodes);
 
