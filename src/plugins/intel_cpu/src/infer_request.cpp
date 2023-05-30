@@ -186,6 +186,10 @@ void InferRequestBase::InferImpl() {
     ThrowIfCanceled();
 
     graph->PullOutputData(_outputs);
+    static int i = 0;
+    if (++i == 90) {
+        graph->resetCounter();
+    }
 }
 
 std::map<std::string, InferenceEngine::InferenceEngineProfileInfo> InferRequestBase::GetPerformanceCounts() const {

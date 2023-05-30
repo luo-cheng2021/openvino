@@ -190,6 +190,10 @@ public:
         return graphHasDynamicInput;
     }
 
+    void resetCounter() {
+        countersMap.clear();
+    }
+
 protected:
     void VisitNode(NodePtr node, std::vector<NodePtr>& sortedNodes);
 

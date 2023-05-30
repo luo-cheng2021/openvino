@@ -598,6 +598,17 @@ void FullyConnected::setDynamicBatchLim(int lim) {
         setBatchPrimArgs(DNNL_ARG_DST, getChildEdgesAtPort(0)[0]->getMemory().GetPrimitive());
     }
 }
+struct latencys {
+    double total = 0;
+    int64_t times = 0;
+    latencys() {
+
+    }
+    ~latencys() {
+        printf("times %lld, total = %lf\n", times, total);
+    }
+};
+latencys g_latency, g_latency1x1;
 
 void FullyConnected::execute(dnnl::stream strm) {
     if (useFastPath) {
@@ -619,9 +630,16 @@ void FullyConnected::execute(dnnl::stream strm) {
             auto& bias_dims = getParentEdgeAt(2)->getMemoryPtr()->getStaticDims();
             assert(bias_dims[0] == N);
         }
+        g_latency.times++;
+        g_latency1x1.times++;
+        if (g_latency.times == 129 * 90) {
+            g_latency.total = 0;
+            g_latency1x1.total = 0;
+        }
         if (!opsFC_i8xi8.empty()) {
             tensor2D<int8_t> matA(M, K, reinterpret_cast<int8_t*>(src), K * sizeof(int8_t));
             tensor2D<int8_t> matB(N, K, reinterpret_cast<int8_t*>(weight), K * sizeof(int8_t));
+            auto start = std::chrono::high_resolution_clock::now();
             parallel_for(threadNum, [&](size_t tid) {
                 size_t start {0}, end {0};
                 dnnl::impl::balance211(work_amount, threadNum, tid, start, end);
@@ -704,6 +722,11 @@ void FullyConnected::execute(dnnl::stream strm) {
                     }
                 }
             });
+            auto finish = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> total_latency = finish-start;
+            g_latency.total += total_latency.count();
+            if (M == 2)
+                g_latency1x1.total += total_latency.count();
         } else if (!opsFC_BF16xBF16.empty()) {
             tensor2D<bfloat16> matA(M, K, reinterpret_cast<bfloat16*>(src), K * sizeof(bfloat16));
             tensor2D<bfloat16> matB(N, K, reinterpret_cast<bfloat16*>(weight), K * sizeof(bfloat16));

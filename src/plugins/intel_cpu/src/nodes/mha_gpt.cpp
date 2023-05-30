@@ -867,45 +867,55 @@ void MHAGPT::Impl::mha_i8(const ExecParam &param) {
             // q[1, K] * transpose(k[N, K])        ==>
             //     k[N, K] * transpose(q[1, K])    ==>
             //     k[N, K] * q[K, 1]
+            PerfHelper helper(Statis::curStatis->mha[i0][i1].gemv);
             (*gemAvB_ops[threadNum])(matK, reinterpret_cast<int8_t*>(pQIn0_aux), reinterpret_cast<int32_t*>(bufferMatMul0Out_local));
             cvt_i32_f32(reinterpret_cast<float*>(bufferMatMul0Out_local), reinterpret_cast<int32_t*>(bufferMatMul0Out_local), param.key_seq_len);
         } else {
+            PerfHelper helper(Statis::curStatis->mha[i0][i1].matmul1);
             tensor2D<int8_t> matQ(param.query_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pQIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
             tensor2D<float> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<float*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(float), 64));
             amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQK);
             (*qKtrGemm_ops[threadNum])(matQ, matK, 0, param.query_seq_len, pp);
         }
 
-        auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : &mul_scales);
-        auto pMatMul0Out = bufferMatMul0Out_local;
-        // loop along K dimension
-        auto valid_softmax_items = param.first_valid_softmax_items;
-        for (size_t m = 0; m < param.query_seq_len; m++) {
-            jit_mul_add_softmax_call_args call_args;
-            call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
-            call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
-            call_args.p_add_in1 = pAddIn1_aux;
-            call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(int8_t), 64);
-            call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
-            call_args.p_scales0 = fqScales1.data();
-            call_args.p_scales1 = &param.qk_quant;
-            call_args.work_amount = valid_softmax_items;
+        {
+            PerfHelper helper(Statis::curStatis->mha[i0][i1].mulAddSoftmaxKernel);
+            auto pMulIn1 = reinterpret_cast<float*>(mulScales.empty() ? nullptr : &mul_scales);
+            auto pMatMul0Out = bufferMatMul0Out_local;
+            // loop along K dimension
+            auto valid_softmax_items = param.first_valid_softmax_items;
+            for (size_t m = 0; m < param.query_seq_len; m++) {
+                jit_mul_add_softmax_call_args call_args;
+                call_args.p_in0 = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
+                call_args.p_mul_in1 = mulScales.size() > 1 ? pMulIn1 + i1 : pMulIn1;
+                call_args.p_add_in1 = pAddIn1_aux;
+                call_args.p_out = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(int8_t), 64);
+                call_args.p_buffer = pMatMul0Out + m * rnd_up(param.key_seq_len * sizeof(float), 64);
+                call_args.p_scales0 = fqScales1.data();
+                call_args.p_scales1 = &param.qk_quant;
+                call_args.work_amount = valid_softmax_items;
 
-            (*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
-            // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
-            if (param.key_seq_len > valid_softmax_items) {
-                auto *invalidPtr = static_cast<int8_t*>(call_args.p_out) + valid_softmax_items;
-                memset(invalidPtr, 0, (param.key_seq_len - valid_softmax_items) * _create_param.qkv_precision.size());
-                valid_softmax_items = std::min(valid_softmax_items + 1, param.key_seq_len);
+                (*mulAddSoftmaxKernel[valid_softmax_items % vec_size])(&call_args);
+                // attn_scores = torch.where(causal_mask, attn_scores, mask_value)
+                if (param.key_seq_len > valid_softmax_items) {
+                    auto *invalidPtr = static_cast<int8_t*>(call_args.p_out) + valid_softmax_items;
+                    memset(invalidPtr, 0, (param.key_seq_len - valid_softmax_items) * _create_param.qkv_precision.size());
+                    valid_softmax_items = std::min(valid_softmax_items + 1, param.key_seq_len);
+                }
             }
         }
         auto pOut_aux = pout + (i0 * param.batch_stride_in_attn + i1 * param.head_stride_in_attn) * outPrcSize;
-        tensor2D<uint8_t> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<uint8_t*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(uint8_t), 64));
-        tensor2D<int8_t> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pVIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
-        tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size_aligned * sizeof(float));
-        amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQKV);
-        (*qKVGemm_ops[threadNum])(matQK, matV, 0, _create_param.head_size, pp);
+        {
+            PerfHelper helper(Statis::curStatis->mha[i0][i1].matmul2);
+            tensor2D<uint8_t> matQK(param.query_seq_len, param.key_seq_len, reinterpret_cast<uint8_t*>(bufferMatMul0Out_local), rnd_up(param.key_seq_len * sizeof(uint8_t), 64));
+            tensor2D<int8_t> matV(param.key_seq_len, _create_param.head_size, reinterpret_cast<int8_t*>(pVIn0_aux), _create_param.head_size_aligned * sizeof(int8_t));
+            tensor2D<float> matQKV(param.query_seq_len, _create_param.head_size, reinterpret_cast<float*>(bufferMatMul1Out_local), _create_param.head_size_aligned * sizeof(float));
+            amx_kernel::PP::BiasGeluStore<float, amx_kernel::PP::Steps::NONE> pp(matQKV);
+            (*qKVGemm_ops[threadNum])(matQK, matV, 0, _create_param.head_size, pp);
+        }
         if (convertReorderKernel) {
+            PerfHelper helper(Statis::curStatis->mha[i0][i1].convertReorderKernel);
+
             // matmul1: [batch, num_heads, query_seq_len, head_size]
             // attn_output: [batch, query_seq_len, num_heads * head_size]
             jit_convert_reorder_call_args call_args;

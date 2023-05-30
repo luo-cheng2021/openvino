@@ -13,6 +13,7 @@
 #include <cpu/x64/matmul/brgemm_matmul_copy_utils.hpp>
 #include <cpu/x64/matmul/brgemm_matmul_utils.hpp>
 #include <cpu/x64/amx_tile_configure.hpp>
+#include "small_vector.h"
 
 namespace ov {
 namespace intel_cpu {
@@ -68,8 +69,8 @@ public:
         size_t batch, query_seq_len, key_seq_len;
         size_t first_valid_softmax_items; // only for 1x300: valid items in 1st row, next row will be increased by 1
         uint8_t* q;
-        std::vector<uint8_t*>& k;
-        std::vector<uint8_t*>& v;
+        sv::small_vector<uint8_t*, 4>& k;
+        sv::small_vector<uint8_t*, 4>& v;
         float* attention_mask;
         uint8_t* attn_output;
         size_t head_stride_in_q;            // q stride for next head
@@ -95,6 +96,33 @@ public:
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;
+};
+
+struct Statis {
+    Statis(const char* name) {
+        nameStatis = name;
+    }
+    void show();
+    void reset();
+    ~Statis() { show(); }
+
+    static Statis* curStatis;
+
+    const char* nameStatis;
+    PerfCount MHATotal;
+    PerfCount total;
+    PerfCount updateAttnMask;
+    PerfCount getOrCreateStore;
+    PerfCount rotatyAndTranspose;
+    struct MHA {
+        PerfCount gemv;
+        PerfCount matmul1;
+        PerfCount brgCopyBKernel1;
+        PerfCount callBrgemm0;
+        PerfCount mulAddSoftmaxKernel;
+        PerfCount matmul2;
+        PerfCount convertReorderKernel;
+    } mha[2][32];
 };
 
 }   // namespace gpt
