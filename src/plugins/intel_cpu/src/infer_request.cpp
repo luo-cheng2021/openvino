@@ -204,10 +204,8 @@ void InferRequestBase::InferImpl() {
     graph->PullOutputData(_outputs);
     end = std::chrono::steady_clock::now();
     graph->update("PullOutputData", std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
-    static int i = 0;
-    if (++i == 90) {
-        graph->resetCounter();
-    }
+
+    graph->resetCounter();
 }
 
 std::map<std::string, InferenceEngine::InferenceEngineProfileInfo> InferRequestBase::GetPerformanceCounts() const {

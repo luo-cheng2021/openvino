@@ -206,8 +206,11 @@ public:
         countersMap[key][4] += 1;
     }
 
+    int64_t inferCount = 0;
     void resetCounter() {
-        countersMap.clear();
+        if (++inferCount == 90) {
+            countersMap.clear();
+        }
     }
 
 protected:

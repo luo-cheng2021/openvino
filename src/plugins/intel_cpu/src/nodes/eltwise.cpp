@@ -2149,10 +2149,10 @@ void Eltwise::initSupportedPrimitiveDescriptors() {
         return;
 #endif
 
-    if (isChannelsFirstApplicable)
-        supportedPrimitiveDescriptors.emplace_back(initDesc(ChannelsFirst));
-    if (isBlockedApplicable)
-        supportedPrimitiveDescriptors.emplace_back(initDesc(Blocked));
+    // if (isChannelsFirstApplicable)
+    //     supportedPrimitiveDescriptors.emplace_back(initDesc(ChannelsFirst));
+    // if (isBlockedApplicable)
+    //     supportedPrimitiveDescriptors.emplace_back(initDesc(Blocked));
     supportedPrimitiveDescriptors.emplace_back(initDesc(Planar));
 }
 
