@@ -10,6 +10,8 @@ ie_dependent_option (ENABLE_INTEL_CPU "CPU plugin for OpenVINO Runtime" ON "RISC
 
 ie_dependent_option (ENABLE_ARM_COMPUTE_CMAKE "Enable ARM Compute build via cmake" OFF "ENABLE_INTEL_CPU" OFF)
 
+ie_dependent_option (ENABLE_LLMDNN "Enable library for LLM in CPU plugin, need intel compiler 2023.0+" OFF "ENABLE_INTEL_CPU" OFF)
+
 ie_option (ENABLE_TESTS "unit, behavior and functional tests" OFF)
 
 ie_option (ENABLE_COMPILE_TOOL "Enables compile_tool" ON)
