@@ -458,6 +458,7 @@ std::string Node::getPrimitiveDescriptorType() {
     SEARCH_TYPE(acl);
     SEARCH_TYPE(_dw);
     SEARCH_TYPE(_1x1);
+    SEARCH_TYPE(llmdnn);
 
     if (type == impl_desc_type::unknown)
         str_type = "unknown";
