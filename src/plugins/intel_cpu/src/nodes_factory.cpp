@@ -92,6 +92,7 @@
 #include "nodes/mha.h"
 #include "nodes/unique.hpp"
 #include "nodes/ngram.h"
+#include "nodes/gpt_attn.h"
 
 namespace ov {
 namespace intel_cpu {
@@ -197,6 +198,7 @@ Node::NodesFactory::NodesFactory()
     INTEL_CPU_NODE(Interaction, Type::Interaction);
     INTEL_CPU_NODE(MHA, Type::MHA);
     INTEL_CPU_NODE(Snippet, Type::Subgraph);
+    INTEL_CPU_NODE(GPTAttn, Type::GPTAttn);
 #endif
 }
 

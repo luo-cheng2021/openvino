@@ -66,6 +66,7 @@
 #include "openvino/op/gather_tree.hpp"
 #include "openvino/op/gelu.hpp"
 #include "openvino/op/generate_proposals.hpp"
+#include "openvino/op/gpt_attn.hpp"
 #include "openvino/op/greater.hpp"
 #include "openvino/op/greater_eq.hpp"
 #include "openvino/op/grid_sample.hpp"

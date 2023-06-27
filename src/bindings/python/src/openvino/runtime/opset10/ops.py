@@ -171,3 +171,47 @@ def unique(
         "count_element_type": count_element_type,
     }
     return _get_node_factory_opset10().create("Unique", inputs, attributes)
+
+
+@nameable_op
+def gpt_attn(
+    qkv: NodeInput,
+    past_keys_num: NodeInput,
+    beam_idx: NodeInput,
+    attn_mask: NodeInput,
+    position_ids: NodeInput,
+    layer_num,
+    head_num,
+    size_per_head,
+    rotary_emb_base,
+    rotary_pct,
+    cur_layer_num,
+    max_seq_len,
+    use_position2d,
+    q_quant = 0.0,
+    k_quant = 0.0,
+    qk_quant = 0.0,
+    v_quant = 0.0,
+    name: Optional[str] = None,
+) -> Node:
+    """ TODO
+    :param name:                (Optional) A name for the output node. Default value: None.
+    :return: Node representing gpt_attn operation.
+    """
+    inputs = as_nodes(qkv, past_keys_num, beam_idx, attn_mask, position_ids)
+
+    attributes = {
+        "layer_num": layer_num,
+        "head_num": head_num,
+        "size_per_head": size_per_head,
+        "rotary_emb_base": rotary_emb_base,
+        "rotary_pct": rotary_pct,
+        "cur_layer_num": cur_layer_num,
+        "max_seq_len": max_seq_len,
+        "use_position2d": use_position2d,
+        "q_quant": q_quant,
+        "k_quant": k_quant,
+        "qk_quant": qk_quant,
+        "v_quant": v_quant
+    }
+    return _get_node_factory_opset10().create("GPTAttn", inputs, attributes)

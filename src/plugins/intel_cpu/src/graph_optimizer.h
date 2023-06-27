@@ -27,6 +27,7 @@ private:
     void MergeConvertAndScaleShift(Graph& graph);
     void FuseFullyConnectedAndSimpleOperation(Graph &graph);
     void FuseMatMulAndSimpleOperation(Graph &graph);
+    void FuseGPTAttnAndSimpleOperation(Graph &graph);
     void FuseConvolutionAndSimpleOperationThroughMaxPool(Graph &graph);
     void FuseConvolutionAndSimpleOperation(Graph &graph);
     void FuseConvolutionAndDWConvolution(Graph &graph);

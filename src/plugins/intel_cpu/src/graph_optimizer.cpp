@@ -21,6 +21,7 @@
 #include "nodes/reduce.h"
 #include "nodes/input.h"
 #include "nodes/rnn.h"
+#include "nodes/gpt_attn.h"
 #include "nodes/common/cpu_convert.h"
 
 #include "onednn/dnnl.h"
@@ -140,6 +141,10 @@ void GraphOptimizer::ApplyCommonGraphOptimizations(Graph &graph) {
 
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMatMulAndSimpleOperation");
     FuseMatMulAndSimpleOperation(graph);
+    graph.RemoveDroppedNodes();
+
+    OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseGPTAttnAndSimpleOperation");
+    FuseGPTAttnAndSimpleOperation(graph);
     graph.RemoveDroppedNodes();
 
     OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, "FuseMVNAndSimpleOperation");
@@ -932,6 +937,44 @@ void GraphOptimizer::FuseMatMulAndSimpleOperation(Graph &graph) {
             for (auto &parentEdge : parentEdges) {
                 auto p_edge = parentEdge.lock();
                 if (p_edge->getParent()->getType() == Type::MatMul)
+                    continue;
+
+                graph.RemoveEdge(p_edge);
+            }
+        }
+
+        graph.DropNode(childNode);
+    }
+}
+
+void GraphOptimizer::FuseGPTAttnAndSimpleOperation(Graph &graph) {
+    auto& graphNodes = graph.GetNodes();
+
+    auto isSutableParentNode = [](const NodePtr& node) {
+        return node->getType() == Type::GPTAttn && node->getChildEdges().size() == 1;
+    };
+
+    auto parent = graphNodes.begin();
+    while (parent != graphNodes.end()) {
+        auto parentNode = *parent;
+        if (!isSutableParentNode(parentNode)) {
+            parent++;
+            continue;
+        }
+
+        auto childNode = parentNode->getChildEdgeAt(0)->getChild();
+        if (!parentNode->canFuse(childNode)) {
+            parent++;
+            continue;
+        }
+
+        childNode->fuseInto(parentNode);
+
+        if (childNode->getType() == Type::FakeQuantize || childNode->getType() == Type::Eltwise) {
+            auto parentEdges = childNode->parentEdges;
+            for (auto &parentEdge : parentEdges) {
+                auto p_edge = parentEdge.lock();
+                if (p_edge->getParent()->getType() == Type::GPTAttn)
                     continue;
 
                 graph.RemoveEdge(p_edge);

@@ -77,6 +77,7 @@
 #include "ngraph/op/gather_tree.hpp"
 #include "ngraph/op/gelu.hpp"
 #include "ngraph/op/generate_proposals.hpp"
+#include "ngraph/op/gpt_attn.hpp"
 #include "ngraph/op/greater.hpp"
 #include "ngraph/op/greater_eq.hpp"
 #include "ngraph/op/grid_sample.hpp"
