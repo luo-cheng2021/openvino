@@ -367,7 +367,7 @@ if(ENABLE_INTEL_GNA)
     endif()
 endif()
 
-if (ENABLE_CPU_EXTENSIONS)
+if (ENABLE_CPU_EXTENSIONS0)
     reset_deps_cache(cpu_extensions_DIR)
 
     if(LINUX AND X86_64)
