@@ -109,6 +109,8 @@ private:
     bool tryExtractParamForLLMFc(llmdnn::fc_create_param& param);
     bool tryUseLLMFc();
     bool tryExecLLMFc();
+    MemoryPtr castMemoryPtr(MemoryPtr, const InferenceEngine::Precision);
+    void tryCompressWeightForLLMFc();
 
     std::vector<std::shared_ptr<llmdnn::fc_kernel>> fcLLMs;
     enum StateLLMFc {
@@ -120,6 +122,7 @@ private:
     std::shared_ptr<float> dequant;
     std::shared_ptr<float> requant;
     std::shared_ptr<float> biasRnd;
+    VectorDims weightDims;
 #endif
 };
 
