@@ -953,7 +953,7 @@ bool FullyConnected::useSparseWeightsDecompression() {
 }
 
 #ifdef OV_CPU_WITH_LLMDNN
-bool FullyConnected::tryExtractParamForLLMFc(llmdnn::fc_create_param& param) {
+bool FullyConnected::tryExtractParamForLLMFc(llmdnn::fc_create_param& param, MemoryPtr weightPtr) {
     if (!dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core_amx))
         return false;
 
@@ -1018,7 +1018,6 @@ bool FullyConnected::tryExtractParamForLLMFc(llmdnn::fc_create_param& param) {
             // compute q/dq
             auto p = getenv("USE_INT8_WEIGHT");
             if (p && p[0] == '1') {
-                auto weightPtr = castMemoryPtr(getParentEdgeAt(WEIGHTS_ID)->getMemoryPtr(), data_type);
                 auto* weight = reinterpret_cast<bfloat16*>(weightPtr->GetPtr());
                 auto& weight_dims = weightPtr->getStaticDims();
                 llmdnn::fc_kernel_bf16w8_get_q_dq(weight_dims[0], weight_dims[1], weight_dims[1] * sizeof(bfloat16), weight, &param.q, &param.dq);
@@ -1130,18 +1129,14 @@ MemoryPtr FullyConnected::castMemoryPtr(MemoryPtr memPtr, const InferenceEngine:
     return newMemPtr;
 }
 
-void FullyConnected::tryCompressWeightForLLMFc() {
-    const auto inPrec = getOriginalInputPrecisionAtPort(DATA_ID);
-    bool needCompress = dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core_amx) &&
-        one_of(inPrec, InferenceEngine::Precision::BF16);
-    // weight
-    // If the input precision is fp32 on SPR, the weight will be cast to bf16 for acceleration. 
-    auto weightPtr = needCompress ?
-        castMemoryPtr(getParentEdgeAt(WEIGHTS_ID)->getMemoryPtr(), inPrec) :
-        getParentEdgeAt(WEIGHTS_ID)->getMemoryPtr();
-    weightDims = weightPtr->getStaticDims();
-    void* weight = weightPtr->GetPtr();
-
+/*
+ Invoke the llmdnn FC kernel.
+ - In the very first execution round, the BF16 weight is needed to initialize the kernel.
+   Becides, the weight will be repacked and cached in kernel.
+ - In the other execution rounds, the weight is not needed at all since the it has been cached in the first run.
+   So, just passing the `nullptr` is OK.
+ */
+void FullyConnected::primExecLLMFc(void* weight) {
     // src
     auto& srcPtr = getParentEdgeAt(DATA_ID)->getMemoryPtr();
     auto* src = srcPtr->GetPtr();
@@ -1186,8 +1181,16 @@ bool FullyConnected::tryUseLLMFc() {
     if (stateLLMFc != Not_Init)
         return stateLLMFc == State_Use;
 
+    // weight
+    // If the input precision is fp32 on SPR, the weight will be cast to bf16 for acceleration.
+    // Also, it can be used for tryExetractParamForLLMFc and llmdnn kernel initialize.
+    const auto inPrec = getOriginalInputPrecisionAtPort(DATA_ID);
+    auto weightPtr = castMemoryPtr(getParentEdgeAt(WEIGHTS_ID)->getMemoryPtr(), inPrec);
+    weightDims = weightPtr->getStaticDims();
+    void* weight = weightPtr->GetPtr();
+
     llmdnn::fc_create_param param;
-    if (!tryExtractParamForLLMFc(param)) {
+    if (!tryExtractParamForLLMFc(param, weightPtr)) {
         stateLLMFc = State_NotUse;
         return false;
     }
@@ -1207,7 +1210,7 @@ bool FullyConnected::tryUseLLMFc() {
         stateLLMFc = State_Use;
         NodeDesc *selected_pd = getSelectedPrimitiveDescriptor();
         selected_pd->setImplementationType(gemm_llmdnn);
-        tryCompressWeightForLLMFc();
+        primExecLLMFc(weight);
     } else {
         // fallback
         stateLLMFc = State_NotUse;
@@ -1222,40 +1225,7 @@ bool FullyConnected::tryExecLLMFc() {
         return false;
 
     void* weight = nullptr;
-    auto& srcPtr = getParentEdgeAt(DATA_ID)->getMemoryPtr();
-    auto* src = srcPtr->GetPtr();
-    auto* dst = getChildEdgeAt(0)->getMemoryPtr()->GetPtr();
-    auto& data_dims = srcPtr->getStaticDims();
-    // M, K, N
-    auto M = data_dims[0];
-    auto K = weightDims[1];
-    auto N = weightDims[0];
-    if (data_dims.size() == 3) {
-        M *= data_dims[1];
-        assert(K == data_dims[2]);
-    } else {
-        assert(K == data_dims[1]);
-    }
-    auto work_amount = rnd_up(N, 32) / 32;
-    float* bias = nullptr;
-    if (withBiases) {
-        bias = biasRnd.get();
-    }
-    auto thread_num = fcLLMs.size();
-    size_t lda, ldb, ldc;
-    lda = K * dnnl::memory::data_type_size(inputDataType);
-    ldb = K * dnnl::memory::data_type_size(inputDataType);
-    ldc = N * dnnl::memory::data_type_size(outputDataType);
-    parallel_for(thread_num, [&](size_t tid) {
-        size_t start {0}, end {0};
-        dnnl::impl::balance211(work_amount, thread_num, tid, start, end);
-        size_t n0 = start * 32;
-        size_t n1 = std::min(end * 32, N);
-        if (n0 >= N) return;
-
-        llmdnn::fc_kernel_execute(fcLLMs[tid].get(), src, weight, dst, lda, ldb, ldc, M, N, K, n0, n1,
-            dequant.get(), requant.get(), bias);
-    });
+    primExecLLMFc(weight);
 
     return true;
 }
