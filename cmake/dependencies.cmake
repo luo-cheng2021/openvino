@@ -367,15 +367,16 @@ if(ENABLE_INTEL_GNA)
     endif()
 endif()
 
+# TODO
 if (ENABLE_CPU_EXTENSIONS)
     reset_deps_cache(cpu_extensions_DIR)
 
     if(LINUX AND X86_64)
         RESOLVE_DEPENDENCY(CPU_EXTENSIONS
-                ARCHIVE_LIN "cpu_extensions_20230717_lin.tgz"
+                ARCHIVE_LIN "cpu_extensions_20230719_lin.tgz"
                 TARGET_PATH "${TEMP}/cpu_extensions"
                 ENVIRONMENT "cpu_extensions_DIR"
-                SHA256 "7a851c27dbac7192edeb4f95d1f9dba490cb2fd60e40fb2ef4205d17c213aafc"
+                SHA256 "c1d41df6a9adf4b11ff827cfc3cf760cbcfdcc8a749c606c37e6de6bfd4b4774"
                 USE_NEW_LOCATION TRUE)
     else()
         message(FATAL_ERROR "cpu_extensions is not available on current platform (OS = ${CMAKE_SYSTEM_NAME}, glibc ${OV_GLIBC_VERSION})")

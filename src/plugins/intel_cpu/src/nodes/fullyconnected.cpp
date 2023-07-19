@@ -189,6 +189,11 @@ FullyConnected::FullyConnected(const std::shared_ptr<ngraph::Node>& op, const Gr
         if (primitives_priority_attr.find("gemm_llmdnn") == std::string::npos)
             stateLLMFc = State_NotUse;
     }
+    auto p = std::getenv("USE_FC");
+    if (p) {
+        if (p[0] == '0')
+            stateLLMFc = State_NotUse;
+    }
 #endif
 }
 
@@ -972,11 +977,7 @@ bool FullyConnected::tryExtractParamForLLMFc(llmdnn::fc_create_param& param) {
     if ((data_type == Precision::BF16 && K < 32) ||
         (data_type == Precision::I8 && K < 64) ||
         // TODO: add int8 support
-        (data_type != Precision::BF16) ||
-        (!isDynamicNode()) ||
-        // 1 stream on 1+ numa node. Limitation: weights do not share among with multiple
-        //   streams inside a numa because LLM will run with few streams.
-        (context->getConfig().streamExecutorConfig._streams > get_num_numa_nodes()))
+        (data_type != Precision::BF16))
         return false;
 
     auto tryExtractBias = [&] () {
@@ -1135,7 +1136,7 @@ void FullyConnected::tryCompressWeightForLLMFc() {
     bool needCompress = dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::avx512_core_amx) &&
         one_of(inPrec, InferenceEngine::Precision::BF16);
     // weight
-    // If the input precision is fp32 on SPR, the weight will be cast to bf16 for acceleration. 
+    // If the input precision is fp32 on SPR, the weight will be cast to bf16 for acceleration.
     auto weightPtr = needCompress ?
         castMemoryPtr(getParentEdgeAt(WEIGHTS_ID)->getMemoryPtr(), inPrec) :
         getParentEdgeAt(WEIGHTS_ID)->getMemoryPtr();
