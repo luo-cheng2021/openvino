@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "vnode_utils.hpp"
+#include "vnode_attn_softmax.hpp"
 
 #include <float.h>
 
@@ -290,9 +290,9 @@ inline void scale_add2_reduce_max(float* a,
         if (dispatch_id & 0x001) {
             auto v_maski8 = _mm_loadu_si128(reinterpret_cast<__m128i const*>(causal_mask + i));
             auto v_maski32 = _mm256_cvtepi8_epi32(v_maski8);
-            v_maski32 = _mm256_cmpeq_epi32(v_maski32, v_zeroi32);     // ==0
-            v_maski32 = _mm256_xor_si256(v_maski32, v_mask_xor);      // reverse, mask at ==0
-            v_a = _mm256_blendv_ps(v_nfltmax, v_a, _mm256_castsi256_ps(v_maski32));   // mask => -FLT_MAX
+            v_maski32 = _mm256_cmpeq_epi32(v_maski32, v_zeroi32);                    // ==0
+            v_maski32 = _mm256_xor_si256(v_maski32, v_mask_xor);                     // reverse, mask at ==0
+            v_a = _mm256_blendv_ps(v_nfltmax, v_a, _mm256_castsi256_ps(v_maski32));  // mask => -FLT_MAX
         }
 
         v_max = _mm256_max_ps(v_max, v_a);
@@ -319,9 +319,9 @@ inline void scale_add2_reduce_max(float* a,
         if (dispatch_id & 0x001) {
             auto v_maski8 = _mm_loadu_si128(reinterpret_cast<__m128i const*>(causal_mask + i));
             auto v_maski32 = _mm256_cvtepi8_epi32(v_maski8);
-            v_maski32 = _mm256_cmpeq_epi32(v_maski32, v_zeroi32);     // ==0
-            v_maski32 = _mm256_xor_si256(v_maski32, v_mask_xor);      // reverse, mask at ==0
-            v_a = _mm256_blendv_ps(v_nfltmax, v_a, _mm256_castsi256_ps(v_maski32));   // mask => -FLT_MAX
+            v_maski32 = _mm256_cmpeq_epi32(v_maski32, v_zeroi32);                    // ==0
+            v_maski32 = _mm256_xor_si256(v_maski32, v_mask_xor);                     // reverse, mask at ==0
+            v_a = _mm256_blendv_ps(v_nfltmax, v_a, _mm256_castsi256_ps(v_maski32));  // mask => -FLT_MAX
         }
 
         v_a = _mm256_blendv_ps(v_max, v_a, _mm256_castsi256_ps(mask));
@@ -520,14 +520,14 @@ inline void multiply_scalar(float* a, const float val, const size_t size) {
 #endif
 }
 
-void scale_add_softmax(float* a,
-                       float scale,
-                       float* alibi,
-                       float* attn_mask,
-                       uint8_t* causal_mask,
-                       bool select_nfltmax_at_0,
-                       size_t len,
-                       size_t total_size) {
+void attn_softmax(float* a,
+                  float scale,
+                  float* alibi,
+                  float* attn_mask,
+                  uint8_t* causal_mask,
+                  bool select_nfltmax_at_0,
+                  size_t len,
+                  size_t total_size) {
     float max = std::numeric_limits<float>::lowest();
 
     int dispatch = (alibi ? 0x100 : 0) | (attn_mask ? 0x010 : 0) | (causal_mask ? 0x001 : 0);

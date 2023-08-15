@@ -30,6 +30,8 @@
 namespace ov {
 namespace intel_cpu {
 
+#ifdef CPU_DEBUG_CAPS
+
 template <typename... Args>
 static inline void _verbose_log(Args&&... args) {
     std::stringstream ss;
@@ -39,10 +41,6 @@ static inline void _verbose_log(Args&&... args) {
     std::cout << ss.str();
 }
 
-// uncomment following macro definition to enable matcher debug
-//#define GENPATTERN_VERBOSE
-
-#ifdef GENPATTERN_VERBOSE
 extern const int _matcher_verbose;
 #    define _VERBOSE_LOG(...) \
         if (_matcher_verbose) \
@@ -66,6 +64,24 @@ inline std::vector<std::string> split_string(const std::string& s, const std::st
     return ret;
 }
 
+template <typename T>
+std::string vec2str(const std::vector<T>& vec, int cnt_limit = 9) {
+    std::stringstream ss;
+    ss << "{";
+    const char* sep = "";
+    for (auto& v : vec) {
+        cnt_limit--;
+        if (cnt_limit == 0) {
+            ss << sep << "...";
+            break;
+        }
+        ss << sep << v;
+        sep = ",";
+    }
+    ss << "}";
+    return ss.str();
+}
+
 struct values_info {
     values_info(const char* pattern_list = nullptr) {
         if (pattern_list == nullptr || pattern_list[0] == 0) {
@@ -78,9 +94,14 @@ struct values_info {
                 all_type_pshape.emplace_back(ov::element::dynamic, ov::PartialShape(pattern));
             } else {
                 auto sep = pattern.find("[");
-                assert(sep != std::string::npos);
-                all_type_pshape.emplace_back(ov::element::Type(pattern.substr(0, sep)),
-                                             ov::PartialShape(pattern.substr(sep)));
+                if (sep != std::string::npos) {
+                    // ele_type[p_shape]
+                    all_type_pshape.emplace_back(ov::element::Type(pattern.substr(0, sep)),
+                                                 ov::PartialShape(pattern.substr(sep)));
+                } else {
+                    // ele_type
+                    all_type_pshape.emplace_back(ov::element::Type(pattern), ov::PartialShape::dynamic());
+                }
             }
         }
     }
@@ -119,75 +140,9 @@ struct values_info {
     std::vector<std::pair<ov::element::Type, ov::PartialShape>> all_type_pshape;
 };
 
-struct attr {
-    attr() = default;
-    attr(const char* name, const char* v) : name(name) {
-        type = 0;
-        value.str = v;
-    }
-    attr(const char* name, int v) : name(name) {
-        type = 1;
-        value.i32 = v;
-    }
-    attr(const char* name, float v) : name(name) {
-        type = 2;
-        value.f32 = v;
-    }
-    attr(const char* name, double v) : name(name) {
-        type = 2;
-        value.f32 = v;
-    }
-    attr(const char* name, std::initializer_list<int64_t> v) : name(name) {
-        type = 3;
-        vec_i64 = v;
-    }
-    bool predicate(int v) const {
-        bool ret = (type == 1 && v == value.i32);
-        return ret;
-    }
-    bool predicate(int64_t v) const {
-        bool ret = (type == 1 && v == value.i32);
-        return ret;
-    }
-    bool predicate(float v) const {
-        bool ret = (type == 2 && v == value.f32);
-        return ret;
-    }
-    bool predicate(double v) const {
-        bool ret = (type == 2 && v == value.f32);
-        return ret;
-    }
-    bool predicate(const std::string& v) const {
-        bool ret = (type == 0 && v == value.str);
-        return ret;
-    }
-    bool predicate(const std::vector<int64_t>& v) const {
-        bool ret = (type == 3 && v == vec_i64);
-        return ret;
-    }
-    std::string to_string() const {
-        std::stringstream ss;
-        ss << name << ":";
-        if (type == 0)
-            ss << value.str;
-        if (type == 1)
-            ss << value.i32;
-        if (type == 2)
-            ss << value.f32;
-        return ss.str();
-    }
-    const char* name;
-    union {
-        const char* str;
-        int i32;
-        float f32;
-    } value;
-    std::vector<int64_t> vec_i64;
-    int type;
-};
-
-bool attr_compatible(ov::Node& node, const std::vector<attr>& attr);
-
+// Symbol : a constant that unknown at the pattern's building time
+//          but collected and validated after pattern was matched
+//          with some sub-graph values.
 class Symbol {
 private:
     struct Entity {
@@ -260,7 +215,7 @@ public:
     void* get_id() {
         return entity.get();
     }
-    const char* get_name() {
+    const char* get_name() const {
         return entity->name;
     }
 };
@@ -284,6 +239,107 @@ inline Symbol sqrt(Symbol lhs) {
     return Symbol('r', lhs, lhs);
 }
 
+struct attr {
+    const char* name;
+    union {
+        const char* str;
+        int i32;
+        float f32;
+    } value;
+    Symbol sym;
+    std::vector<int64_t> vec_i64;
+    enum class Type {
+        STR = 0,
+        I32 = 1,
+        F32 = 2,
+        VI64 = 3,
+        SYM = 4,
+        NONE = 999,
+    } type;
+
+    double predicate_with;
+    bool is_predicate_set = false;
+
+    attr() = default;
+    attr(const char* name, const char* v) : name(name) {
+        type = Type::STR;
+        value.str = v;
+    }
+    attr(const char* name, int v) : name(name) {
+        type = Type::I32;
+        value.i32 = v;
+    }
+    attr(const char* name, float v) : name(name) {
+        type = Type::F32;
+        value.f32 = v;
+    }
+    attr(const char* name, double v) : name(name) {
+        type = Type::F32;
+        value.f32 = v;
+    }
+    attr(const char* name, std::initializer_list<int64_t> v) : name(name) {
+        type = Type::VI64;
+        vec_i64 = v;
+    }
+    attr(const char* name, Symbol v) : name(name) {
+        type = Type::SYM;
+        sym = v;
+    }
+
+    bool predicate(int v) {
+        if (lazy_predicate(v))
+            return true;
+        return (type == Type::I32 && v == value.i32);
+    }
+    bool predicate(int64_t v) {
+        if (lazy_predicate(v))
+            return true;
+        return (type == Type::I32 && v == value.i32);
+    }
+    bool predicate(float v) {
+        if (lazy_predicate(v))
+            return true;
+        return (type == Type::F32 && v == value.f32);
+    }
+    bool predicate(double v) {
+        if (lazy_predicate(v))
+            return true;
+        return (type == Type::F32 && v == value.f32);
+    }
+    bool predicate(const std::string& v) {
+        return (type == Type::STR && v == value.str);
+    }
+    bool predicate(const std::vector<int64_t>& v) {
+        return (type == Type::VI64 && v == vec_i64);
+    }
+    std::string to_string() const {
+        std::stringstream ss;
+        ss << name << ":";
+        if (type == Type::STR)
+            ss << value.str;
+        if (type == Type::I32)
+            ss << value.i32;
+        if (type == Type::F32)
+            ss << value.f32;
+        if (type == Type::VI64)
+            ss << vec2str(vec_i64);
+        if (type == Type::SYM)
+            ss << sym.get_name();
+        return ss.str();
+    }
+
+private:
+    bool lazy_predicate(double v) {
+        if (type != Type::SYM)
+            return false;
+        predicate_with = v;
+        is_predicate_set = true;
+        return true;
+    }
+};
+
+bool attr_compatible(ov::Node& node, std::vector<attr>& attr);
+
 inline std::shared_ptr<Node> GenInput(values_info vt = nullptr) {
     return ov::pass::pattern::any_input([vt](const Output<Node>& value) {
         if (!vt.predicate(value)) {
@@ -295,31 +351,17 @@ inline std::shared_ptr<Node> GenInput(values_info vt = nullptr) {
     });
 }
 
-template <typename T>
-std::string vec2str(const std::vector<T>& vec, int cnt_limit = 9) {
-    std::stringstream ss;
-    ss << "{";
-    const char* sep = "";
-    for (auto& v : vec) {
-        cnt_limit--;
-        if (cnt_limit == 0) {
-            ss << sep << "...";
-            break;
-        }
-        ss << sep << v;
-        sep = ",";
-    }
-    ss << "}";
-    return ss.str();
-}
-
 class GenericPattern : public ov::pass::pattern::op::Pattern {
 public:
     OPENVINO_RTTI("GenericPattern");
 
-    explicit GenericPattern(const OutputVector& patterns, const ov::pass::pattern::op::ValuePredicate& pred)
-        : ov::pass::pattern::op::Pattern(patterns, pred) {
+    explicit GenericPattern(const OutputVector& patterns = {}) : ov::pass::pattern::op::Pattern(patterns) {
         set_output_type(0, element::Type_t::dynamic, PartialShape::dynamic());
+    }
+
+    // this allows code inside pred to access pattern node itself
+    void set_predicate(ov::pass::pattern::op::ValuePredicate pred) {
+        m_predicate = pred;
     }
 
     bool match_value(ov::pass::pattern::Matcher* matcher,
@@ -423,8 +465,9 @@ struct GenPatternNode {
     template <typename T, typename std::enable_if<std::is_arithmetic<T>::value, bool>::type = true>
     static std::shared_ptr<Node> ConstVector(const std::vector<T>& vec, values_info vt) {
         auto friendly_name = vt.to_string() + vec2str(vec);
-
-        ov::pass::pattern::op::ValuePredicate pred = [vec, vt, friendly_name](const Output<Node>& value) {
+        auto pnode = std::make_shared<GenericPattern>();
+        pnode->set_friendly_name(friendly_name);
+        pnode->set_predicate([vec, vt, friendly_name](const Output<Node>& value) {
             if (!value.get_node_shared_ptr()->get_type_info().is_castable(opset1::Constant::get_type_info_static())) {
                 _VERBOSE_LOG("*mismatched ConstVector type:", friendly_name, "vs", value);
                 return false;
@@ -448,9 +491,8 @@ struct GenPatternNode {
             }
             _VERBOSE_LOG(" matched ConstVector", friendly_name, " == ", value);
             return true;
-        };
-        auto pnode = std::make_shared<GenericPattern>(OutputVector{}, pred);
-        pnode->set_friendly_name(friendly_name);
+        });
+
         return pnode;
     }
 };
@@ -476,16 +518,24 @@ inline std::shared_ptr<Node> GenPattern(values_info vt) {
     return g.node;
 }
 
-template <class T>
+template <class T, bool check_vt = false>
 std::shared_ptr<Node> GenPattern(const std::vector<GenPatternNode>& inputs,
                                  values_info vt = nullptr,
-                                 const std::vector<attr>& attrs = {}) {
+                                 std::vector<attr> attrs = {}) {
     auto* p_type_info = &(T::get_type_info_static());
 
-#ifdef GENPATTERN_VERBOSE
+    OutputVector output_vectors;
+    for (auto& i : inputs) {
+        output_vectors.push_back(i.node);
+    }
+    auto pattern_node = std::make_shared<GenericPattern>(output_vectors);
+
+#ifdef CPU_DEBUG_CAPS
     std::stringstream ss;
     ss << p_type_info->get_version() << "::" << p_type_info->name << " " << vt.to_string();
-    auto cur_node_name = ss.str();
+
+    pattern_node->set_friendly_name(ss.str());
+
     ss << "(";
     const char* sep = "";
     for (auto& i : inputs) {
@@ -495,36 +545,36 @@ std::shared_ptr<Node> GenPattern(const std::vector<GenPatternNode>& inputs,
     ss << ")";
     auto friendly_name = ss.str();
 #else
-    auto cur_node_name = p_type_info->name;
     auto friendly_name = "";
 #endif
 
-    OutputVector output_vectors;
-    for (auto& i : inputs) {
-        output_vectors.push_back(i.node);
-    }
-    auto pattern_node = std::make_shared<GenericPattern>(
-        output_vectors,
-        [p_type_info, vt, attrs, friendly_name](const Output<Node>& value) {
-            if (!value.get_node_shared_ptr()->get_type_info().is_castable(*p_type_info)) {
-                _VERBOSE_LOG("*mismatched GenPattern OP type: ", friendly_name, "vs", value);
-                return false;
-            }
+    // attributes may also contain symbol, so record it into rt_info
+    auto& rt_info = pattern_node->get_rt_info();
+    rt_info["pattern_attrs"] = std::vector<attr>(attrs);
 
-            if (!vt.predicate(value)) {
-                _VERBOSE_LOG("*mismatched GenPattern value info: ", friendly_name, "vs", value);
-                return false;
-            }
+    pattern_node->set_predicate([p_type_info, vt, pattern_node, friendly_name](const Output<Node>& value) {
+        if (!value.get_node_shared_ptr()->get_type_info().is_castable(*p_type_info)) {
+            _VERBOSE_LOG("*mismatched GenPattern OP type: ", friendly_name, "vs", value);
+            return false;
+        }
 
-            // match parent node with attribute a0/a1/...
+        if (check_vt && !vt.predicate(value)) {
+            _VERBOSE_LOG("*mismatched GenPattern value info: ", friendly_name, "vs", value);
+            return false;
+        }
+
+        // match parent node with attribute a0/a1/...
+        auto& rt_info = pattern_node->get_rt_info();
+        if (rt_info.count("pattern_attrs")) {
+            auto& attrs = rt_info["pattern_attrs"].as<std::vector<attr>>();
             if (!attrs.empty() && !attr_compatible(*value.get_node_shared_ptr(), attrs)) {
                 _VERBOSE_LOG("*mismatched GenPattern attr: ", friendly_name, "vs", value);
                 return false;
             }
-            _VERBOSE_LOG(" matched GenPattern ", friendly_name, " == ", value);
-            return true;
-        });
-    pattern_node->set_friendly_name(cur_node_name);
+        }
+        _VERBOSE_LOG(" matched GenPattern ", friendly_name, " == ", value);
+        return true;
+    });
 
     auto output_size = vt.get_output_size();
     if (output_size > 1)
@@ -535,7 +585,8 @@ std::shared_ptr<Node> GenPattern(const std::vector<GenPatternNode>& inputs,
 
 template <typename T>
 std::shared_ptr<Node> GenConst_tril(values_info vt) {
-    return std::make_shared<GenericPattern>(OutputVector{}, [vt](const Output<Node>& value) {
+    auto pnode = std::make_shared<GenericPattern>();
+    pnode->set_predicate([vt](const Output<Node>& value) {
         auto s1 = as_type_ptr<opset1::Constant>(value.get_node_shared_ptr());
         if (!s1) {
             _VERBOSE_LOG("*mismatched GenConst_tril op type: opset1::Constant vs", value);
@@ -573,6 +624,7 @@ std::shared_ptr<Node> GenConst_tril(values_info vt) {
         }
         return true;
     });
+    return pnode;
 }
 
 inline std::shared_ptr<Node> operator|(const Output<Node>& lhs, const Output<Node>& rhs) {
@@ -584,12 +636,7 @@ inline std::shared_ptr<Node> operator|(const std::shared_ptr<Node>& lhs, const s
         OutputVector{lhs->get_default_output(), rhs->get_default_output()});
 }
 
-std::shared_ptr<Node> GenSlice(GenPatternNode data,
-                               Symbol start,
-                               Symbol stop,
-                               Symbol step,
-                               int axis,
-                               const char* friendly_name = "");
+std::shared_ptr<Node> GenSlice(GenPatternNode data, Symbol start, Symbol stop, Symbol step, size_t axis);
 
 bool validate_matched_symbols(ov::pass::pattern::Matcher& m, std::map<std::string, double>& symbol_name2value);
 

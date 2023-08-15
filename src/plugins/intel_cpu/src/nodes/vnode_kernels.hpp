@@ -16,14 +16,17 @@
 
 #include "openvino/core/parallel.hpp"
 #include "utils/profiler.hpp"
-#include "vnode_utils.hpp"
-#include "x86intrin.h"
+#include "vnode_attn_softmax.hpp"
+
 #ifdef OV_CPU_WITH_LLMDNN
 #    include "llm_emb_gpt.hpp"
 #    include "llm_mha_gpt.hpp"
 #    include "llm_mm.hpp"
 #endif
-#include "mlas/sgemm.hpp"
+#ifdef OV_CPU_WITH_MLAS
+#    include "mlas/sgemm.hpp"
+#endif
+
 #include "utils/plain_tensor.hpp"
 namespace ov {
 namespace intel_cpu {
@@ -34,20 +37,20 @@ enum KernelTypes { KT_REF, KT_LLMDNN, KT_MLAS };
 
 template <KernelTypes KType>
 struct ktype_name_of {
-    static constexpr char * value = "?";
+    static constexpr char* value = "?";
 };
 
 template <>
 struct ktype_name_of<KT_REF> {
-    static constexpr char * value = "REF";
+    static constexpr char* value = "REF";
 };
 template <>
 struct ktype_name_of<KT_LLMDNN> {
-    static constexpr char * value = "LLMDNN";
+    static constexpr char* value = "LLMDNN";
 };
 template <>
 struct ktype_name_of<KT_MLAS> {
-    static constexpr char * value = "MLAS";
+    static constexpr char* value = "MLAS";
 };
 
 // default implementation: reference
@@ -90,7 +93,7 @@ struct RoPE_kernel {
         if (L0 > 0) {
             PROFILE(prof1, "copyPast");
             auto max_nt = parallel_get_max_threads();
-            if (B*H  < max_nt) {
+            if (B * H < max_nt) {
                 parallel_for3d(B, H, L0, [&](size_t b, size_t h, size_t l0) {
                     memcpy(&present_value.at({b, h, l0, 0}), &past_value.at({b, h, l0, 0}), sizeof(T) * S);
                     memcpy(&present_key.at({b, h, l0, 0}), &past_key.at({b, h, l0, 0}), sizeof(T) * S);
@@ -181,7 +184,7 @@ struct RoPE2_kernel {
         if (L0 > 0) {
             PROFILE(prof, "copyPast");
             auto max_nt = parallel_get_max_threads();
-            if (B*H  < max_nt) {
+            if (B * H < max_nt) {
                 parallel_for3d(B, H, L0, [&](size_t b, size_t h, size_t l0) {
                     memcpy(&present_value.at({b, h, l0, 0}), &past_value.at({b, h, l0, 0}), sizeof(T) * S);
                     memcpy(&present_key.at({b, h, l0, 0}), &past_key.at({b, h, l0, 0}), sizeof(T) * S);
@@ -505,16 +508,6 @@ struct MHA_kernel<KT_MLAS, float> {
         auto m_blocks = (q_len + m_block_size - 1) / m_block_size;
         bool auto_causal = attention_mask.size(2) == 1 && !causal_mask;
 
-        if (false) {
-            std::cout << "===============" << std::endl;
-            std::cout << "alibi_mask = " << alibi_mask << std::endl;
-            std::cout << "attention_mask = " << attention_mask << std::endl;
-            std::cout << "causal_mask = " << causal_mask << std::endl;
-            std::cout << "select_nfltmax_at_0 = " << select_nfltmax_at_0 << std::endl;
-            std::cout << "k_stride_s = " << k_stride_s << std::endl;
-            std::cout << "present_key = " << present_key << std::endl;
-        }
-
         parallel_for3d(B, H, m_blocks, [&](size_t b, size_t h, size_t m_blk) {
             size_t thread_id = static_cast<size_t>(parallel_get_thread_num());
             auto& qk_buf = qk_buffers[thread_id];
@@ -586,17 +579,16 @@ struct MHA_kernel<KT_MLAS, float> {
                            1);
 
             for (size_t m = m_start; m < m_end; m++) {
-                // apply attention mask
-                // sofmax
-                auto ncausal = auto_causal ? (kv_len - q_len + m + 1): kv_len;
-                InferenceEngine::Extensions::Cpu::XARCH::scale_add_softmax(qk + (m - m_start) * qk_m_stride,
-                                                                           d_scale,
-                                                                           alibi_ptr + m * alibi_stride,
-                                                                           attn_mask_ptr + m * attn_mask_stride,
-                                                                           cmask_ptr + m * cmask_stride,
-                                                                           select_nfltmax_at_0,
-                                                                           ncausal,
-                                                                           kv_len);
+                // apply attention mask & sofmax
+                auto ncausal = auto_causal ? (kv_len - q_len + m + 1) : kv_len;
+                InferenceEngine::Extensions::Cpu::XARCH::attn_softmax(qk + (m - m_start) * qk_m_stride,
+                                                                      d_scale,
+                                                                      alibi_ptr + m * alibi_stride,
+                                                                      attn_mask_ptr + m * attn_mask_stride,
+                                                                      cmask_ptr + m * cmask_stride,
+                                                                      select_nfltmax_at_0,
+                                                                      ncausal,
+                                                                      kv_len);
             }
             mlas_sgemm("N",
                        "N",
@@ -612,11 +604,6 @@ struct MHA_kernel<KT_MLAS, float> {
                        &output_emb.at({b, m_start, h * head_size}),
                        output_emb.stride(1),
                        1);
-            // output [B, L1, H*S]
-            // for (size_t m = 0; m < q_len; m++) {
-            //    const float* src = dst + m * head_size;
-            //    std::copy(src, src + head_size, &output_emb.at({b, m, h * head_size}));
-            //}
         });
     }
 };

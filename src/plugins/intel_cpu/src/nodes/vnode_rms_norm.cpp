@@ -9,7 +9,7 @@
 #include <iostream>
 #include <limits>
 
-#include "vnode_utils.hpp"
+#include "vnode_rms_norm.hpp"
 
 #if defined(HAVE_AVX2)
 #    include <immintrin.h>

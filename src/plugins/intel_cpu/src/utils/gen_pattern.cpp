@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#include "pattern_node.hpp"
+#include "gen_pattern.hpp"
 
 #include <iomanip>
 #include <map>
@@ -12,18 +12,18 @@
 namespace ov {
 namespace intel_cpu {
 
-#ifdef GENPATTERN_VERBOSE
-const int _matcher_verbose = std::getenv("MATCHER_VERBOSE") ? (atoi(std::getenv("MATCHER_VERBOSE"))) : 0;
+#ifdef CPU_DEBUG_CAPS
+const int _matcher_verbose = std::getenv("GENP_VERBOSE") ? (atoi(std::getenv("GENP_VERBOSE"))) : 0;
 #endif
 
 class AttributePredicate : public ngraph::AttributeVisitor {
-    std::map<std::string, attr> attr_map;
+    std::map<std::string, attr*> attr_map;
     std::map<std::string, bool> attr_match;
 
 public:
-    AttributePredicate(const std::vector<attr>& attr) {
+    AttributePredicate(std::vector<attr>& attr) {
         for (auto& a : attr) {
-            attr_map[a.name] = a;
+            attr_map[a.name] = &a;
             attr_match[a.name] = false;
         }
     }
@@ -33,7 +33,7 @@ public:
         for (auto& a : attr_match) {
             if (!a.second) {
                 auto& attr = attr_map[a.first];
-                _VERBOSE_LOG("     AttributePredicate: failed at ", attr.to_string());
+                _VERBOSE_LOG("     AttributePredicate: failed at ", attr->to_string());
             }
             ret = ret && a.second;
         }
@@ -53,14 +53,14 @@ public:
             return;
         if (auto a = ov::as_type<ov::AttributeAdapter<ov::PartialShape>>(&adapter)) {
             const auto& value = a->get();
-            attr_match[name] = it->second.predicate(value.to_string());
+            attr_match[name] = it->second->predicate(value.to_string());
         } else if (auto a = ov::as_type<ov::AttributeAdapter<ov::Shape>>(&adapter)) {
             ov::PartialShape value(a->get());
-            attr_match[name] = it->second.predicate(value.to_string());
+            attr_match[name] = it->second->predicate(value.to_string());
         } else if (auto a = ov::as_type<ov::AttributeAdapter<std::vector<ov::element::Type>>>(&adapter)) {
-            attr_match[name] = it->second.predicate(join(a->get()));
+            attr_match[name] = it->second->predicate(join(a->get()));
         } else {
-            std::cout << "...." << name << ":" << it->second.to_string() << " vs ???" << std::endl;
+            std::cout << "...." << name << ":" << it->second->to_string() << " vs ???" << std::endl;
             attr_match[name] = false;
         }
         /*
@@ -80,49 +80,49 @@ public:
         auto it = attr_map.find(name);
         if (it == attr_map.end())
             return;
-        attr_match[name] = it->second.predicate(adapter.get());
+        attr_match[name] = it->second->predicate(adapter.get());
     }
 
     void on_adapter(const std::string& name, ngraph::ValueAccessor<std::string>& adapter) override {
         auto it = attr_map.find(name);
         if (it == attr_map.end())
             return;
-        attr_match[name] = it->second.predicate(adapter.get());
+        attr_match[name] = it->second->predicate(adapter.get());
     }
 
     void on_adapter(const std::string& name, ngraph::ValueAccessor<int>& adapter) override {
         auto it = attr_map.find(name);
         if (it == attr_map.end())
             return;
-        attr_match[name] = it->second.predicate(adapter.get());
+        attr_match[name] = it->second->predicate(adapter.get());
     }
 
     void on_adapter(const std::string& name, ngraph::ValueAccessor<float>& adapter) override {
         auto it = attr_map.find(name);
         if (it == attr_map.end())
             return;
-        attr_match[name] = it->second.predicate(adapter.get());
+        attr_match[name] = it->second->predicate(adapter.get());
     }
 
     void on_adapter(const std::string& name, ngraph::ValueAccessor<int64_t>& adapter) override {
         auto it = attr_map.find(name);
         if (it == attr_map.end())
             return;
-        attr_match[name] = it->second.predicate(adapter.get());
+        attr_match[name] = it->second->predicate(adapter.get());
     }
 
     void on_adapter(const std::string& name, ngraph::ValueAccessor<double>& adapter) override {
         auto it = attr_map.find(name);
         if (it == attr_map.end())
             return;
-        attr_match[name] = it->second.predicate(adapter.get());
+        attr_match[name] = it->second->predicate(adapter.get());
     }
 
     void on_adapter(const std::string& name, ngraph::ValueAccessor<std::vector<int64_t>>& adapter) override {
         auto it = attr_map.find(name);
         if (it == attr_map.end())
             return;
-        attr_match[name] = it->second.predicate(adapter.get());
+        attr_match[name] = it->second->predicate(adapter.get());
     }
     /*
         void on_adapter(const std::string& name, ngraph::ValueAccessor<std::vector<int>>& adapter) override {
@@ -154,51 +154,74 @@ public:
     */
 };
 
-bool attr_compatible(ov::Node& node, const std::vector<attr>& attr) {
+bool attr_compatible(ov::Node& node, std::vector<attr>& attr) {
     AttributePredicate vis(attr);
     node.visit_attributes(vis);
     return vis.all_matched(true);
 }
 
+// Symbol may be references by pattern in values of constant node & attributes of normal node
+// and the references maybe a direct reference or an indirect expression
 struct SymbolReference {
     Symbol sym;
 
     // observations in matched subgraph
     std::shared_ptr<ov::Node> node;
-    int offset;
     double value;
     bool is_integer;
+    int32_t offset = -1;
+    std::string attr_name;
 
-    SymbolReference(Symbol sym, std::shared_ptr<ov::Node> node, int offset, float value)
+    std::string info() {
+        auto node_name = node->get_friendly_name();
+        if (offset >= 0)
+            return node_name + "[" + std::to_string(offset) + "]";
+        return node_name + "." + attr_name;
+    }
+
+    SymbolReference(Symbol sym,
+                    std::shared_ptr<ov::Node> node,
+                    double value,
+                    int32_t offset,
+                    std::string attr_name = {})
         : sym(sym),
           node(node),
           offset(offset),
+          attr_name(attr_name),
           value(value),
-          is_integer(false) {}
+          is_integer(std::floor(value) == value) {}
 
-    SymbolReference(Symbol sym, std::shared_ptr<ov::Node> node, int offset, int32_t value)
+    SymbolReference(Symbol sym,
+                    std::shared_ptr<ov::Node> node,
+                    int32_t value,
+                    int32_t offset,
+                    std::string attr_name = {})
         : sym(sym),
           node(node),
           offset(offset),
+          attr_name(attr_name),
           value(value),
           is_integer(true) {}
 };
 
 static bool collect_symbol_references(std::vector<SymbolReference>& svs,
                                       ov::pass::pattern::PatternValueMap& pvmap,
-                                      std::shared_ptr<ov::Node> node) {
-    // std::cout << "-------" << node->get_friendly_name() << std::endl;
+                                      std::shared_ptr<ov::Node> pattern_node) {
     //  recursively collect from parent node
-    for (size_t i = 0; i < node->get_input_size(); i++) {
-        if (!collect_symbol_references(svs, pvmap, node->input_value(i).get_node_shared_ptr())) {
-            return false;
-        }
+    // some pattern node like Or, it's not designed to matching any one, but their parents node may be.
+    for (size_t i = 0; i < pattern_node->get_input_size(); i++) {
+        collect_symbol_references(svs, pvmap, pattern_node->input_value(i).get_node_shared_ptr());
     }
 
-    auto& rt_info = node->get_rt_info();
+    if (!pvmap.count(pattern_node)) {
+        // not matched is not a failure.
+        return true;
+    }
+
+    auto& rt_info = pattern_node->get_rt_info();
     if (rt_info.count("symbolic_const_value")) {
         auto& symbols = rt_info["symbolic_const_value"].as<std::vector<Symbol>>();
-        auto matched_node = pvmap[node].get_node_shared_ptr();
+        auto matched_node = pvmap[pattern_node].get_node_shared_ptr();
         auto constop = std::dynamic_pointer_cast<op::v0::Constant>(matched_node);
         if (constop) {
             auto ele_cnt = shape_size(constop->get_shape());
@@ -213,18 +236,30 @@ static bool collect_symbol_references(std::vector<SymbolReference>& svs,
                 if (observed.size() != symbols.size())
                     return false;
                 for (size_t i = 0; i < symbols.size(); i++) {
-                    svs.emplace_back(symbols[i], matched_node, i, observed[i]);
+                    svs.emplace_back(symbols[i], matched_node, observed[i], i);
                 }
             } else if (ele_type == ov::element::f32) {
                 auto observed = constop->get_vector<float>();
                 if (observed.size() != symbols.size())
                     return false;
                 for (size_t i = 0; i < symbols.size(); i++) {
-                    svs.emplace_back(symbols[i], matched_node, i, observed[i]);
+                    svs.emplace_back(symbols[i], matched_node, observed[i], i);
                 }
             } else {
                 return false;
             }
+        }
+    }
+    if (rt_info.count("pattern_attrs")) {
+        auto& vec_attrs = rt_info["pattern_attrs"].as<std::vector<attr>>();
+        auto matched_node = pvmap[pattern_node].get_node_shared_ptr();
+        for (auto& attr : vec_attrs) {
+            if (attr.type != attr::Type::SYM)
+                continue;
+            if (attr.is_predicate_set)
+                svs.emplace_back(attr.sym, matched_node, attr.predicate_with, -1, attr.name);
+            else
+                return false;
         }
     }
     return true;
@@ -237,6 +272,7 @@ bool validate_matched_symbols(ov::pass::pattern::Matcher& m, std::map<std::strin
     // collect symbols and their observed value
     std::vector<SymbolReference> sym_refs;
     if (!collect_symbol_references(sym_refs, pvmap, root_pattern)) {
+        _VERBOSE_LOG(" collect_symbol_references failed.");
         return false;
     }
 
@@ -253,10 +289,7 @@ bool validate_matched_symbols(ov::pass::pattern::Matcher& m, std::map<std::strin
                              " vs ",
                              ref.value,
                              " from ",
-                             ref.node,
-                             "[",
-                             ref.offset,
-                             "]");
+                             ref.info());
                 return false;
             }
             // no need to put literal into value map to eval them.
@@ -271,10 +304,8 @@ bool validate_matched_symbols(ov::pass::pattern::Matcher& m, std::map<std::strin
                                  " vs ",
                                  ref.value,
                                  " from ",
-                                 ref.node,
-                                 "[",
-                                 ref.offset,
-                                 "]");
+                                 ref.info());
+                    return false;
                 }
             } else {
                 symbol_value_map[id] = ref.value;
@@ -284,7 +315,7 @@ bool validate_matched_symbols(ov::pass::pattern::Matcher& m, std::map<std::strin
         }
     }
 
-#ifdef GENPATTERN_VERBOSE
+#ifdef CPU_DEBUG_CAPS
     if (_matcher_verbose) {
         if (independent_vars.size()) {
             std::cout << "Independent Symbols : ";
@@ -321,10 +352,7 @@ bool validate_matched_symbols(ov::pass::pattern::Matcher& m, std::map<std::strin
                              std::setprecision(std::numeric_limits<float>::max_digits10),
                              ref.value,
                              " from ",
-                             ref.node,
-                             "[",
-                             ref.offset,
-                             "]");
+                             ref.info());
                 return false;
             }
         }
@@ -348,38 +376,62 @@ std::shared_ptr<Node> GenSlice(GenPatternNode data, Symbol start, Symbol stop, S
     GenPatternNode end(vend);
     GenPatternNode stride(vstride);
 
-    auto opt2 = ov::pass::pattern::wrap_type<opset1::StridedSlice>(
-        {data, begin, end, stride},
-        [axis](const Output<Node>& value) {
-            auto s1 = as_type_ptr<opset1::StridedSlice>(value.get_node_shared_ptr());
-            if (!s1->get_new_axis_mask().empty() || !s1->get_shrink_axis_mask().empty() ||
-                !s1->get_ellipsis_mask().empty()) {
-                _VERBOSE_LOG(" mismatch GenSlice new/shrink/ellipsis mask: ", s1);
+    OutputVector inputs{data, begin, end, stride};
+    auto opt2 = std::make_shared<GenericPattern>(inputs);
+
+#ifdef CPU_DEBUG_CAPS
+    std::stringstream ss;
+    ss << "opset1::StridedSlice";
+    opt2->set_friendly_name(ss.str());
+
+    ss << "(";
+    const char* sep = "";
+    for (auto& i : inputs) {
+        ss << sep << i.get_node()->get_friendly_name();
+        sep = ",";
+    }
+    ss << ")";
+    auto friendly_name = ss.str();
+#else
+    auto friendly_name = "";
+#endif
+
+    opt2->set_predicate([axis, friendly_name](const Output<Node>& value) {
+        auto s1 = as_type_ptr<opset1::StridedSlice>(value.get_node_shared_ptr());
+        if (!s1) {
+            _VERBOSE_LOG(" mismatch StridedSlice OP type: ", friendly_name, "vs", value);
+            return false;
+        }
+
+        if (!s1->get_new_axis_mask().empty() || !s1->get_shrink_axis_mask().empty() ||
+            !s1->get_ellipsis_mask().empty()) {
+            _VERBOSE_LOG(" mismatch StridedSlice new/shrink/ellipsis mask: ", friendly_name, "vs", value);
+            return false;
+        }
+
+        auto& begin_mask = s1->get_begin_mask();
+        auto& end_mask = s1->get_end_mask();
+        auto mask_size = begin_mask.size();
+        if (begin_mask.size() != end_mask.size()) {
+            _VERBOSE_LOG(" mismatch StridedSlice begin/end mask size: ", friendly_name, "vs", value);
+            return false;
+        }
+
+        if (mask_size < axis + 1) {
+            _VERBOSE_LOG(" mismatch StridedSlice too small mask size: ", friendly_name, "vs", value);
+            return false;
+        }
+
+        for (size_t i = 0; i < mask_size; i++) {
+            auto expect_mask = (i == axis) ? 0 : 1;
+            if (begin_mask[i] != expect_mask || end_mask[i] != expect_mask) {
+                _VERBOSE_LOG(" mismatch StridedSlice unexpected mask: ", friendly_name, "vs", value);
                 return false;
             }
-
-            auto& begin_mask = s1->get_begin_mask();
-            auto& end_mask = s1->get_end_mask();
-            auto mask_size = begin_mask.size();
-            if (begin_mask.size() != end_mask.size()) {
-                _VERBOSE_LOG(" mismatch GenSlice begin/end mask size: ", s1);
-                return false;
-            }
-
-            if (mask_size < axis + 1) {
-                _VERBOSE_LOG(" mismatch GenSlice too small mask size: ", s1);
-                return false;
-            }
-
-            for (size_t i = 0; i < mask_size; i++) {
-                auto expect_mask = (i == axis) ? 0 : 1;
-                if (begin_mask[i] != expect_mask || end_mask[i] != expect_mask) {
-                    _VERBOSE_LOG(" mismatch GenSlice unexpected mask: ", s1);
-                    return false;
-                }
-            }
-            return true;
-        });
+        }
+        _VERBOSE_LOG(" matched StridedSlice ", friendly_name, "==", value);
+        return true;
+    });
     return opt1 | opt2;
 }
 

@@ -143,9 +143,9 @@ cross_compiled_file(${TARGET_NAME}
 )
 cross_compiled_file(${TARGET_NAME}
         ARCH AVX512F AVX2 ANY
-                    src/nodes/vnode_utils.cpp
-        API         src/nodes/vnode_utils.hpp
-        NAME        scale_add_softmax
+                    src/nodes/vnode_attn_softmax.cpp
+        API         src/nodes/vnode_attn_softmax.hpp
+        NAME        attn_softmax
         NAMESPACE   InferenceEngine::Extensions::Cpu::XARCH
 )
 cross_compiled_file(${TARGET_NAME}

@@ -113,6 +113,7 @@ enum class Type {
     Unique,
     Ngram,
     VNode,
+    RoPE,
 };
 
 enum class Algorithm {

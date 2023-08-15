@@ -14,18 +14,21 @@
 #include "itt.hpp"
 #include "ov_ops/type_relaxed.hpp"
 #include "transformations/cpu_opset/common/op/vnode.hpp"
-#include "utils/pattern_node.hpp"
+#include "transformations/cpu_opset/x64/op/rope.hpp"
+#include "utils/gen_pattern.hpp"
 
 namespace ov {
 namespace intel_cpu {
 
-#define VNODE_DEBUG_LOG(...) _verbose_log(__VA_ARGS__)
-//#define VNODE_DEBUG_LOG(...)
-
+#ifdef CPU_DEBUG_CAPS
+#    define VNODE_DEBUG_LOG(...) _verbose_log(__VA_ARGS__)
+#else
+#    define VNODE_DEBUG_LOG(...)
+#endif
 
 class VNodePattern {
 public:
-    VNodePattern(const char * vtype) : vtype(vtype) {}
+    VNodePattern(const char* vtype) : vtype(vtype) {}
     virtual OutputVector get(const OutputVector& inputs) = 0;
     virtual bool predicate(const OutputVector& inputs) {
         return true;
@@ -34,31 +37,43 @@ public:
     std::string get_vtype() {
         return vtype;
     }
+
 private:
     std::string vtype;
+};
+
+class EliminateMaximum : public ngraph::pass::MatcherPass {
+public:
+    OPENVINO_RTTI("EliminateMaximum", "0");
+    EliminateMaximum() {
+        MATCHER_SCOPE(EliminateMaximum);
+        auto in = GenPattern("f32");
+        auto maximum = GenPattern<opset1::Maximum>({in, {-FLT_MAX}});
+        matcher_pass_callback callback = [=](ngraph::pattern::Matcher& m) {
+            auto root = m.get_match_root();
+            return replace_output_update_name(root->output(0), root->input_value(0));
+        };
+        auto m = std::make_shared<ngraph::pattern::Matcher>(maximum, matcher_name);
+        this->register_matcher(m, callback);
+    }
 };
 
 class VNodeMatcher : public ngraph::pass::MatcherPass {
 public:
     OPENVINO_RTTI("VNodeMatcher", "0");
 
-    std::string m_verbose_at_root;
-
     VNodeMatcher(std::shared_ptr<VNodePattern> pattern) {
         MATCHER_SCOPE(VNodeMatcher);
-
-        static const char* str_name = std::getenv("MATCHER_VERBOSE_ROOT");
-        if (str_name && m_verbose_at_root.empty()) {
-            m_verbose_at_root = str_name;
-        }
-
+#ifdef CPU_DEBUG_CAPS
         if (auto* wlist = std::getenv("VNODE_WLIST")) {
             std::string vnode_whitelist(wlist);
-            if (vnode_whitelist.find(std::string(pattern->get_vtype()) + ",") == std::string::npos) {
-                return;
+            if (vnode_whitelist != "?") {
+                if (vnode_whitelist.find(std::string(pattern->get_vtype()) + ",") == std::string::npos) {
+                    return;
+                }
             }
         }
-
+#endif
         VNODE_DEBUG_LOG(matcher_name, "vtype =", pattern->get_vtype());
 
         OutputVector fake_inputs;
@@ -72,7 +87,6 @@ public:
             // auto node_src = pvmap.at(select.node).get_node_shared_ptr();
             auto root_value = m.get_match_value();
             std::map<std::string, double> symbol_name2value;
-            VNODE_DEBUG_LOG("VNodeMatcher::callback [", pattern->get_vtype(), "] : ", root_value);
 
             if (!validate_matched_symbols(m, symbol_name2value)) {
                 VNODE_DEBUG_LOG("VNodeMatcher: symbol validation failed!");
@@ -90,7 +104,9 @@ public:
             for (size_t i = 0; i < pattern_values.size(); i++) {
                 auto pattern_output_node = pattern_values[i].get_node_shared_ptr();
                 if (!pvmap.count(pattern_output_node)) {
-                    VNODE_DEBUG_LOG("VNodeMatcher: (auxiliary) output", pattern_output_node->get_friendly_name(), "not matched!");
+                    VNODE_DEBUG_LOG("VNodeMatcher: (auxiliary) output",
+                                    pattern_output_node->get_friendly_name(),
+                                    "not matched!");
                     return false;
                 }
                 real_outputs.push_back(pvmap[pattern_output_node]);
@@ -121,12 +137,29 @@ public:
 #include "vnode_attn_gptneox.txt"
 #include "vnode_attn_llama2.txt"
 
-ov::intel_cpu::VNodeFusion::VNodeFusion() {
+VNodeFusion::VNodeFusion(const ov::element::Type inferencePrecision) {
     MATCHER_SCOPE(VNodeFusion);
-    add_matcher<VNodeMatcher>(std::make_shared<gptneox_attention>());
-    add_matcher<VNodeMatcher>(std::make_shared<gptj_attention>());
-    add_matcher<VNodeMatcher>(std::make_shared<falcon_attention>());
-    add_matcher<VNodeMatcher>(std::make_shared<llama2_attention>());
+
+    add_matcher<EliminateMaximum>();
+
+    // enable attention fusion only when proper backend support is ready
+    bool enable_attn_fusion = false;
+#ifdef OV_CPU_WITH_MLAS
+    if (inferencePrecision == ov::element::f32)
+        enable_attn_fusion = true;
+#endif
+#ifdef OV_CPU_WITH_LLMDNN
+    if (inferencePrecision == ov::element::bf16)
+        enable_attn_fusion = true;
+#endif
+
+    if (enable_attn_fusion) {
+        add_matcher<VNodeMatcher>(std::make_shared<gptneox_attention>());
+        add_matcher<VNodeMatcher>(std::make_shared<gptj_attention>());
+        add_matcher<VNodeMatcher>(std::make_shared<falcon_attention>());
+        add_matcher<VNodeMatcher>(std::make_shared<llama2_attention>());
+    }
+
     add_matcher<VNodeMatcher>(std::make_shared<llama_RMSNorm>());
 }
 

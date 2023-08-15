@@ -13,7 +13,7 @@ namespace intel_cpu {
 class VNodeFusion: public ngraph::pass::GraphRewrite {
 public:
     OPENVINO_RTTI("VNodeFusion", "0");
-    VNodeFusion();
+    VNodeFusion(const ov::element::Type inferencePrecision);
 };
 
 }   // namespace intel_cpu
