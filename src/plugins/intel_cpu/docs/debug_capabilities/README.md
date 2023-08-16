@@ -5,7 +5,7 @@ They can be activated at runtime and might be used for analyzing issues, getting
 
 Use the following cmake option to enable debug capabilities:
 
-`-DENABLE_DEBUG_CAPS=ON`
+`-DENABLE_DEBUG_CAPS=ON -DENABLE_CPU_DEBUG_CAPS=ON`
 
 * [Verbose mode](verbose.md)
 * [Blob dumping](blob_dumping.md)
@@ -13,6 +13,8 @@ Use the following cmake option to enable debug capabilities:
 * [Graph transformation disabling](feature_disabling.md#graph-transformations)
 * [Logging](logging.md)
 * [Inference Precision](infer_prc.md)
+* Dump runtime models
+    * set `OV_CPU_DUMP_MODELS` environment variable to `1` will enable runtime models to be dumpped as cpp-style text file and IR xml file.
 * Performance summary
     * set `OV_CPU_SUMMARY_PERF` environment variable to display performance summary at the time when model is being destructed.
     * Internal performance counter will be enabled automatically. 
