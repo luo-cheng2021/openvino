@@ -665,7 +665,7 @@ void stream_output_constant(std::ostream & os, op::v0::Constant * constop) {
     auto total_size = shape_size(shape);
     auto eletype = constop->get_output_element_type(0);
     const char * sep = "";
-    os << (is_scalar? "" : "{");
+    os << "{";
     if (eletype == ov::element::f32) {
         for (float value : constop->get_vector<float>()) {
             os << sep;
@@ -678,7 +678,7 @@ void stream_output_constant(std::ostream & os, op::v0::Constant * constop) {
             sep = ", ";
         }
     }
-    os << (is_scalar? "" : "}");
+    os << "}";
 }
 
 void DumpModel::dump_cpp_style(std::ostream & os, const std::shared_ptr<ov::Model>& model) {
@@ -708,7 +708,6 @@ void DumpModel::dump_cpp_style(std::ostream & os, const std::shared_ptr<ov::Mode
                 continue;
             auto shape = constop->get_shape();
             if (shape.size() > 1) continue;
-            auto is_scalar = shape.size() == 0;
             if (shape_size(constop->get_shape()) > 64) continue;
 
             // literal construct
@@ -739,7 +738,10 @@ void DumpModel::dump_cpp_style(std::ostream & os, const std::shared_ptr<ov::Mode
         std::replace(name.begin(), name.end(), '[', '_');
         std::replace(name.begin(), name.end(), ']', '_');
         std::replace(name.begin(), name.end(), '-', 'n');
-
+        if (name[0] >= 0 && name[0] <= 9) {
+            const auto & type_info = op->get_type_info();
+            name.insert(0, type_info.name);
+        }
         int idx = 0;
         if (opname_count.count(name)) {
             idx = opname_count[name] + 1;

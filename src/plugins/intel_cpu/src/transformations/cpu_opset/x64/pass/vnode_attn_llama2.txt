@@ -1,0 +1,165 @@
+struct llama2_attention : public VNodePattern {
+    llama2_attention() : VNodePattern("llama2_attention") {}
+    OutputVector get(const OutputVector& inputs) override {
+        int ii = 0;
+
+        auto q_proj_linear_MatMul_504 = inputs[ii++];   // "f32[?,?,4096]"
+        auto k_proj_linear_MatMul_505 = inputs[ii++];   // "f32[?,?,4096]"
+        auto v_proj_linear_MatMul_506 = inputs[ii++];   // "f32[?,?,4096]"
+        auto Parameter_past_k = inputs[ii++];   // f32[?,32,?,128]
+        auto Parameter_past_v = inputs[ii++];   // f32[?,32,?,128]
+        auto attn_causal_mask = inputs[ii++];   // f32[?,1,?,?]
+        auto cos_1074 = inputs[ii++];           // f32[1,1,4096,128]
+        auto sin_1077 = inputs[ii++];           // f32[1,1,4096,128]
+        auto cos_sin_gather_pos_idx = inputs[ii++];           // i32[?,?]  [B,L]
+
+        auto head_cnt = Symbol("head_cnt");
+        auto head_size = Symbol("head_size");
+
+        // [B,L]
+        auto Gather_118153 = GenPattern("i32[2]");
+        auto ListConstruct_507_Concat = GenPattern<opset1::Concat>({Gather_118153, {head_cnt}, {head_size}}, "i32[4]", {{"axis", 0}});   //  __module.model.model.layers.1.self_attn/prim::ListConstruct_507/Concat(Gather_118153, __module.model.model.layers.1.self_attn/prim::ListConstruct_507/Reshape_1, __module.model.model.layers.1.self_attn/prim::ListConstruct_507/Reshape_2)
+
+        auto view_Reshape = GenPattern<opset1::Reshape>({q_proj_linear_MatMul_504,
+                ListConstruct_507_Concat}, nullptr, {{"special_zero", 0}});   // "f32[?,?,32,128]"  __module.model.model.layers.1.self_attn/aten::view/Reshape(__module.model.model.layers.1.self_attn.q_proj/aten::linear/MatMul_504, __module.model.model.layers.1.self_attn/prim::ListConstruct_507/Concat)
+
+        auto view_Reshape_708 = GenPattern<opset1::Reshape>({k_proj_linear_MatMul_505, 
+                ListConstruct_507_Concat}, nullptr, {{"special_zero", 0}});   // "f32[?,?,32,128]"  __module.model.model.layers.1.self_attn/aten::view/Reshape_514(__module.model.model.layers.1.self_attn.k_proj/aten::linear/MatMul_505, __module.model.model.layers.1.self_attn/prim::ListConstruct_507/Concat)
+
+        auto view_Reshape_724 = GenPattern<opset1::Reshape>({v_proj_linear_MatMul_506, 
+                ListConstruct_507_Concat}, nullptr, {{"special_zero", 0}});   // "f32[?,?,32,128]"  __module.model.model.layers.1.self_attn/aten::view/Reshape_529(__module.model.model.layers.1.self_attn.v_proj/aten::linear/MatMul_506, __module.model.model.layers.1.self_attn/prim::ListConstruct_507/Concat)
+
+        // q_proj 
+        auto transpose_Transpose = GenPattern<opset1::Transpose>({view_Reshape, {0, 2, 1, 3}}, "f32[?,32,?,128]");   //  __module.model.model.layers.2.self_attn/aten::transpose/Transpose(__module.model.model.layers.2.self_attn/aten::view/Reshape, __module.model.model.layers.2.self_attn/aten::transpose/ScatterElementsUpdate)
+
+        // k_proj [B,L,H,S] => [B,H,L,S] 
+        auto transpose_Transpose_722 = GenPattern<opset1::Transpose>({view_Reshape_708, {0, 2, 1, 3}}, "f32[?,32,?,128]");   //  __module.model.model.layers.2.self_attn/aten::transpose/Transpose_722(__module.model.model.layers.2.self_attn/aten::view/Reshape_708, __module.model.model.layers.2.self_attn/aten::transpose/ScatterElementsUpdate_721)
+        
+        // generate shape {0,0,L+L0} 
+        auto ShapeOf_176374 = GenPattern<opset1::ShapeOf>({transpose_Transpose_722}, "i32[4]", {});   //  ShapeOf_176374(__module.model.model.layers.2.self_attn/aten::transpose/Transpose_722)
+        auto size_Gather_741 = GenPattern<opset8::Gather>({ShapeOf_176374, {2}, {0}}, nullptr, {{"batch_dims", 0}});   //  __module.model.model.layers.2.self_attn/aten::size/Gather_741(ShapeOf_176374, Constant_116852, __module.model.model.layers.2.self_attn/aten::size/Constant_740)
+        auto ShapeOf_176375 = GenPattern<opset1::ShapeOf>({Parameter_past_k}, "i32[4]", {});   //  ShapeOf_176375(Parameter_past_k)
+        auto size_Gather_744 = GenPattern<opset8::Gather>({ShapeOf_176375, {2}, {0}}, nullptr, {{"batch_dims", 0}});   //  __module.model.model.layers.2.self_attn/aten::size/Gather_744(ShapeOf_176375, 477, __module.model.model.layers.2.self_attn/aten::size/Constant_743)
+        auto add__Add = GenPattern<opset1::Add>({size_Gather_741, size_Gather_744}, nullptr, {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::add_/Add(__module.model.model.layers.2.self_attn/aten::size/Gather_741, __module.model.model.layers.2.self_attn/aten::size/Gather_744)
+        auto ScatterUpdate_373505 = GenPattern<opset3::ScatterUpdate>({{0, 0, 0}, {2}, add__Add, {0}}, "i32[3]");   //  ScatterUpdate_373505(Constant_373504, Constant_373500, __module.model.model.layers.2.self_attn/aten::add_/Add, Constant_373499)
+        
+        // cos table preprocess
+        auto rot_slice_cos = GenPattern<opset1::StridedSlice>({cos_1074, {0, 0, 0}, ScatterUpdate_373505, {1, 1, 1}}, "f32[1,1,..4096,128]", {{"begin_mask",  {1,1,0} }, {"end_mask",  {1,1,0} }, {"new_axis_mask",  {} }, {"shrink_axis_mask",  {} }, {"ellipsis_mask",  {} }});   //  __module.model.model.layers.2.self_attn.rotary_emb/aten::slice/Slice(cos_1074, Constant_373503, ScatterUpdate_373505, Constant_373508)
+        auto squeeze_Squeeze_756 = GenPattern<opset1::Reshape>({rot_slice_cos, {-1, head_size}}, "f32[..4096,128]", {{"special_zero", 0}});   //  __module.model.model.layers.2.self_attn/aten::squeeze/Squeeze_756(__module.model.model.layers.2.self_attn.rotary_emb/aten::slice/Slice, Constant_122805)
+        auto index_762_Gather = GenPattern<opset8::Gather>({squeeze_Squeeze_756, cos_sin_gather_pos_idx, 0}, "f32[?,?,128]", {{"batch_dims", 0}});   //  __module.model.model.layers.2.self_attn/aten::index_762/Gather(__module.model.model.layers.2.self_attn/aten::squeeze/Squeeze_756, __module.model.model/aten::view/Reshape, Constant_230659)
+        auto unsqueeze_Unsqueeze = GenPattern<opset1::Unsqueeze>({index_762_Gather, 1}, "f32[?,1,?,128]");   //  __module.model.model.layers.2.self_attn/aten::unsqueeze/Unsqueeze(__module.model.model.layers.2.self_attn/aten::index_762/Gather, 478)
+
+        // query: x * cos    
+        auto mul_Multiply = GenPattern<opset1::Multiply>({transpose_Transpose, unsqueeze_Unsqueeze}, "f32[?,32,?,128]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::mul/Multiply(__module.model.model.layers.2.self_attn/aten::transpose/Transpose, __module.model.model.layers.2.self_attn/aten::unsqueeze/Unsqueeze)
+        
+        // [-x2, x1]
+        auto slice_Slice_780 = GenPattern<opset1::StridedSlice>({transpose_Transpose, {0, 0, 0, head_size/2}, {0, 0, 0, 2147483647}, {1, 1, 1, 1}}, "f32[?,32,?,64]", {{"begin_mask",  {1,1,1,0} }, {"end_mask",  {1,1,1,0} }, {"new_axis_mask",  {} }, {"shrink_axis_mask",  {} }, {"ellipsis_mask",  {} }});   //  __module.model.model.layers.2.self_attn/aten::slice/Slice_780(__module.model.model.layers.2.self_attn/aten::transpose/Transpose, ScatterUpdate_373645, Constant_373648, Constant_373651)
+        auto neg_Multiply = GenPattern<opset1::Multiply>({slice_Slice_780, {-1.0f}}, "f32[?,32,?,64]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::neg/Multiply(__module.model.model.layers.2.self_attn/aten::slice/Slice_780, Constant_416384)
+        auto slice_Slice = GenPattern<opset1::StridedSlice>({transpose_Transpose, {0, 0, 0, 0}, {0, 0, 0, head_size/2}, {1, 1, 1, 1}}, "f32[?,32,?,64]", {{"begin_mask",  {1,1,1,0} }, {"end_mask",  {1,1,1,0} }, {"new_axis_mask",  {} }, {"shrink_axis_mask",  {} }, {"ellipsis_mask",  {} }});   //  __module.model.model.layers.2.self_attn/aten::slice/Slice(__module.model.model.layers.2.self_attn/aten::transpose/Transpose, Constant_373709, ScatterUpdate_373711, Constant_373714)
+        auto cat_Concat = GenPattern<opset1::Concat>({neg_Multiply, slice_Slice}, "f32[?,32,?,128]", {{"axis", -1}});   //  __module.model.model.layers.2.self_attn/aten::cat/Concat(__module.model.model.layers.2.self_attn/aten::neg/Multiply, __module.model.model.layers.2.self_attn/aten::slice/Slice)
+        
+        
+        // generate shape {0,0,L+L0} 
+        auto ScatterUpdate_373774 = GenPattern<opset3::ScatterUpdate>({{0, 0, 0}, {2}, add__Add, {0}}, "i32[3]");   //  ScatterUpdate_373774(Constant_373773, Constant_373769, __module.model.model.layers.2.self_attn/aten::add_/Add, Constant_373768)
+        
+        // sin table preprocess
+        auto rot_slice_sin = GenPattern<opset1::StridedSlice>({sin_1077, {0, 0, 0}, ScatterUpdate_373774, {1, 1, 1}}, "f32[1,1,..4096,128]", {{"begin_mask",  {1,1,0} }, {"end_mask",  {1,1,0} }, {"new_axis_mask",  {} }, {"shrink_axis_mask",  {} }, {"ellipsis_mask",  {} }});   //  __module.model.model.layers.2.self_attn.rotary_emb/aten::slice/Slice_754(sin_1077, Constant_373772, ScatterUpdate_373774, Constant_373777)
+        auto squeeze_Squeeze_758 = GenPattern<opset1::Reshape>({rot_slice_sin, {-1, head_size}}, "f32[..4096,128]", {{"special_zero", 0}});   //  __module.model.model.layers.2.self_attn/aten::squeeze/Squeeze_758(__module.model.model.layers.2.self_attn.rotary_emb/aten::slice/Slice_754, Constant_122813)
+        auto index_767_Gather = GenPattern<opset8::Gather>({squeeze_Squeeze_758, cos_sin_gather_pos_idx, 0}, "f32[?,?,128]", {{"batch_dims", 0}});   //  __module.model.model.layers.2.self_attn/aten::index_767/Gather(__module.model.model.layers.2.self_attn/aten::squeeze/Squeeze_758, __module.model.model/aten::view/Reshape, Constant_230662)
+        auto unsqueeze_Unsqueeze_768 = GenPattern<opset1::Unsqueeze>({index_767_Gather, 1}, "f32[?,1,?,128]");   //  __module.model.model.layers.2.self_attn/aten::unsqueeze/Unsqueeze_768(__module.model.model.layers.2.self_attn/aten::index_767/Gather, 478)
+
+        // query: [-x2, x1] * sin
+        auto mul_Multiply_785 = GenPattern<opset1::Multiply>({cat_Concat, unsqueeze_Unsqueeze_768}, "f32[?,32,?,128]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::mul/Multiply_785(__module.model.model.layers.2.self_attn/aten::cat/Concat, __module.model.model.layers.2.self_attn/aten::unsqueeze/Unsqueeze_768)
+
+        // query:  x*cos + [-x2, x1] * sin
+        auto add_Add = GenPattern<opset1::Add>({mul_Multiply, mul_Multiply_785}, "f32[?,32,?,128]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::add/Add(__module.model.model.layers.2.self_attn/aten::mul/Multiply, __module.model.model.layers.2.self_attn/aten::mul/Multiply_785)
+
+        // key - rotary emb
+        auto mul_Multiply_787 = GenPattern<opset1::Multiply>({transpose_Transpose_722, unsqueeze_Unsqueeze}, "f32[?,32,?,128]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::mul/Multiply_787(__module.model.model.layers.2.self_attn/aten::transpose/Transpose_722, __module.model.model.layers.2.self_attn/aten::unsqueeze/Unsqueeze)
+        auto slice_Slice_805 = GenPattern<opset1::StridedSlice>({transpose_Transpose_722, {0, 0, 0, head_size/2}, {0, 0, 0, 2147483647}, {1, 1, 1, 1}}, "f32[?,32,?,64]", {{"begin_mask",  {1,1,1,0} }, {"end_mask",  {1,1,1,0} }, {"new_axis_mask",  {} }, {"shrink_axis_mask",  {} }, {"ellipsis_mask",  {} }});   //  __module.model.model.layers.2.self_attn/aten::slice/Slice_805(__module.model.model.layers.2.self_attn/aten::transpose/Transpose_722, ScatterUpdate_373914, Constant_373917, Constant_373920)
+
+        auto neg_Multiply_808 = GenPattern<opset1::Multiply>({slice_Slice_805, {-1.0f}}, "f32[?,32,?,64]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::neg/Multiply_808(__module.model.model.layers.2.self_attn/aten::slice/Slice_805, Constant_416385)
+        auto slice_Slice_799 = GenPattern<opset1::StridedSlice>({transpose_Transpose_722, {0, 0, 0, 0}, {0, 0, 0, head_size/2}, {1, 1, 1, 1}}, "f32[?,32,?,64]", {{"begin_mask",  {1,1,1,0} }, {"end_mask",  {1,1,1,0} }, {"new_axis_mask",  {} }, {"shrink_axis_mask",  {} }, {"ellipsis_mask",  {} }});   //  __module.model.model.layers.2.self_attn/aten::slice/Slice_799(__module.model.model.layers.2.self_attn/aten::transpose/Transpose_722, Constant_373978, ScatterUpdate_373980, Constant_373983)
+        auto cat_Concat_812 = GenPattern<opset1::Concat>({neg_Multiply_808, slice_Slice_799}, "f32[?,32,?,128]", {{"axis", -1}});   //  __module.model.model.layers.2.self_attn/aten::cat/Concat_812(__module.model.model.layers.2.self_attn/aten::neg/Multiply_808, __module.model.model.layers.2.self_attn/aten::slice/Slice_799)
+        auto mul_Multiply_814 = GenPattern<opset1::Multiply>({cat_Concat_812, unsqueeze_Unsqueeze_768}, "f32[?,32,?,128]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::mul/Multiply_814(__module.model.model.layers.2.self_attn/aten::cat/Concat_812, __module.model.model.layers.2.self_attn/aten::unsqueeze/Unsqueeze_768)
+        auto add_Add_817 = GenPattern<opset1::Add>({mul_Multiply_787, mul_Multiply_814}, "f32[?,32,?,128]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::add/Add_817(__module.model.model.layers.2.self_attn/aten::mul/Multiply_787, __module.model.model.layers.2.self_attn/aten::mul/Multiply_814)
+
+        // concat past_key
+        auto cat_Concat_821 = GenPattern<opset1::Concat>({Parameter_past_k, add_Add_817}, "f32[?,32,?,128]", {{"axis", 2}});   //  __module.model.model.layers.2.self_attn/aten::cat/Concat_821(Parameter_past_k, __module.model.model.layers.2.self_attn/aten::add/Add_817)
+
+        auto Multiply_129060 = GenPattern<opset1::Multiply>({cat_Concat_821, {1.0f/sqrt(head_size)}}, "f32[?,32,?,128]", {{"auto_broadcast", "numpy"}});   //  Multiply_129060(__module.model.model.layers.2.self_attn/aten::cat/Concat_821, Constant_128938)
+
+        auto div_Divide = GenPattern<opset1::MatMul>({add_Add, Multiply_129060}, "f32[?,32,?,?]", {{"transpose_a", 0}, {"transpose_b", 1}});   //  __module.model.model.layers.2.self_attn/aten::div/Divide(__module.model.model.layers.2.self_attn/aten::add/Add, Multiply_129060)
+
+        // add attention & causal mask
+        auto add_Add_842 = GenPattern<opset1::Add>({div_Divide, attn_causal_mask}, "f32[?,32,?,?]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::add/Add_842(__module.model.model.layers.2.self_attn/aten::div/Divide, __module.model.model/aten::add/Add_291)
+
+        //auto Constant_416387 = GenPattern<opset1::Constant>({/*-3.40282e+38*/}, "f32[1,1,1,1]");
+
+        auto max_Maximum = GenPattern<opset1::Maximum>({add_Add_842, {-FLT_MAX}}, "f32[?,32,?,?]", {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.2.self_attn/aten::max/Maximum(__module.model.model.layers.2.self_attn/aten::add/Add_842, Constant_416387)
+
+        auto softmax_Softmax = GenPattern<opset1::Softmax>({max_Maximum | add_Add_842}, "f32[?,32,?,?]", {{"axis", 3}});   //  __module.model.model.layers.2.self_attn/aten::softmax/Softmax(__module.model.model.layers.2.self_attn/aten::max/Maximum)
+
+        // v_proj
+
+        // v_proj [B,L,H,S] => [B,H,L,S]
+        auto transpose_Transpose_738 = GenPattern<opset1::Transpose>({view_Reshape_724, {0, 2, 1, 3}}, "f32[?,32,?,128]");   //  __module.model.model.layers.2.self_attn/aten::transpose/Transpose_738(__module.model.model.layers.2.self_attn/aten::view/Reshape_724, __module.model.model.layers.2.self_attn/aten::transpose/ScatterElementsUpdate_737)
+
+        // concat pask value
+        auto cat_Concat_825 = GenPattern<opset1::Concat>({Parameter_past_v, transpose_Transpose_738}, "f32[?,32,?,128]", {{"axis", 2}});   //  __module.model.model.layers.2.self_attn/aten::cat/Concat_825(Parameter_past_v, __module.model.model.layers.2.self_attn/aten::transpose/Transpose_738)
+
+        auto matmul_MatMul_843 = GenPattern<opset1::MatMul>({softmax_Softmax, cat_Concat_825}, "f32[?,32,?,128]", {{"transpose_a", 0}, {"transpose_b", 0}});   //  __module.model.model.layers.2.self_attn/aten::matmul/MatMul_843(__module.model.model.layers.2.self_attn/aten::softmax/Softmax, __module.model.model.layers.2.self_attn/aten::cat/Concat_825)
+
+        // B,H,L,S => B,L,H,S => (B,L,H*S)
+        auto transpose_Transpose_857 = GenPattern<opset1::Transpose>({matmul_MatMul_843, {0, 2, 1, 3}}, "f32[?,?,32,128]");   //  __module.model.model.layers.2.self_attn/aten::transpose/Transpose_857(__module.model.model.layers.2.self_attn/aten::matmul/MatMul_843, __module.model.model.layers.2.self_attn/aten::transpose/ScatterElementsUpdate_856)
+
+        auto ListConstruct_665_Concat = GenPattern<opset1::Concat>({Gather_118153, {head_cnt * head_size}}, "i32[3]", {{"axis", 0}});   //  __module.model.model.layers.1.self_attn/prim::ListConstruct_665/Concat(Gather_118153, __module.model.model.layers.1.self_attn/prim::ListConstruct_665/Reshape_1)
+        auto reshape_Reshape = GenPattern<opset1::Reshape>({transpose_Transpose_857, ListConstruct_665_Concat}, nullptr, {{"special_zero", 0}});   // "f32[?,?,4096]"  __module.model.model.layers.1.self_attn/aten::reshape/Reshape(VNode_203709[0], __module.model.model.layers.1.self_attn/prim::ListConstruct_665/Concat)
+
+        return {reshape_Reshape, cat_Concat_821, cat_Concat_825};
+    }
+};
+
+
+
+// RMSNorm in last dimension
+struct llama_RMSNorm : public VNodePattern {
+    llama_RMSNorm() : VNodePattern("llama_RMSNorm") {}
+    OutputVector get(const OutputVector& inputs) override {
+        int ii = 0;
+        auto data = inputs[ii++];           // f32[-1,-1,-1];
+        auto Constant_weight = inputs[ii++];   // f32[1,1,4096];
+        auto Constant_epsilon = inputs[ii++];  // f32[1,1,1];
+
+        auto pow_Power = GenPattern<opset1::Power>({data, {2}}, nullptr, {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.10.post_attention_layernorm/aten::pow/Power(__module.model.model.layers.10/aten::add/Add, Constant_201400)
+        auto mean_ReduceMean = GenPattern<opset1::ReduceMean>({pow_Power, {-1}}, nullptr, {{"keep_dims", 1}});   //  __module.model.model.layers.10.post_attention_layernorm/aten::mean/ReduceMean(__module.model.model.layers.10.post_attention_layernorm/aten::pow/Power, 6)
+        auto add_Add = GenPattern<opset1::Add>({mean_ReduceMean, Constant_epsilon}, nullptr, {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.10.post_attention_layernorm/aten::add/Add(__module.model.model.layers.10.post_attention_layernorm/aten::mean/ReduceMean, Constant_201401)
+        auto rsqrt_Sqrt = GenPattern<opset1::Sqrt>({add_Add}, nullptr);   //  __module.model.model.layers.10.post_attention_layernorm/aten::rsqrt/Sqrt(__module.model.model.layers.10.post_attention_layernorm/aten::add/Add)
+        auto rsqrt_Divide = GenPattern<opset1::Power>({rsqrt_Sqrt, {-1.0f}}, nullptr, {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.10.post_attention_layernorm/aten::rsqrt/Divide(__module.model.model.layers.10.post_attention_layernorm/aten::rsqrt/Sqrt, Constant_152400)
+        auto mul_Multiply = GenPattern<opset1::Multiply>({data, rsqrt_Divide}, nullptr, {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.10.post_attention_layernorm/aten::mul/Multiply(__module.model.model.layers.10/aten::add/Add, __module.model.model.layers.10.post_attention_layernorm/aten::rsqrt/Divide)
+        auto mul_Multiply_2433 = GenPattern<opset1::Multiply>({Constant_weight, mul_Multiply}, nullptr, {{"auto_broadcast", "numpy"}});   //  __module.model.model.layers.10.post_attention_layernorm/aten::mul/Multiply_2433(Constant_201403, __module.model.model.layers.10.post_attention_layernorm/aten::mul/Multiply)
+
+        return {mul_Multiply_2433};
+    }
+
+    bool predicate(const OutputVector& inputs) override {
+        auto data_shape = inputs[0].get_partial_shape();
+        auto wei_shape = inputs[1].get_partial_shape();
+        auto esp_shape = inputs[2].get_partial_shape();
+        if (wei_shape.is_dynamic() || esp_shape.is_dynamic())
+            return false;
+        if (data_shape.rank() != wei_shape.rank())
+            return false;
+        auto last_dim_w = wei_shape[wei_shape.size() - 1];
+        auto last_dim_d = data_shape[wei_shape.size() - 1];
+        if (last_dim_w.is_dynamic() || last_dim_d.is_dynamic())
+            return false;
+        if (shape_size(esp_shape.get_shape()) > 1)
+            return false;
+        if (shape_size(wei_shape.get_shape()) != last_dim_w.get_length())
+            return false;
+        if (last_dim_w.get_length() != last_dim_d.get_length())
+            return false;
+        return true;
+    }
+};

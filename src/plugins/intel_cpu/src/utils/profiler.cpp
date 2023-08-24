@@ -26,6 +26,10 @@ inline uint64_t tsc_to_usec(uint64_t tsc_ticks) {
     return (tsc_ticks - tsc_ticks_base) * 1000000 / tsc_ticks_per_second;
 }
 
+inline uint64_t tsc_diff_to_usec(uint64_t tsc_ticks) {
+    return (tsc_ticks) * 1000000 / tsc_ticks_per_second;
+}
+
 void init_tsc() {
     static std::once_flag flag;
     std::call_once(flag, []() {
@@ -107,11 +111,11 @@ struct ProfilerManagerFinalizer {
                 ct.addCompleteEvent(d.name,
                                     d.cat,
                                     tsc_to_usec(d.start),
-                                    tsc_to_usec(d.end) - tsc_to_usec(d.start));
+                                    tsc_diff_to_usec(d.end - d.start));
             }
             pthis->all_data.clear();
             std::cout << "[OV_CPU_PROFILE] #" << pthis->serial << "(" << pthis << ") finalize: dumpped "
-                      << data_size << std::endl;
+                    << data_size << std::endl;
         }
         all_managers.clear();
 

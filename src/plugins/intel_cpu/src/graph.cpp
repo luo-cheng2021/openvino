@@ -54,6 +54,7 @@
 #include "memory_desc/dnnl_blocked_memory_desc.h"
 #include <common/primitive_desc.hpp>
 #include <common/primitive_desc_iface.hpp>
+#include "transformations/cpu_opset/common/op/vnode.hpp"
 #if (OV_THREAD == OV_THREAD_TBB || OV_THREAD == OV_THREAD_TBB_AUTO)
 #   include <tbb/task.h>
 #endif
@@ -248,8 +249,13 @@ void Graph::Replicate(const CNNNetwork &network) {
 
         if (op->get_type_info() == op::v0::Result::get_type_info_static()) {
             const auto &input = op->input_value(0);
-            const auto name = op::util::get_ie_output_name(input);
-
+            std::string name;
+            // VNode may produces many results
+            if (auto vnode = ov::as_type_ptr<ov::intel_cpu::VNode>(input.get_node_shared_ptr())) {
+                name = vnode->get_output_name(input.get_index());
+            } else {
+                name = op::util::get_ie_output_name(input);
+            }
             if (outputsInfo.count(name) != 0) {
                 outputNodesMap[name] = node;
             }
@@ -648,6 +654,15 @@ void Graph::InitEdges() {
 
                     for (auto node : vecConsumers) {
                         if (node->getExecIndex() >= execIndex) {
+                            DEBUG_LOG(edge->name(),
+                                      " needReorder due to execIndex: ",
+                                      node->getName(),
+                                      "  ",
+                                      node->getExecIndex(),
+                                      ">",
+                                      modifyingNode->getName(),
+                                      " ",
+                                      execIndex);
                             return true;
                         }
                     }

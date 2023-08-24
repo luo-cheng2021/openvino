@@ -141,7 +141,20 @@ cross_compiled_file(${TARGET_NAME}
         NAME        proposal_exec
         NAMESPACE   InferenceEngine::Extensions::Cpu::XARCH
 )
-
+cross_compiled_file(${TARGET_NAME}
+        ARCH AVX512F AVX2 ANY
+                    src/nodes/vnode_utils.cpp
+        API         src/nodes/vnode_utils.hpp
+        NAME        scale_add_softmax
+        NAMESPACE   InferenceEngine::Extensions::Cpu::XARCH
+)
+cross_compiled_file(${TARGET_NAME}
+        ARCH AVX2 ANY
+                    src/nodes/vnode_rms_norm.cpp
+        API         src/nodes/vnode_rms_norm.hpp
+        NAME        rms_norm
+        NAMESPACE   InferenceEngine::Extensions::Cpu::XARCH
+)
 # system dependencies must go last
 target_link_libraries(${TARGET_NAME} PRIVATE openvino::pugixml)
 set_ie_threading_interface_for(${TARGET_NAME})
