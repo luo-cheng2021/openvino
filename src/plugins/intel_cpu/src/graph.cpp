@@ -76,8 +76,6 @@ template<typename NET>
 void Graph::CreateGraph(NET &net, const GraphContext::CPtr ctx) {
     OV_ITT_SCOPE(FIRST_INFERENCE, itt::domains::intel_cpu_LT, "CreateGraph");
 
-    ProfilerInit();
-
     if (IsReady())
         ForgetGraphData();
 
@@ -1003,7 +1001,7 @@ bool Graph::ProcessDynNodes() {
 
 void Graph::PushInputData(const std::string& name, const InferenceEngine::Blob::Ptr &in) {
     if (!IsReady()) IE_THROW()<< "Wrong state. Topology not ready.";
-    auto _prof = Profile("Graph::PushInputData");
+    PROFILE(_prof, "Graph::PushInputData");
     auto input = inputNodesMap.find(name);
     if (input != inputNodesMap.end()) {
         auto& inTensorDesc = in->getTensorDesc();
@@ -1038,7 +1036,7 @@ void Graph::PushInputData(const std::string& name, const InferenceEngine::Blob::
 
 // suppose always being shared infer_request intel_cpu::Tensor to Graph if isDynamic.
 void Graph::PullOutputData(BlobMap &out) {
-    auto _prof = Profile("Graph::PullOutputData");
+    PROFILE(_prof, "Graph::PullOutputData");
     if (!IsReady())
         IE_THROW() << "Wrong state. Topology not ready.";
 
@@ -1125,16 +1123,12 @@ void Graph::PullOutputData(BlobMap &out) {
 
 void Graph::InferStatic(InferRequestBase* request) {
     dnnl::stream stream(getEngine());
-    auto _prof0 = Profile([this](ProfileData * p){
-        p->name = "Graph::InferStatic_#" + std::to_string(infer_count);
-    });
+    PROFILE(_prof0, std::string("Graph::InferStatic_#") + std::to_string(infer_count), {});
     for (const auto& node : executableGraphNodes) {
         VERBOSE(node, getConfig().debugCaps.verbose);
         PERF(node, getConfig().collectPerfCounters);
-        auto _prof = Profile([&](ProfileData * p){
-            p->name = node->getTypeStr();
-            p->args = {{"Name", node->getName()}, {"Impl", node->getPrimitiveDescriptorType()}};
-        });
+        PROFILE(_prof1, node->getTypeStr(), node->getName());
+
         if (request)
             request->ThrowIfCanceled();
         ExecuteNode(node, stream);
@@ -1338,9 +1332,8 @@ public:
 
 void Graph::InferDynamic(InferRequestBase* request) {
     dnnl::stream stream(getEngine());
-    auto _prof0 = Profile([&](ProfileData * p) {
-        p->name = "Graph::InferDynamic_#" + std::to_string(infer_count);
-    });
+    PROFILE(_prof0, std::string("Graph::InferDynamic_#") + std::to_string(infer_count));
+
     std::set<size_t> syncIndsWorkSet;
     for (const auto& nodeIndx : syncNodesInds) {
         syncIndsWorkSet.insert(nodeIndx.second);
@@ -1360,19 +1353,15 @@ void Graph::InferDynamic(InferRequestBase* request) {
 
     for (auto stopIndx : syncIndsWorkSet) {
         {
-            auto _prof = Profile([&](ProfileData * p){
-                p->name = "updateNodes";// + std::to_string(stopIndx);
-            });
+            PROFILE(_prof, "updateNodes");
             updateNodes->run(stopIndx);
         }
         for (; inferCounter < stopIndx; ++inferCounter) {
             auto& node = executableGraphNodes[inferCounter];
             VERBOSE(node, getConfig().debugCaps.verbose);
             PERF(node, getConfig().collectPerfCounters);
-            auto _prof = Profile([&](ProfileData * p){
-                p->name = node->getTypeStr();
-                p->args = {{"Name", node->getName()}, {"Impl", node->getPrimitiveDescriptorType()}};
-            });
+            PROFILE(_prof, node->getTypeStr(), node->getName());
+
             if (request)
                 request->ThrowIfCanceled();
             ExecuteNode(node, stream);
