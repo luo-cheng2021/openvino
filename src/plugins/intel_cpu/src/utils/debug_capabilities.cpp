@@ -865,7 +865,7 @@ DumpModel::DumpModel(std::string _file_name) {
         return;
 
     std::string path(exec_graph_path);
-    if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".cpp"))
+    if (path.size() < 4 || path.compare(path.size() - 4, 4, ".cpp") != 0)
         return;
 
     file_name = "dump_model" + std::to_string(dump_index) + "_" + _file_name;
