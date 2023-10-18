@@ -502,6 +502,11 @@ public:
         } else if (auto a = ov::as_type<ov::AttributeAdapter<ov::PartialShape>>(&adapter)) {
             const auto& value = a->get();
             append_attribute(name.c_str(), value.to_string().c_str());
+        } else if (auto a = ov::as_type<ov::AttributeAdapter<std::shared_ptr<ov::op::util::Variable>>>(&adapter)) {
+            const auto& vinfo = a->get()->get_info();
+            std::stringstream ss;
+            ss << vinfo.variable_id << vinfo.data_shape << vinfo.data_type;
+            append_attribute(name.c_str(), ss.str());
         } else {
             append_attribute(name.c_str(), "?");
         }
