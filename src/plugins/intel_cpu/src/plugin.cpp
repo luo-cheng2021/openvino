@@ -535,7 +535,7 @@ Engine::LoadExeNetworkImpl(const InferenceEngine::CNNNetwork &network, const std
     ov::element::Type inferencePrecision = getInferencePrecision(config, engConfig, modelType);
     const Config::SnippetsMode snippetsMode = getSnippetsMode(config, engConfig); 
 
-    DEBUG_DUMP_MODEL(nGraphFunc, "ngraph_org.cpp");
+    DEBUG_LOG(PrintableModel(*nGraphFunc, "org_"));
 
     Transformations transformations(nGraphFunc, enableLPT, inferencePrecision, isLegacyAPI(), snippetsMode, engConfig);
     transformations.UpToLpt();
@@ -566,7 +566,7 @@ Engine::LoadExeNetworkImpl(const InferenceEngine::CNNNetwork &network, const std
 
     transformations.CpuSpecificOpSet();
 
-    DEBUG_DUMP_MODEL(nGraphFunc, "ngraph_cpu.cpp");
+    DEBUG_LOG(PrintableModel(*nGraphFunc, "cpu_"));
 
     // SSE runtime check is needed for some ATOM machine, which is x86-64 but w/o SSE
     static Xbyak::util::Cpu cpu;
