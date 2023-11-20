@@ -312,6 +312,21 @@ void Graph::InitDescriptors() {
         OV_ITT_SCOPE_NEXT(FIRST_INFERENCE, taskChain, node->profiling.selectOptimalPrimitiveDescriptor);
         DEBUG_LOG("Select optimal primitive descriptors for node: ", node->getName());
         node->selectOptimalPrimitiveDescriptor();
+#ifdef CPU_DEBUG_CAPS
+        const auto& SPDs = node->getSupportedPrimitiveDescriptors();
+        for (size_t i = 0; i < SPDs.size(); i++) {
+            DEBUG_LOG("#",
+                      node->getExecIndex(),
+                      " ",
+                      node->getName(),
+                      "  SupportedPrimitiveDescriptors [",
+                      i,
+                      "/",
+                      SPDs.size(),
+                      "]: \n",
+                      SPDs[i]);
+        }
+#endif
     }
 }
 

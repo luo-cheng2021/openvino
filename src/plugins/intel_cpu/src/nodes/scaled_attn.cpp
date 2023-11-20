@@ -33,6 +33,7 @@
 
 using namespace InferenceEngine;
 using namespace InferenceEngine::Extensions::Cpu::XARCH;
+using namespace dnnl::impl::cpu::x64;
 
 namespace ov {
 namespace intel_cpu {
@@ -777,6 +778,10 @@ void ScaledDotProductAttention::initSupportedPrimitiveDescriptors() {
     auto orginSDPInputNumber = getOriginalInputsNumber() - (m_config.fuse_concat ? 2 : 0);
     config.inConfs.resize(getOriginalInputsNumber());
     config.outConfs.resize(getOriginalOutputsNumber());
+
+    auto kvCachePrecision = (mayiuse(avx512_core) || !m_config.fuse_concat) ? rtPrecision : ov::element::f16;
+    std::cout << "===================== kvPrecision = " << kvCachePrecision << ", rtPrecision = " << rtPrecision << std::endl;
+
     config.inConfs[0].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
         rtPrecision, getInputShapeAtPort(0)));
     config.inConfs[1].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
@@ -801,9 +806,9 @@ void ScaledDotProductAttention::initSupportedPrimitiveDescriptors() {
     }
     if (m_config.fuse_concat) {
         config.inConfs[orginSDPInputNumber + 0].setMemDesc(creatorsMap.at(LayoutType::cabd)->createSharedDesc(
-            rtPrecision, getInputShapeAtPort(orginSDPInputNumber + 0)));
+            kvCachePrecision, getInputShapeAtPort(orginSDPInputNumber + 0)));
         config.inConfs[orginSDPInputNumber + 1].setMemDesc(creatorsMap.at(LayoutType::cabd)->createSharedDesc(
-            rtPrecision, getInputShapeAtPort(orginSDPInputNumber + 1)));
+            kvCachePrecision, getInputShapeAtPort(orginSDPInputNumber + 1)));
     }
 
     config.outConfs[0].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
@@ -811,10 +816,10 @@ void ScaledDotProductAttention::initSupportedPrimitiveDescriptors() {
 
     if (m_config.fuse_concat) {
         config.outConfs[1].setMemDesc(creatorsMap.at(LayoutType::cabd)->createSharedDesc(
-            rtPrecision, getOutputShapeAtPort(1)));
+            kvCachePrecision, getOutputShapeAtPort(1)));
         //config.outConfs[1].inPlace(orginSDPInputNumber + 0);
         config.outConfs[2].setMemDesc(creatorsMap.at(LayoutType::cabd)->createSharedDesc(
-            rtPrecision, getOutputShapeAtPort(2)));
+            kvCachePrecision, getOutputShapeAtPort(2)));
         //config.outConfs[2].inPlace(orginSDPInputNumber + 1);
     }
     supportedPrimitiveDescriptors.emplace_back(config, impl_desc_type::ref_any);

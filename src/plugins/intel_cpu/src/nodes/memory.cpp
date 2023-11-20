@@ -281,7 +281,21 @@ void MemoryInput::initSupportedPrimitiveDescriptors() {
 
 void MemoryInput::initOptimalPrimitiveDescriptor() {
     // Mimic the child node memory desc to avoid extra reorder
-    auto childEdge = getChildEdgeAt(0);
+    auto selectChild = [&]() -> EdgePtr {
+        for (auto&& edge : getChildEdgesAtPort(0)) { // always only one child port
+            // prefer SDPA
+            auto child = edge->getChild();
+            if (one_of(child->getType(), Type::ScaledDotProductAttention)) {
+                return edge;
+            }
+        }
+
+        // default?
+        auto childEdge = getChildEdgeAt(0);
+        return childEdge;
+    };
+
+    auto childEdge = selectChild();
     auto child = childEdge->getChild();
     auto childPd = child->getSelectedPrimitiveDescriptor();
     OPENVINO_ASSERT(childPd,
@@ -291,6 +305,9 @@ void MemoryInput::initOptimalPrimitiveDescriptor() {
 
     const auto& childConfig = childPd->getConfig();
     auto mem_desc = childConfig.inConfs[childEdge->getOutputNum()].getMemDesc();
+
+    std::cout << "===================== " << getName() << " child = " << child->getName() << ", " << child->getTypeStr() << ", child port " <<
+    childEdge->getOutputNum() << "parent port " << childEdge->getInputNum() << ", mem precision = " << mem_desc->getPrecision() << std::endl;
 
     auto selectedPd = getSelectedPrimitiveDescriptor();
     OPENVINO_ASSERT(selectedPd,
