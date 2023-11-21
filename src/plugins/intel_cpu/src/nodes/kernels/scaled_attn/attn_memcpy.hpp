@@ -13,7 +13,7 @@ namespace Extensions {
 namespace Cpu {
 namespace XARCH {
 
-void attn_dot_products(void** a, void** b, void**c, size_t vec_num, size_t vec_len, ov::element::Type precision_a, ov::element::Type precision_b);
+void attn_copy(void* a, void* b, size_t N, ov::element::Type precision_a, ov::element::Type precision_b);
 
 }  // namespace XARCH
 }  // namespace Cpu

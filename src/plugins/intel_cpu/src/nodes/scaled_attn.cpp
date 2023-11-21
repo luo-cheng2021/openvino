@@ -30,6 +30,7 @@
 #include "kernels/scaled_attn/dot_product.hpp"
 #include "kernels/scaled_attn/acc_value.hpp"
 #include "kernels/scaled_attn/reduce.hpp"
+#include "kernels/scaled_attn/attn_memcpy.hpp"
 
 using namespace InferenceEngine;
 using namespace InferenceEngine::Extensions::Cpu::XARCH;
@@ -445,7 +446,7 @@ struct MHAKernel<ScaledDotProductAttention::KT_MLAS, float> {
 #endif
 
 // 2nd token case : only 1 token in query
-template <typename RT>
+template <typename RT, typename T2>
 struct MHASingleToken {
     PlainTensor<float> m_attn_w;
     PlainTensor<float> m_temp;
@@ -467,8 +468,8 @@ struct MHASingleToken {
     // alibi
     // output_emb    [B, L1, H*S]
     void operator()(PlainTensor<RT>& query,
-                    PlainTensor<RT>& present_key,
-                    PlainTensor<RT>& present_value,
+                    PlainTensor<T2>& present_key,
+                    PlainTensor<T2>& present_value,
                     const PlainTensor<float>& alibi_mask,
                     const PlainTensor<float>& attention_mask,
                     PlainTensor<RT>& output_emb,
@@ -492,8 +493,10 @@ struct MHASingleToken {
         parallel_for3d(B, H, kv_len, [&](size_t b, size_t h, size_t pk) {
             // which batch item should be used at postion pk?
             auto b_kv = beams ? beams.at({b, pk}) : b;
-            std::vector<RT*> as(q_len), bs(q_len);
+            std::vector<RT*> as(q_len);
+            std::vector<T2*> bs(q_len);
             std::vector<float*> cs(q_len);
+
             for (size_t pq = 0; pq < q_len; pq++) {
                 as[pq] = &query.at({b, h, pq, 0});
                 bs[pq] = &present_key.at({b_kv, h, pk, 0});
@@ -504,7 +507,8 @@ struct MHASingleToken {
                               reinterpret_cast<void**>(cs.data()),
                               q_len,
                               S,
-                              precision_of<RT>::value);
+                              precision_of<RT>::value,
+                              precision_of<T2>::value);
         });
 
         parallel_for3d(B, H, q_len, [&](size_t b, size_t h, size_t pq) {
@@ -538,7 +542,7 @@ struct MHASingleToken {
             size_t b, h, pv;
             if (start < end) {
                 parallel_it_init(start, b, B, h, H, pv, kv_len);
-                std::vector<RT*> vs(q_len * (end - start));
+                std::vector<T2*> vs(q_len * (end - start));
                 std::vector<float> weights(q_len * (end - start));
                 std::vector<float*> outs(q_len * (end - start));
                 size_t idx = 0;
@@ -571,13 +575,13 @@ struct MHASingleToken {
     }
 };
 
-template <ScaledDotProductAttention::KernelTypes KType, typename T>
+template <ScaledDotProductAttention::KernelTypes KType, typename T, typename T2>
 struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAttention::Executor {
     PlainTensor<T> q_input;           // f32[B, L1, H*S] / [B, H, L1, S]
     PlainTensor<T> k_input;           // f32[B, L1, H*S]
     PlainTensor<T> v_input;           // f32[B, L1, H*S]
-    PlainTensor<T> k_cache;           // f32[B, H, max_kvLen, S]
-    PlainTensor<T> v_cache;           // f32[B, H, max_kvLen, S]
+    PlainTensor<T2> k_cache;           // f16[B, H, max_kvLen, S]
+    PlainTensor<T2> v_cache;           // f16[B, H, max_kvLen, S]
     PlainTensor<int32_t> beam_table;  // i32[B, max_kvLen]
     PlainTensor<float> attn_mask;     // f32[B, qLen + kvLen]
     float scale_input = 0.0f;         // f32[B, qLen + kvLen]
@@ -587,7 +591,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
     PlainTensor<T> output_emb;        // f32[B, L1, H*S]
 
     MHAKernel<KType, T> kernel;
-    MHASingleToken<T> kernel_single_token;
+    // MHASingleToken<T, T2> kernel_single_token;
 
     PlainTensor<T> m_query_emb;  // query with RoPE position embedding
     size_t B, H, L1, L0, S;
@@ -606,18 +610,18 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
                        const std::vector<MemoryPtr>& outputs,
                        const PlainTensor<T>& k_input,
                        const PlainTensor<T>& v_input,
-                       PlainTensor<T>& past_k_output,
-                       PlainTensor<T>& past_v_output) {
+                       PlainTensor<T2>& past_k_output,
+                       PlainTensor<T2>& past_v_output) {
         if (config.fuse_concat) {
             auto past_k_idx = inputs.size() - 2;
-            PlainTensor<T> past_k_input, past_v_input;
+            PlainTensor<T2> past_k_input, past_v_input;
             auto past_k_mem = inputs[past_k_idx + 0];
             L0 = past_k_mem->getStaticDims()[2];
             // [S, B, L0, S]
-            past_k_input.resize({L0, B, H, S}, static_cast<T*>(past_k_mem->getData()));
-            past_v_input.resize({L0, B, H, S}, static_cast<T*>(inputs[past_k_idx + 1]->getData()));
-            past_k_output.resize({L0 + L1, B, H, S}, static_cast<T*>(outputs[1]->getData()));
-            past_v_output.resize({L0 + L1, B, H, S}, static_cast<T*>(outputs[2]->getData()));
+            past_k_input.resize({L0, B, H, S}, static_cast<T2*>(past_k_mem->getData()));
+            past_v_input.resize({L0, B, H, S}, static_cast<T2*>(inputs[past_k_idx + 1]->getData()));
+            past_k_output.resize({L0 + L1, B, H, S}, static_cast<T2*>(outputs[1]->getData()));
+            past_v_output.resize({L0 + L1, B, H, S}, static_cast<T2*>(outputs[2]->getData()));
             past_k_input = past_k_input.permute({1, 2, 0, 3});
             past_v_input = past_v_input.permute({1, 2, 0, 3});
             past_k_output = past_k_output.permute({1, 2, 0, 3});
@@ -626,18 +630,23 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
             parallel_for3d(B, H, L0, [&](size_t b, size_t h, size_t m) {
                 memcpy(&past_k_output.at({b, h, m, 0}),
                        &past_k_input.at({b, h, m, 0}),
-                       S * sizeof(T));
+                       S * sizeof(T2));
                 memcpy(&past_v_output.at({b, h, m, 0}),
                        &past_v_input.at({b, h, m, 0}),
-                       S * sizeof(T));
+                       S * sizeof(T2));
             });
             parallel_for3d(B, H, L1, [&](size_t b, size_t h, size_t m) {
-                memcpy(&past_k_output.at({b, h, m + L0, 0}),
-                       &k_input.at({b, h, m, 0}),
-                       S * sizeof(T));
-                memcpy(&past_v_output.at({b, h, m + L0, 0}),
-                       &v_input.at({b, h, m, 0}),
-                       S * sizeof(T));
+                // memcpy_fromT_toT2
+                attn_copy(&past_k_output.at({b, h, m + L0, 0}),
+                          &k_input.at({b, h, m, 0}),
+                          S,
+                          precision_of<T2>::value,
+                          precision_of<T>::value);
+                attn_copy(&past_v_output.at({b, h, m + L0, 0}),
+                          &v_input.at({b, h, m, 0}),
+                          S,
+                          precision_of<T2>::value,
+                          precision_of<T>::value);
             });
             // std::cout << "\npast K:\n";
             // std::cout << past_k_input;
@@ -680,8 +689,8 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
         L1 = q_input.size(2);
         S = q_input.size(-1);
 
-        PlainTensor<T> present_key, present_value;
-        concat_pastkv(inputs, outputs, k_input, v_input, present_key, present_value);
+        // PlainTensor<T2> present_key, present_value;
+        concat_pastkv(inputs, outputs, k_input, v_input, k_cache, v_cache);
         // std::cout << "\ncur Q:\n";
         // std::cout << q_input;
 
@@ -693,10 +702,10 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
         k_input.assert_dims({B, H, L0 + L1, S});
         v_input.assert_dims({B, H, L0 + L1, S});
         m_query_emb = q_input;
-        if (!fuse_concat || L0 > 1) {
-            present_key = k_input;
-            present_value = v_input;
-        }
+        // if (!fuse_concat || L1 > 1) {
+        //     present_key = k_input;
+        //     present_value = v_input;
+        // }
 
         bool auto_causal;
         bool use_attn_mask;
@@ -727,6 +736,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
 
         if (L1 > 1) {
             // multi-token version
+            PlainTensor<T> present_key = k_input, present_value = v_input;
             kernel(strm, m_query_emb, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor<float>(),
                    output_emb, has_out_transpose, auto_causal, scale_input);
         } else {
@@ -735,8 +745,17 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
             //  1, in matrix mutiply, using AMX is not efficency because the M dimension of A will alway be 1
             //  2, using float will save the repack cost which typically is required for bf16/int8 opt
             //  3, using dot product can leverage the SIMD while easily adapt to indirect kv cache
-            kernel_single_token(m_query_emb, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor<float>(),
-                        output_emb, beam_table, has_out_transpose, auto_causal, scale_input);
+            if (fuse_concat) {
+                PlainTensor<T2> present_key = k_cache, present_value = v_cache;
+                MHASingleToken<T, T2> kernel_single_token;
+                kernel_single_token(m_query_emb, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor<float>(),
+                            output_emb, beam_table, has_out_transpose, auto_causal, scale_input);
+            } else {
+                PlainTensor<T> present_key = k_input, present_value = v_input;
+                MHASingleToken<T, T> kernel_single_token;
+                kernel_single_token(m_query_emb, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor<float>(),
+                            output_emb, beam_table, has_out_transpose, auto_causal, scale_input);
+            }
         }
     }
 };
@@ -762,15 +781,24 @@ void ScaledDotProductAttention::initSupportedPrimitiveDescriptors() {
         return;
     auto rtPrecision = getOriginalInputPrecisionAtPort(0);
 
+    auto kvCachePrecision = (mayiuse(avx512_core) || !m_config.fuse_concat) ? rtPrecision : ov::element::f16;
+    std::cout << "===================== kvPrecision = " << kvCachePrecision << ", rtPrecision = " << rtPrecision << std::endl;
+
     if (rtPrecision == ov::element::bf16) {
-        m_executor = std::make_shared<AttentionExecutor<KT_ONEDNN, ov::bfloat16>>(m_config);
+        m_executor = std::make_shared<AttentionExecutor<KT_ONEDNN, ov::bfloat16, ov::bfloat16>>(m_config);
     } else {
         // only support bf16/f32
         rtPrecision = ov::element::f32;
 #ifdef OV_CPU_WITH_MLAS
-        m_executor = std::make_shared<AttentionExecutor<KT_MLAS, float>>(m_config);
+        if (kvCachePrecision == ov::element::f16)
+            m_executor = std::make_shared<AttentionExecutor<KT_MLAS, float, ov::float16>>(m_config);
+        else
+            m_executor = std::make_shared<AttentionExecutor<KT_MLAS, float, float>>(m_config);
 #else
-        m_executor = std::make_shared<AttentionExecutor<KT_ONEDNN, float>>(m_config);
+        if (kvCachePrecision == ov::element::f16)
+            m_executor = std::make_shared<AttentionExecutor<KT_ONEDNN, float, ov::float16>>(m_config);
+        else
+            m_executor = std::make_shared<AttentionExecutor<KT_ONEDNN, float, float>>(m_config);
 #endif
     }
     NodeConfig config;
@@ -778,10 +806,6 @@ void ScaledDotProductAttention::initSupportedPrimitiveDescriptors() {
     auto orginSDPInputNumber = getOriginalInputsNumber() - (m_config.fuse_concat ? 2 : 0);
     config.inConfs.resize(getOriginalInputsNumber());
     config.outConfs.resize(getOriginalOutputsNumber());
-
-    auto kvCachePrecision = (mayiuse(avx512_core) || !m_config.fuse_concat) ? rtPrecision : ov::element::f16;
-    std::cout << "===================== kvPrecision = " << kvCachePrecision << ", rtPrecision = " << rtPrecision << std::endl;
-
     config.inConfs[0].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
         rtPrecision, getInputShapeAtPort(0)));
     config.inConfs[1].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(

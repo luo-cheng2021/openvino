@@ -7,6 +7,10 @@
 #include <cstdint>
 #include <vector>
 
+#include "openvino/core/type/bfloat16.hpp"
+#include "openvino/core/type/float16.hpp"
+#include <immintrin.h>
+
 namespace InferenceEngine {
 namespace Extensions {
 namespace Cpu {
@@ -55,6 +59,15 @@ static constexpr size_t vec_len_f32_avx2 = vec_len_avx2 / sizeof(float);
         x = _mm512_mask_blend_epi32(mask, nan, x);                     // Check NaN before converting back to bf16
         _mm512_mask_cvtepi32_storeu_epi16(addr, mask_addr, x);
     }
+
+    inline __m512 mm512_uni_loadu_ps(ov::float16* a) {
+        auto vec_f16 = _mm256_loadu_si256(reinterpret_cast<__m256i*>(a));
+        return _mm512_cvtph_ps(vec_f16);
+    }
+    inline void mm512_uni_storeu_ps(ov::float16* addr,  __m512 v) {
+        __m256i vec_f16 = _mm512_cvtps_ph(v, 0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(addr), vec_f16);
+    }
 #endif
 
 #ifdef HAVE_AVX2
@@ -87,6 +100,16 @@ static constexpr size_t vec_len_f32_avx2 = vec_len_avx2 / sizeof(float);
         _mm_storeu_si128(reinterpret_cast<__m128i *>(addr), bf16_o);
     }
 
+    inline __m256 mm256_uni_loadu_ps(ov::float16* a) {
+        auto vec_f16 = _mm_loadu_si128(reinterpret_cast<__m128i*>(a));
+        auto o = _mm256_cvtph_ps(vec_f16);
+        return o;
+    }
+    inline void mm256_uni_storeu_ps(ov::float16* a,  __m256 v) {
+        __m128i vec_f16 = _mm256_cvtps_ph(v, 0);  // FIXME: rounding
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(a), vec_f16);
+    }
+
     inline void hsum(__m256& x) {
         __m256 y;                             // x:  0 1 2 3   4 5 6 7
         y = _mm256_permute_ps(x, 0x39);       // y:  1 2 3 0   5 6 7 4
@@ -97,6 +120,22 @@ static constexpr size_t vec_len_f32_avx2 = vec_len_avx2 / sizeof(float);
         x = _mm256_add_ps(x, y);              // x: 01234567 x x x x x x x
     }
 #endif
+
+    // single value conversion
+    // inline void uni_load_from_float16(float* a, ov::float16 b) {
+    //     __m128i vec_fp16 = _mm_set1_epi16 (b);
+    //     __m256 vec_fp32x8 = _mm256_cvtph_ps(vec_fp16);
+    //     __m128 vec_fp32x4 = _mm256_extractf128_ps(vec_fp32x8, 0);
+    //     *a = _mm_extract_ps(vec_fp32x4, 0);
+    // }
+    // inline void uni_load_from_float16(ov::bfloat16* a, ov::float16 b) {
+    //     std::cout << "SHOULD NOT BE HERE!" << std::endl;
+    // }
+    inline void uni_store_to_float16(ov::float16* a, float b) {
+        __m256i vb = _mm256_set1_epi32(b);
+        __m128i vec_f16x8 = _mm256_cvtps_ph(vb, 0);  // FIXME: rounding
+        *a = _mm_extract_epi16(vec_f16x8, 0);
+    }
 
 }  // namespace XARCH
 }  // namespace Cpu

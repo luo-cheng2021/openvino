@@ -67,6 +67,9 @@ if(WIN32)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DNOMINMAX")
 endif()
 
+# asked by _mm256_cvtps_ph - TODO
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mf16c")
+
 if(ENABLE_CPU_DEBUG_CAPS)
     add_definitions(-DCPU_DEBUG_CAPS)
 endif()
@@ -178,6 +181,13 @@ cross_compiled_file(${TARGET_NAME}
                     src/nodes/kernels/scaled_attn/reduce.cpp
         API         src/nodes/kernels/scaled_attn/reduce.hpp
         NAME        attn_reduce
+        NAMESPACE   InferenceEngine::Extensions::Cpu::XARCH
+)
+cross_compiled_file(${TARGET_NAME}
+        ARCH AVX512F AVX2 ANY
+                    src/nodes/kernels/scaled_attn/attn_memcpy.cpp
+        API         src/nodes/kernels/scaled_attn/attn_memcpy.hpp
+        NAME        attn_copy
         NAMESPACE   InferenceEngine::Extensions::Cpu::XARCH
 )
 # system dependencies must go last
