@@ -30,6 +30,7 @@
 #include "kernels/scaled_attn/dot_product.hpp"
 #include "kernels/scaled_attn/acc_value.hpp"
 #include "kernels/scaled_attn/reduce.hpp"
+#include "utils/profiler.hpp"
 
 using namespace InferenceEngine;
 using namespace InferenceEngine::Extensions::Cpu::XARCH;
@@ -475,6 +476,7 @@ struct MHASingleToken {
                     bool has_out_transpose,
                     bool auto_causal,
                     float d_scale = 0.0f) {
+        PROFILE(_attn, "attn_qk");
         auto B = query.size(0);
         auto H = query.size(1);
         auto q_len = query.size(2);
@@ -506,6 +508,7 @@ struct MHASingleToken {
                               precision_of<RT>::value);
         });
 
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("attn_softmax");
         parallel_for3d(B, H, q_len, [&](size_t b, size_t h, size_t pq) {
             // apply attention mask & sofmax
             auto ncausal = auto_causal ? (kv_len - q_len + pq + 1) : kv_len;
@@ -528,6 +531,7 @@ struct MHASingleToken {
         auto nthr = parallel_get_max_threads();
         m_temp.resize({static_cast<size_t>(nthr), B, q_len, H, S});
         // m_attn_w {B, H, q_len, kv_len}
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("attn_wv");
         parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
             size_t start{0}, end{0};
             splitter(B * H * kv_len, nthr, ithr, start, end);
@@ -561,6 +565,7 @@ struct MHASingleToken {
             }
         });
 
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("attn_reduce");
         parallel_for3d(B, H, q_len, [&](size_t b, size_t h, size_t pq) {
             auto* temp = &m_temp.at({0, b, pq, h, 0});
             size_t temp_stride = m_temp.stride(0);
@@ -592,7 +597,13 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
     size_t B, H, L1, L0, S;
 
     ScaledDotProductAttentionNode::Config config;
-    AttentionExecutor(const ScaledDotProductAttentionNode::Config& _config) : config(_config) {}
+    bool use_inplace = true;
+    PlainTensor<T> m_pastk, m_pastv;
+    AttentionExecutor(const ScaledDotProductAttentionNode::Config& _config) : config(_config), m_pastk(true), m_pastv(true) {
+        auto p = std::getenv("USE_INPLACE");
+        if (p)
+            use_inplace = p[0] == '1';
+    }
 
     void prepare_attn_mask(MemoryPtr attn_input) {
         attn_mask.resize(attn_input->getStaticDims());
@@ -607,29 +618,40 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
                        const PlainTensor<T>& v_input,
                        PlainTensor<T>& past_k_output,
                        PlainTensor<T>& past_v_output) {
+        PROFILE(_attn, "attn_concatorg");
         if (config.fuse_concat) {
             auto past_k_idx = inputs.size() - 2;
             PlainTensor<T> past_k_input, past_v_input;
             auto past_k_mem = inputs[past_k_idx + 0];
             L0 = past_k_mem->getStaticDims()[2];
             // [S, B, L0, S]
-            past_k_input.resize({L0, B, H, S}, static_cast<T*>(past_k_mem->getData()));
-            past_v_input.resize({L0, B, H, S}, static_cast<T*>(inputs[past_k_idx + 1]->getData()));
-            past_k_output.resize({L0 + L1, B, H, S}, static_cast<T*>(outputs[1]->getData()));
-            past_v_output.resize({L0 + L1, B, H, S}, static_cast<T*>(outputs[2]->getData()));
-            past_k_input = past_k_input.permute({1, 2, 0, 3});
-            past_v_input = past_v_input.permute({1, 2, 0, 3});
-            past_k_output = past_k_output.permute({1, 2, 0, 3});
-            past_v_output = past_v_output.permute({1, 2, 0, 3});
-            // TODO: remove after redefineOutputMemory can grow memory while keeping original content
-            parallel_for3d(B, H, L0, [&](size_t b, size_t h, size_t m) {
-                memcpy(&past_k_output.at({b, h, m, 0}),
-                       &past_k_input.at({b, h, m, 0}),
-                       S * sizeof(T));
-                memcpy(&past_v_output.at({b, h, m, 0}),
-                       &past_v_input.at({b, h, m, 0}),
-                       S * sizeof(T));
-            });
+            if (!use_inplace) {
+                past_k_input.resize({L0, B, H, S}, static_cast<T*>(past_k_mem->getData()));
+                past_v_input.resize({L0, B, H, S}, static_cast<T*>(inputs[past_k_idx + 1]->getData()));
+                past_k_output.resize({L0 + L1, B, H, S}, static_cast<T*>(outputs[1]->getData()));
+                past_v_output.resize({L0 + L1, B, H, S}, static_cast<T*>(outputs[2]->getData()));
+                past_k_input = past_k_input.permute({1, 2, 0, 3});
+                past_v_input = past_v_input.permute({1, 2, 0, 3});
+                past_k_output = past_k_output.permute({1, 2, 0, 3});
+                past_v_output = past_v_output.permute({1, 2, 0, 3});
+                // TODO: remove after redefineOutputMemory can grow memory while keeping original content
+                parallel_for3d(B, H, L0, [&](size_t b, size_t h, size_t m) {
+                    memcpy(&past_k_output.at({b, h, m, 0}),
+                        &past_k_input.at({b, h, m, 0}),
+                        S * sizeof(T));
+                    memcpy(&past_v_output.at({b, h, m, 0}),
+                        &past_v_input.at({b, h, m, 0}),
+                        S * sizeof(T));
+                });
+            } else {
+                if (!m_pastk) {
+                    m_pastk.resize({2048, B, H, S});
+                    m_pastv.resize({2048, B, H, S});
+                }
+                past_k_output = m_pastk.slice(0, 0, L0 + L1).permute({1, 2, 0, 3});
+                past_v_output = m_pastv.slice(0, 0, L0 + L1).permute({1, 2, 0, 3});
+            }
+            _attn = ov::intel_cpu::profilerManagerInstance.startProfile("attn_concatnew");
             parallel_for3d(B, H, L1, [&](size_t b, size_t h, size_t m) {
                 memcpy(&past_k_output.at({b, h, m + L0, 0}),
                        &k_input.at({b, h, m, 0}),
@@ -655,6 +677,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
         bool is_causal = config.is_causal;
         const bool fuse_concat = config.fuse_concat;
         auto input_num = inputs.size() - (fuse_concat ? 2 : 0);
+        PROFILE(_attn, "attn_concat");
 
         q_input.reset(inputs[0]);
         k_input.reset(inputs[1]);
@@ -681,6 +704,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
 
         PlainTensor<T> present_key, present_value;
         concat_pastkv(inputs, outputs, k_input, v_input, present_key, present_value);
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("attn");
         // std::cout << "\ncur Q:\n";
         // std::cout << q_input;
 
