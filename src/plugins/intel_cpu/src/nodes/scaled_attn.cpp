@@ -562,7 +562,7 @@ struct MHASingleToken {
                                 reinterpret_cast<void**>(vs.data()),
                                 q_len * (end - start),
                                 S,
-                                precision_of<RT>::value);
+                                precision_of<T2>::value);
             }
         });
 

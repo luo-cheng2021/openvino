@@ -121,16 +121,6 @@ static constexpr size_t vec_len_f32_avx2 = vec_len_avx2 / sizeof(float);
     }
 #endif
 
-    // single value conversion
-    // inline void uni_load_from_float16(float* a, ov::float16 b) {
-    //     __m128i vec_fp16 = _mm_set1_epi16 (b);
-    //     __m256 vec_fp32x8 = _mm256_cvtph_ps(vec_fp16);
-    //     __m128 vec_fp32x4 = _mm256_extractf128_ps(vec_fp32x8, 0);
-    //     *a = _mm_extract_ps(vec_fp32x4, 0);
-    // }
-    // inline void uni_load_from_float16(ov::bfloat16* a, ov::float16 b) {
-    //     std::cout << "SHOULD NOT BE HERE!" << std::endl;
-    // }
     inline void uni_store_to_float16(ov::float16* a, float b) {
         __m256i vb = _mm256_set1_epi32(b);
         __m128i vec_f16x8 = _mm256_cvtps_ph(vb, 0);  // FIXME: rounding
