@@ -635,6 +635,8 @@ void ScaledDotProductAttention::initSupportedPrimitiveDescriptors() {
     if (!supportedPrimitiveDescriptors.empty())
         return;
     auto rtPrecision = getOriginalInputPrecisionAtPort(0);
+    if (rtPrecision != ov::element::bf16 && rtPrecision != ov::element::f32)
+        rtPrecision = ov::element::f32;
     auto orginSDPInputNumber = getOriginalInputsNumber() - (m_config.config.fuse_concat ? 2 : 0);
 
     bool enableKVCacheFP16 = m_config.config.fuse_concat && mayiuse(cpu_isa_t::avx2) && rtPrecision != ov::element::bf16;
