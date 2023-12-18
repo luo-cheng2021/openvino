@@ -118,6 +118,12 @@ struct PlainTensor {
         assert(i >= 0 && static_cast<typename std::make_unsigned<decltype(i)>::type>(i) < m_rank);
         return m_strides[i];
     }
+
+    template<typename T>
+    std::vector<T> get_strides() const {
+        return std::vector<T>(m_strides, m_strides + m_rank);
+    }
+
     PlainTensor(MemoryPtr mem) {
         reset(mem);
     }
