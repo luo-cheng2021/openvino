@@ -31,6 +31,7 @@
 #include "kernels/scaled_attn/softmax.hpp"
 #include "kernels/scaled_attn/mha_single_token.hpp"
 #include "kernels/scaled_attn/attn_memcpy.hpp"
+#include "utils/profiler.hpp"
 
 using namespace InferenceEngine;
 using namespace InferenceEngine::Extensions::Cpu::XARCH;
@@ -298,9 +299,12 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
         if (d_scale == 0.0f)
             d_scale = 1.0f / sqrt(head_size);
 
+        PROFILE(_attn, "prepare_prim");
         prepare_prim(strm, query, present_key, present_value, B, H, Hk, q_len, kv_len, head_size, has_out_transpose);
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("exec_qk");
         exec_qk(strm, query, present_key);
 
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("exec_softmax");
         PlainTensor score;
         score.resize({B, H, q_len, kv_len}, static_cast<float*>(attn_score.get_data_handle()));
         PlainTensor weight;
@@ -320,6 +324,7 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
                          kv_len,
                          precision_of<T>::value);
         });
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("exec_kv");
         exec_kv(strm, present_value, output_emb);
     }
 };
@@ -540,6 +545,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
         float scale_input = 0.0f;
         size_t B, L1, L0, S;
 
+        PROFILE(_attn, "attn_execute");
         q_input.reset(inputs[0]);
         k_input.reset(inputs[1]);
         v_input.reset(inputs[2]);

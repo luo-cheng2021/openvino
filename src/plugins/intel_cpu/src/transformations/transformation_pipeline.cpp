@@ -437,6 +437,8 @@ void Transformations::PreLpt(const std::vector<ov::element::Type>& defaultPrecis
     CPU_SET_CALLBACK_X64(manager,
         [](const_node_ptr &node) -> bool {
             std::string errorMsg;
+            auto p = std::getenv("USE_SDPA");
+            if (p) return p[0] == '1';
             return node::ScaledDotProductAttention::isSupportedOperation(node, errorMsg);
         },
         ov::pass::ScaledDotProductAttentionDecomposition);
