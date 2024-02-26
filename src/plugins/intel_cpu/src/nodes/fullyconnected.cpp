@@ -682,7 +682,7 @@ void FullyConnected::execute(dnnl::stream strm) {
     updateMemoryPtr(DNNL_ARG_SRC);
     updateMemoryPtr(DNNL_ARG_DST);
 
-    execPtr->exec(primArgs, strm);
+    //execPtr->exec(primArgs, strm);
 }
 
 void FullyConnected::executeDynamicImpl(dnnl::stream strm) {

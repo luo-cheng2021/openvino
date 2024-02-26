@@ -216,13 +216,14 @@ void MemoryMngrWithReuse::setExtBuff(void *ptr, size_t size) {
 }
 
 bool MemoryMngrWithReuse::resize(size_t size) {
-    constexpr int cacheLineSize = 64;
+    constexpr int cacheLineSize = 4096;
     bool sizeChanged = false;
     if (size > m_memUpperBound) {
         void *ptr = dnnl::impl::malloc(size, cacheLineSize);
         if (!ptr) {
             OPENVINO_THROW("Failed to allocate ", size, " bytes of memory");
         }
+        memset(ptr, 1, size);
         m_memUpperBound = size;
         m_useExternalStorage = false;
         m_data = decltype(m_data)(ptr, destroy);
@@ -252,7 +253,7 @@ void MemoryMngrRealloc::setExtBuff(void *ptr, size_t size) {
 }
 
 bool MemoryMngrRealloc::resize(size_t size) {
-    constexpr int cacheLineSize = 64;
+    constexpr int cacheLineSize = 4096;
     constexpr size_t growFactor = 2;
     bool sizeChanged = false;
     if (size > m_memUpperBound) {

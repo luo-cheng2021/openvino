@@ -19,6 +19,9 @@
 #include "common.hpp"
 #include "softmax_kernel.hpp"
 #include "utils/profiler.hpp"
+#define _GNU_SOURCE
+#include <unistd.h>
+#include <sys/types.h>
 
 namespace ov {
 namespace Extensions {
@@ -300,7 +303,7 @@ static float sum_q_head(T* a, size_t n) {
 }
 
 template<typename TA, typename TB>
-static float dot_product(TA* a, TB* b, size_t n, float* scale, float* zp, float* head_sum) {
+static __attribute__((always_inline)) inline float dot_product(TA* a, TB* b, size_t n, float* scale, float* zp, float* head_sum) {
     size_t i = 0;
     float sum = 0.0f;
 #if defined(HAVE_AVX512F)
@@ -396,7 +399,7 @@ static float dot_product(TA* a, TB* b, size_t n, float* scale, float* zp, float*
 }
 
 template<typename TA>
-static float dot_product(TA* a, uint8_t* b, size_t n, float* scale, float* zp, float* head_sum) {
+static __attribute__((always_inline)) inline float dot_product(TA* a, uint8_t* b, size_t n, float* scale, float* zp, float* head_sum) {
     size_t i = 0;
     float sum = 0.0f;
 #if defined(HAVE_AVX512F)
@@ -587,6 +590,35 @@ static void attn_reduce(T* dst, float* temp, size_t M, size_t S, size_t temp_str
         dst[i] = sum;
     }
 }
+struct timer {
+    struct one_thread {
+        size_t ns;
+        size_t count;
+        std::chrono::steady_clock::time_point start;
+        size_t pad[8 - 3];
+    } threads[8];
+    timer() {
+        memset(this, 0, sizeof(*this));
+    }
+    void start(size_t id) {
+        threads[id].start = std::chrono::steady_clock::now();
+    }
+    void end(size_t id) {
+        auto end_ns = std::chrono::steady_clock::now();
+        threads[id].ns += std::chrono::duration_cast<std::chrono::nanoseconds>(end_ns - threads[id].start).count();
+        threads[id].count++;
+    }
+    void reset(size_t id) {
+        threads[id].ns = 0;
+        threads[id].count = 0;
+    }
+    ~timer() {
+        for (int i = 0; i < 8; i++) {
+            std::cout << "id " << i << " ns " << threads[i].ns << " count " << threads[i].count
+                << " avg ns " << static_cast<double>(threads[i].ns) / threads[i].count << "\n";
+        }
+    }
+} g_timer;
 
 template <typename T, typename T2>
 static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
@@ -619,7 +651,7 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
     }
     if (d_scale == 0.0f)
         d_scale = 1.0f / sqrt(S);
-    auto nthr = parallel_get_max_threads();
+    auto nthr = static_cast<size_t>(parallel_get_max_threads());
 
     // use per-token kernel, for each k,v token
     //  attn mask is a matrix of q_len(kv_len)
@@ -637,16 +669,117 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
         });
     }
 #endif
+    //std::cout << "b=" << B << ", H=" << h_group_num << ", S=" << S << "L=" << kv_len << "\n";
+    auto id = gettid();
+    // _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_mmset");
+    // parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
+    //     // std::string name = std::string("1tok_mmset") + std::to_string(ithr);
+    //     // _prof = ov::intel_cpu::profilerManagerInstance.startProfile(name);//"1tok_mmset1");
+    //     kv_len = std::min(1025ul, kv_len);
+    //     auto cur = gettid();
+    //     if (cur == id)
+    //         _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_mmset0");
+    // //for (size_t ithr = 0; ithr < nthr; ithr++) {
+    //     size_t start{0}, end{0};
+    //     splitter(B * h_group_num * kv_len, nthr, ithr, start, end);
+
+    //     size_t b, h_group, pk;
+    //     if (start < end) {
+    //         parallel_it_init(start, b, B, h_group, h_group_num, pk, kv_len);
+    //         auto p_k = &present_key.at<T2>(beams.at<int32_t>(b, pk), h_group, pk, false);
+    //         for (size_t iwork = start; iwork < end; ++iwork) {
+    //             //auto p = &past_k_scale_zp.at<float>(b_kv, h_group, pk, false);
+    //             //auto p_k = &present_key.at<T2>(b_kv, h_group, pk, false);
+    //             // _mm_prefetch(p_k + 4096*1, _MM_HINT_T0);
+    //             // _mm_prefetch(p_k + 4096*1 + 64, _MM_HINT_T0);
+    //             for (size_t i = 0; i < S; i += 64) {
+    //                 *(volatile int*)(p_k + i);
+    //             }
+    //             p_k += S;
+    //             if (++pk == kv_len) {
+    //                 pk = 0;
+    //                 //p_k += present_key.m_strides[1] - S * kv_len;
+    //                 if (++h_group == h_group_num) {
+    //                     h_group = 0;
+    //                     if (++b == B)
+    //                         break;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     if (cur == id)
+    //         _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_mmset0_end");
+    //     //break;
+    // //}
+    // });
+
+    // _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_fake");
+    // parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
+    //     auto curid = gettid();
+    //     if (curid == id)
+    //     _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_mmsetf0");
+    //     size_t start{0}, end{0};
+    //     kv_len = std::min(1025ul, kv_len);
+    //     splitter(B * h_group_num * kv_len, nthr, ithr, start, end);
+
+    //     size_t b, h_group, pk;
+    //     if (start < end) {
+    //         parallel_it_init(start, b, B, h_group, h_group_num, pk, kv_len);
+    //         auto p_k = &present_key.at<T2>(beams.at<int32_t>(b, pk), h_group, pk, false);
+    //         auto p_q = &query.at<T>(b, h_group, false);
+    //         float tmp[3] = {1.1f, 0.0f, 1.0f};
+    //         auto p = tmp;
+    //         auto p_sum = tmp + 2;
+    //         for (size_t iwork = start; iwork < end; ++iwork) {
+    //             auto b_kv = beams ? beams.at<int32_t>(b, pk) : b;
+    //             //auto p = &past_k_scale_zp.at<float>(b_kv, h_group, pk, false);
+    //             //auto p_k = &present_key.at<T2>(b_kv, h_group, pk, false);
+    //             _mm_prefetch(p_k + 4096*1, _MM_HINT_T0);
+    //             _mm_prefetch(p_k + 4096*1 + 64, _MM_HINT_T0);
+    //             buf_attn_w.at<float>(b, h_group, 0, pk) =
+    //                     dot_product(p_q, p_k,
+    //                         S, p, p + 1, p_sum);
+    //             //parallel_it_step(b, B, h_group, h_group_num, pk, kv_len);
+    //             //p += 2;
+    //             p_k += S;
+    //             if (++pk == kv_len) {
+    //                 pk = 0;
+    //                 p_k += present_key.m_strides[1] - S * kv_len;
+    //                 //p += past_k_scale_zp.m_strides[1] - 2 * kv_len;
+    //                 //p_q += S;
+    //                 //p_sum += 16;
+    //                 if (++h_group == h_group_num) {
+    //                     h_group = 0;
+    //                     if (++b == B)
+    //                         break;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     if (curid == id)
+    //     _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_mmsetf0_end");
+    // });
+
     _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_raw");
     parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
+        auto curid = gettid();
+        auto cur_kv_len = kv_len;
+        if (cur_kv_len == 1025)
+            g_timer.reset(ithr);
+        if (1 || curid == id) {
+            //_prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_mmsetr0");
+            g_timer.start(ithr);
+        }
         size_t start{0}, end{0};
-        splitter(B * h_group_num * kv_len, nthr, ithr, start, end);
+        if (cur_kv_len >= 1025)
+            cur_kv_len = 1025 * 10;
+        splitter(B * h_group_num * cur_kv_len, nthr, ithr, start, end);
 
         size_t b, h_group, pk;
         if (start < end) {
-            parallel_it_init(start, b, B, h_group, h_group_num, pk, kv_len);
-            if (q_len == 1 && h_each_group_len == 1) {
-                if (B == 1) {
+            parallel_it_init(start, b, B, h_group, h_group_num, pk, cur_kv_len);
+            if (1 || (q_len == 1 && h_each_group_len == 1)) {
+                if (0 && B == 1) {
                     // the memory will be continuous when b==1
                     for (size_t iwork = start; iwork < end; ++iwork) {
                         auto p = &past_k_scale_zp.at<float>(0, h_group, pk, false);
@@ -655,17 +788,37 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                         buf_attn_w.at<float>(0, h_group, 0, pk) =
                                 dot_product(&query.at<T>(0, h_group, false), p_k,
                                     S, p, p + 1, &head_sum.at<float>(0, h_group, false));
-                        parallel_it_step(b, B, h_group, h_group_num, pk, kv_len);
+                        parallel_it_step(b, B, h_group, h_group_num, pk, cur_kv_len);
                     }
                 } else {
+                    auto p_k = &present_key.at<T2>(beams.at<int32_t>(b, pk), h_group, pk, false);
+                    auto p_q = &query.at<T>(b, h_group, false);
+                    auto p = &past_k_scale_zp.at<float>(b, h_group, pk, false);
+                    auto p_sum = &head_sum.at<float>(b, h_group, false);
                     for (size_t iwork = start; iwork < end; ++iwork) {
                         auto b_kv = beams ? beams.at<int32_t>(b, pk) : b;
-                        auto p = &past_k_scale_zp.at<float>(b_kv, h_group, pk, false);
-                        auto p_k = &present_key.at<T2>(b_kv, h_group, pk, false);
-                        buf_attn_w.at<float>(b, h_group, 0, pk) =
-                                dot_product(&query.at<T>(b, h_group, false), p_k,
-                                    S, p, p + 1, &head_sum.at<float>(b, h_group, false));
-                        parallel_it_step(b, B, h_group, h_group_num, pk, kv_len);
+                        //auto p = &past_k_scale_zp.at<float>(b_kv, h_group, pk, false);
+                        //auto p_k = &present_key.at<T2>(b_kv, h_group, pk, false);
+                        _mm_prefetch(p_k + 4096*1, _MM_HINT_T0);
+                        _mm_prefetch(p_k + 4096*1 + 64, _MM_HINT_T0);
+                        buf_attn_w.at<float>(b, h_group, 0, pk / 102400) =
+                                dot_product(p_q, p_k,
+                                    S, p, p + 1, p_sum);
+                        //parallel_it_step(b, B, h_group, h_group_num, pk, cur_kv_len);
+                        //p += 2;
+                        p_k += S;
+                        if (++pk == cur_kv_len) {
+                            pk = 0;
+                            p_k += present_key.m_strides[1] - S * cur_kv_len;
+                            //p += past_k_scale_zp.m_strides[1] - 2 * cur_kv_len;
+                            p_q += S;
+                            //p_sum += 16;
+                            if (++h_group == h_group_num) {
+                                h_group = 0;
+                                if (++b == B)
+                                    break;
+                            }
+                        }
                     }
                 }
             } else {
@@ -679,9 +832,13 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                                         S, p, p + 1, &head_sum.at<float>(b, h, pq, false));
                         }
                     }
-                    parallel_it_step(b, B, h_group, h_group_num, pk, kv_len);
+                    parallel_it_step(b, B, h_group, h_group_num, pk, cur_kv_len);
                 }
             }
+        }
+        if (1 || curid == id) {
+            //_prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_mmsetr0_end");
+            g_timer.end(ithr);
         }
     });
 

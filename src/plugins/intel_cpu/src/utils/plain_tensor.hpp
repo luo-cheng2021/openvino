@@ -334,7 +334,7 @@ struct PlainTensor {
                 #ifdef _WIN32
                     ptr = _aligned_malloc(capacity_new, 64);
                 #else
-                    int rc = ::posix_memalign(&ptr, 64, capacity_new);
+                    int rc = ::posix_memalign(&ptr, 4096, capacity_new);
                     if (rc) ptr = nullptr;
                 #endif
                 m_ptr = std::shared_ptr<uint8_t>(static_cast<uint8_t*>(ptr), [](uint8_t* ptr) {
