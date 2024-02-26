@@ -121,6 +121,8 @@ static void quant_u8(uint8_t* a, T* b, size_t n, float& scale, float& zp) {
         min = std::min(min, tmp);
     }
     scale = (max - min) / 255;
+    if (scale == 0)
+        scale = 0.01f;
     zp = -min / scale;
 
     i = 0;

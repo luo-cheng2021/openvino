@@ -1193,6 +1193,7 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
             PlainTensor new_scale_zp_k, new_scale_zp_v;
 
             new_scale_zp_k.resize<float>({B, H, (L0 + L1) * 20, 2});
+            memset(new_scale_zp_k.data<float>(), 0, B * H * (L0 + L1) * 20 * 2 * sizeof(float));
             new_scale_zp_v.resize<float>({B, H, (L0 + L1) * 20, 2});
             if (L0 > 0 && !is_reset) {
                 parallel_for2d(B, H, [&](size_t b, size_t h) {
@@ -1247,9 +1248,9 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
     }
 
     if (kvcache_precision == ov::element::u8) {
-        // attn_quant(cur_k, cur_v,
-        //     past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1),
-        //     m_k_state->get_scale_zp().slice(2, L0, L0 + L1), m_v_state->get_scale_zp().slice(2, L0, L0 + L1));
+        attn_quant(cur_k, cur_v,
+            past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1),
+            m_k_state->get_scale_zp().slice(2, L0, L0 + L1), m_v_state->get_scale_zp().slice(2, L0, L0 + L1));
     } else {
         attn_memcpy(cur_k, cur_v, past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1));
     }
