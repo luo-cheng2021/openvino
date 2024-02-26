@@ -216,7 +216,7 @@ void MemoryMngrWithReuse::setExtBuff(void *ptr, size_t size) {
 }
 
 bool MemoryMngrWithReuse::resize(size_t size) {
-    constexpr int cacheLineSize = 4096;
+    constexpr int cacheLineSize = 64;
     bool sizeChanged = false;
     if (size > m_memUpperBound) {
         void *ptr = dnnl::impl::malloc(size, cacheLineSize);
@@ -253,7 +253,7 @@ void MemoryMngrRealloc::setExtBuff(void *ptr, size_t size) {
 }
 
 bool MemoryMngrRealloc::resize(size_t size) {
-    constexpr int cacheLineSize = 4096;
+    constexpr int cacheLineSize = 64;
     constexpr size_t growFactor = 2;
     bool sizeChanged = false;
     if (size > m_memUpperBound) {
