@@ -876,7 +876,7 @@ void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k,
     // 2. resize pastkv
     ov::element::Type kvcache_precision = m_k_state->internal_desc()->getPrecision();
     {
-        auto shape = {B, H, (L0 + L1 + 31) * 1, S};
+        auto shape = {B, H, (L0 + L1) * 2, S};
         auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(kvcache_precision,
             Shape(reverse(shape)),
             shape,
@@ -912,8 +912,8 @@ void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k,
             auto& old_scale_zp_v = m_v_state->get_scale_zp();
             PlainTensor new_scale_zp_k, new_scale_zp_v;
 
-            new_scale_zp_k.resize<float>({B, H, (L0 + L1 + 31) * 1, 2});
-            new_scale_zp_v.resize<float>({B, H, (L0 + L1 + 31) * 1, 2});
+            new_scale_zp_k.resize<float>({B, H, (L0 + L1) * 2, 2});
+            new_scale_zp_v.resize<float>({B, H, (L0 + L1) * 2, 2});
             parallel_for2d(B, H, [&](size_t b, size_t h) {
                 auto idx = static_cast<size_t>(table[b]);
                 for (size_t m = 0; m < L0; m++) {
@@ -949,12 +949,12 @@ void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k,
 
         m_k_state->assign_internal_state(new_internal_mem_k);
         m_v_state->assign_internal_state(new_internal_mem_v);
-        m_k_state->assign_internal_state_max_size(B * H * (L0 + L1 + 31) * 1 * S);
-        m_v_state->assign_internal_state_max_size(B * H * (L0 + L1 + 31) * 1 * S);
+        m_k_state->assign_internal_state_max_size(B * H * (L0 + L1) * 2 * S);
+        m_v_state->assign_internal_state_max_size(B * H * (L0 + L1) * 2 * S);
     }
     // 3. create beam table
     {
-        auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(ov::element::i32, Shape{B, (L0 + L1 + 31) * 1});
+        auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(ov::element::i32, Shape{B, (L0 + L1) * 2});
 
         auto new_hidden_state_k = std::make_shared<Memory>(getEngine(), mem_desc);
         auto new_hidden_state_v = std::make_shared<Memory>(getEngine(), mem_desc);
@@ -982,8 +982,8 @@ void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k,
 
         m_k_state->assign_hidden_state(new_hidden_state_k);
         m_v_state->assign_hidden_state(new_hidden_state_v);
-        m_k_state->assign_hidden_state_max_size(B * (L0 + L1 + 31) * 1);
-        m_v_state->assign_hidden_state_max_size(B * (L0 + L1 + 31) * 1);
+        m_k_state->assign_hidden_state_max_size(B * (L0 + L1) * 2);
+        m_v_state->assign_hidden_state_max_size(B * (L0 + L1) * 2);
     }
 }
 
@@ -1037,7 +1037,7 @@ void ScaledDotProductAttention::updateBeamTable(const MemoryPtr& mem_beam_idx, s
     OPENVINO_ASSERT(B * (L0 + L1) > 0, "B or (L0+L1) is zero, B: ", B, ", L0: ", L0, ", L1: ", L1);
     // resize buffer
     if (is_reset || B * (L0 + L1) > m_k_state->hidden_state_max_size()) {
-        auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(ov::element::i32, Shape{B, (L0 + L1 + 31) * 1});
+        auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(ov::element::i32, Shape{B, (L0 + L1) * 2});
 
         auto new_hidden_state_k = std::make_shared<Memory>(getEngine(), mem_desc);
         auto new_hidden_state_v = std::make_shared<Memory>(getEngine(), mem_desc);
@@ -1054,8 +1054,8 @@ void ScaledDotProductAttention::updateBeamTable(const MemoryPtr& mem_beam_idx, s
         }
         m_k_state->assign_hidden_state(new_hidden_state_k);
         m_v_state->assign_hidden_state(new_hidden_state_v);
-        m_k_state->assign_hidden_state_max_size(B * (L0 + L1 + 31) * 1);
-        m_v_state->assign_hidden_state_max_size(B * (L0 + L1 + 31) * 1);
+        m_k_state->assign_hidden_state_max_size(B * (L0 + L1) * 2);
+        m_v_state->assign_hidden_state_max_size(B * (L0 + L1) * 2);
         hidden_state_k = new_hidden_state_k;
         hidden_state_v = new_hidden_state_v;
         beam_table_k = new_beam_table_k;
@@ -1157,7 +1157,7 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
     // resize buffer
     ov::element::Type kvcache_precision = m_k_state->internal_desc()->getPrecision();
     if (is_reset || B * H * (L0 + L1) * S > m_k_state->internal_state_max_size()) {
-        auto new_shape = {B, H, (L0 + L1 + 31) * 1, S};
+        auto new_shape = {B, H, (L0 + L1) * 2, S};
         auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(kvcache_precision,
             Shape(reverse(new_shape)),
             new_shape,
@@ -1185,16 +1185,16 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
         past_v = new_pastv;
         m_k_state->assign_internal_state(new_internal_mem_k);
         m_v_state->assign_internal_state(new_internal_mem_v);
-        m_k_state->assign_internal_state_max_size(B * H * (L0 + L1 + 31) * 1 * S);
-        m_v_state->assign_internal_state_max_size(B * H * (L0 + L1 + 31) * 1 * S);
+        m_k_state->assign_internal_state_max_size(B * H * (L0 + L1) * 2 * S);
+        m_v_state->assign_internal_state_max_size(B * H * (L0 + L1) * 2 * S);
         if (kvcache_precision == ov::element::u8) {
             auto& old_scale_zp_k = m_k_state->get_scale_zp();
             auto& old_scale_zp_v = m_v_state->get_scale_zp();
             PlainTensor new_scale_zp_k, new_scale_zp_v;
 
-            new_scale_zp_k.resize<float>({B, H, (L0 + L1 + 31) * 1, 2});
-            memset(new_scale_zp_k.data<float>(), 0, B * H * (L0 + L1 + 31) * 1 * 2 * sizeof(float));
-            new_scale_zp_v.resize<float>({B, H, (L0 + L1 + 31) * 1, 2});
+            new_scale_zp_k.resize<float>({B, H, (L0 + L1) * 2, 2});
+            memset(new_scale_zp_k.data<float>(), 0, B * H * (L0 + L1) * 2 * 2 * sizeof(float));
+            new_scale_zp_v.resize<float>({B, H, (L0 + L1) * 2, 2});
             if (L0 > 0 && !is_reset) {
                 parallel_for2d(B, H, [&](size_t b, size_t h) {
                     memcpy(&new_scale_zp_k.at<float>(b, h, false),

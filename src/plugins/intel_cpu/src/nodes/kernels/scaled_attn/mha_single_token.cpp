@@ -802,23 +802,30 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     auto p_q = &query.at<T>(b, h_group, false);
                     auto p = &past_k_scale_zp.at<float>(b, h_group, pk, false);
                     auto p_sum = &head_sum.at<float>(b, h_group, false);
+                    auto p_next = &present_key.at<T2>(b/*beams.at<int32_t>(b, pk)*/, h_group + 1, false);
                     //g_timer.start(ithr);
                     for (size_t iwork = start; iwork < end; ++iwork) {
                         //auto b_kv = beams ? beams.at<int32_t>(b, pk) : b;
                         //auto p = &past_k_scale_zp.at<float>(b_kv, h_group, pk, false);
                         //auto p_k = &present_key.at<T2>(b_kv, h_group, pk, false);
-                        _mm_prefetch(p_k + 4096*1, _MM_HINT_T0);
-                        _mm_prefetch(p_k + 4096*1 + 64, _MM_HINT_T0);
                         buf_attn_w.at<float>(b, h_group, 0, pk) =
                                 dot_product(p_q, p_k,
                                     S, p, p + 1, &head_sum.at<float>(b, h_group, false));
+                        if ((cur_kv_len - pk) * S >= 4096) {
+                            _mm_prefetch(p_k + 4096*1, _MM_HINT_T0);
+                            _mm_prefetch(p_k + 4096*1 + 64, _MM_HINT_T0);
+                        } else {
+                            _mm_prefetch(p_next, _MM_HINT_T0);
+                            _mm_prefetch(p_next + 64, _MM_HINT_T0);
+                            p_next += S;
+                        }
                         //parallel_it_step(b, B, h_group, h_group_num, pk, cur_kv_len);
                         p += 2;
                         p_k += S;
                         if (++pk == cur_kv_len) {
                             pk = 0;
-                            //p_k += present_key.m_strides[1] - S * cur_kv_len;
-                            //p += past_k_scale_zp.m_strides[1] - 2 * cur_kv_len;
+                            p_k += present_key.m_strides[1] - S * cur_kv_len;
+                            p += past_k_scale_zp.m_strides[1] - 2 * cur_kv_len;
                             p_q += S;
                             //p_sum += 16;
                             if (++h_group == h_group_num) {
@@ -826,6 +833,7 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                                 if (++b == B)
                                     break;
                             }
+                            p_next = &present_key.at<T2>(b, h_group + 1, false);
                         }
                     }
                 }
