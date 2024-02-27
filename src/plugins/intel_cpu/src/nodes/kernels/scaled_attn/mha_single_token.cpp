@@ -761,11 +761,14 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
     // });
 
     _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_raw");
-    //std::atomic<int> flag;
+    //std::atomic<bool> flag;
     parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
-        //volatile size_t count = 0;
-        //while (count++ < 300000000) {}
-        // while (++flag < 30000 * nthr) {}
+        // volatile size_t count = 0;
+        // if (ithr == 0) {
+        //     while (count++ < 100000) {}
+        //     flag = true;
+        // }
+        // while (flag.load() == false) {}
         auto curid = gettid();
         auto cur_kv_len = kv_len;
         if (cur_kv_len == 1025)
