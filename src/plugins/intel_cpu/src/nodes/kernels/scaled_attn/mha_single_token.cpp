@@ -761,7 +761,11 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
     // });
 
     _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_raw");
+    //std::atomic<int> flag;
     parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
+        //volatile size_t count = 0;
+        //while (count++ < 300000000) {}
+        // while (++flag < 30000 * nthr) {}
         auto curid = gettid();
         auto cur_kv_len = kv_len;
         if (cur_kv_len == 1025)
@@ -772,7 +776,7 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
         }
         size_t start{0}, end{0};
         if (cur_kv_len >= 1025)
-            cur_kv_len = 1025 * 10;
+            cur_kv_len = 1025 * 1;
         splitter(B * h_group_num * cur_kv_len, nthr, ithr, start, end);
 
         size_t b, h_group, pk;
@@ -791,17 +795,18 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                         parallel_it_step(b, B, h_group, h_group_num, pk, cur_kv_len);
                     }
                 } else {
-                    auto p_k = &present_key.at<T2>(beams.at<int32_t>(b, pk), h_group, pk, false);
+                    auto p_k = &present_key.at<T2>(b/*beams.at<int32_t>(b, pk)*/, h_group, pk, false);
                     auto p_q = &query.at<T>(b, h_group, false);
                     auto p = &past_k_scale_zp.at<float>(b, h_group, pk, false);
                     auto p_sum = &head_sum.at<float>(b, h_group, false);
+                    //g_timer.start(ithr);
                     for (size_t iwork = start; iwork < end; ++iwork) {
-                        auto b_kv = beams ? beams.at<int32_t>(b, pk) : b;
+                        //auto b_kv = beams ? beams.at<int32_t>(b, pk) : b;
                         //auto p = &past_k_scale_zp.at<float>(b_kv, h_group, pk, false);
                         //auto p_k = &present_key.at<T2>(b_kv, h_group, pk, false);
                         _mm_prefetch(p_k + 4096*1, _MM_HINT_T0);
                         _mm_prefetch(p_k + 4096*1 + 64, _MM_HINT_T0);
-                        buf_attn_w.at<float>(b, h_group, 0, pk / 102400) =
+                        buf_attn_w.at<float>(b, h_group, 0, pk) =
                                 dot_product(p_q, p_k,
                                     S, p, p + 1, p_sum);
                         //parallel_it_step(b, B, h_group, h_group_num, pk, cur_kv_len);
