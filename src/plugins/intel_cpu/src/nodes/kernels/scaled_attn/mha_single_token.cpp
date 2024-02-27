@@ -808,14 +808,14 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                         _mm_prefetch(p_k + 4096*1 + 64, _MM_HINT_T0);
                         buf_attn_w.at<float>(b, h_group, 0, pk) =
                                 dot_product(p_q, p_k,
-                                    S, p, p + 1, p_sum);
+                                    S, p, p + 1, &head_sum.at<float>(b, h_group, false));
                         //parallel_it_step(b, B, h_group, h_group_num, pk, cur_kv_len);
                         p += 2;
                         p_k += S;
                         if (++pk == cur_kv_len) {
                             pk = 0;
-                            p_k += present_key.m_strides[1] - S * cur_kv_len;
-                            p += past_k_scale_zp.m_strides[1] - 2 * cur_kv_len;
+                            //p_k += present_key.m_strides[1] - S * cur_kv_len;
+                            //p += past_k_scale_zp.m_strides[1] - 2 * cur_kv_len;
                             p_q += S;
                             //p_sum += 16;
                             if (++h_group == h_group_num) {
