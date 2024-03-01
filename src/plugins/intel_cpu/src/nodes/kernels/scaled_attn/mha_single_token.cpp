@@ -588,6 +588,41 @@ static void attn_reduce(T* dst, float* temp, size_t M, size_t S, size_t temp_str
     }
 }
 
+struct timer {
+    struct one_thread {
+        size_t ns;
+        size_t count;
+        std::chrono::steady_clock::time_point start;
+        size_t pad[8 - 3];
+    } threads[48];
+    timer() {
+        memset(this, 0, sizeof(*this));
+    }
+    void start(size_t id) {
+        threads[id].start = std::chrono::steady_clock::now();
+    }
+    void end(size_t id) {
+        auto end_ns = std::chrono::steady_clock::now();
+        threads[id].ns += std::chrono::duration_cast<std::chrono::nanoseconds>(end_ns - threads[id].start).count();
+        threads[id].count++;
+    }
+    void reset(size_t id) {
+        threads[id].ns = 0;
+        threads[id].count = 0;
+    }
+    ~timer() {
+        size_t ns = 0;
+        size_t count = 0;
+        for (int i = 0; i < 48; i++) {
+            ns += threads[i].ns;
+            count += threads[i].count;
+            std::cout << "id " << i << " ns " << threads[i].ns << " count " << threads[i].count
+                << " avg ns " << static_cast<double>(threads[i].ns) / threads[i].count << "\n";
+        }
+        std::cout << "overall ns " << ns << " count " << count << " avg ns " << static_cast<double>(ns) / count << "\n";
+    }
+} g_timer;
+
 template <typename T, typename T2>
 static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                              const ov::intel_cpu::PlainTensor& present_key,
@@ -639,6 +674,9 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
 #endif
     _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_raw");
     parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
+        if (kv_len == 1025)
+            g_timer.reset(ithr);
+        g_timer.start(ithr);
         size_t start{0}, end{0};
         splitter(B * h_group_num * kv_len, nthr, ithr, start, end);
 
@@ -665,6 +703,9 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                         buf_attn_w.ptr<float>(b, h_group, 0)[pk] =
                                 dot_product(query.ptr<T>(b, h_group), p_k,
                                     S, p, p + 1, head_sum.ptr<float>(b, h_group));
+                        if ((kv_len - pk) * S >= 4096) {
+                            prefetch_bytes(S, _MM_HINT_T0, 4096, p_k);
+                        }
                         parallel_it_step(b, B, h_group, h_group_num, pk, kv_len);
                     }
                 }
@@ -683,6 +724,7 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                 }
             }
         }
+        g_timer.end(ithr);
     });
 
     _prof = ov::intel_cpu::profilerManagerInstance.startProfile("1tok_softmax");

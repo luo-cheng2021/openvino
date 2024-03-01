@@ -1196,6 +1196,8 @@ void ScaledDotProductAttention::updateBeamTable(const MemoryPtr& mem_beam_idx, s
     auto hidden_state_k = m_k_state->hidden_state_mem();
     auto hidden_state_v = m_v_state->hidden_state_mem();
     beam_idx.reset(mem_beam_idx);
+    for (size_t i = 0; i < beam_idx.size(0); i++)
+        beam_idx.at<int32_t>({i}) = i;
 
     auto B = beam_idx.size(0);
     auto is_reset = m_k_state->is_reset_state() || m_v_state->is_reset_state();
