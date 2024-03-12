@@ -855,7 +855,7 @@ void network::execute_impl(const std::vector<event::ptr>& events) {
     int64_t curr_iter = -1;
     GPU_DEBUG_GET_INSTANCE(debug_config);
 #ifdef GPU_DEBUG_CONFIG
-    curr_iter = iteration++;
+    curr_iter = iteration;
 #endif
 
     // Wait for previous execution completion
@@ -1175,6 +1175,9 @@ void network::execute_impl(const std::vector<event::ptr>& events) {
     GPU_DEBUG_IF(debug_config->dump_runtime_memory_pool > 0) {
         get_memory_pool().dump(get_id());
     }
+#ifdef GPU_DEBUG_CONFIG
+    iteration++;
+#endif
 }
 
 std::vector<primitive_id> network::get_input_ids() const {
@@ -1376,7 +1379,7 @@ void network::transfer_memory_to_device(std::shared_ptr<primitive_inst> instance
         auto device_mem = inst_mem.get_engine()->allocate_memory(inst_mem.get_layout(), allocation_type::usm_device, false);
         device_mem->copy_from(get_stream(), inst_mem);
         GPU_DEBUG_LOG << "[" << node.id() << ": constant]" << std::endl;
-        _memory_pool->release_memory(&inst_mem, node.id(), get_id());
+        _memory_pool->release_memory(&inst_mem, node.get_unique_id(), node.id(), get_id());
         instance->set_output_memory(device_mem);
     }
 }
