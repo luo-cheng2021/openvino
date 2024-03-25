@@ -588,6 +588,27 @@ static void attn_reduce(T* dst, float* temp, size_t M, size_t S, size_t temp_str
     }
 }
 
+template <typename T0, typename T1, typename T2, typename F>
+void parallel_for3d_dynamic(const T0& D0, const T1& D1, const T2& D2, const F& func) {
+#if OV_THREAD == OV_THREAD_TBB
+    // auto work_amount = static_cast<size_t>(D0 * D1 * D2);
+    // int nthr = parallel_get_max_threads();
+
+    tbb::parallel_for(tbb::blocked_range3d<T0, T1, T2>(0, D0, 0, D1, 0, D2),
+    [=](const tbb::blocked_range3d<T0, T1, T2>& r) {
+        for (T0 dim1 = r.pages().begin(); dim1 < r.pages().end(); dim1++) {
+            for (T1 dim2 = r.rows().begin(); dim2 < r.rows().end(); dim2++) {
+                for (T2 dim3 = r.cols().begin(); dim3 < r.cols().end(); dim3++) {
+                    func(dim1, dim2, dim3);
+                }
+            }
+        }
+    });
+#else
+    OPENVINO_THROW("Not implemented");
+#endif
+}
+
 template <typename T, typename T2>
 static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                              const ov::intel_cpu::PlainTensor& present_key,
@@ -640,32 +661,32 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
         });
     }
 #endif
-    parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
-        size_t start{0}, end{0};
-        splitter(B * h_group_num * kv_len, nthr, ithr, start, end);
 
-        size_t b, h_group, pk;
-        if (start < end) {
-            parallel_it_init(start, b, B, h_group, h_group_num, pk, kv_len);
-            if (is_pagedattn) {
-                for (size_t iwork = start; iwork < end; ++iwork) {
-                    auto context_len = static_cast<size_t>(context_lens.ptr<int32_t>()[b]);
-                    // kv_len must be valid
-                    if (pk < context_len) {
-                        auto block_idx = beams.ptr<int32_t>(b)[pk];
-                        OPENVINO_ASSERT(block_idx >= 0, "block idx must be greater or equal than 0");
+    if (is_pagedattn) {
+        parallel_for3d_dynamic(B, h_group_num, kv_len, [&](size_t b, size_t h_group, size_t pk) {
+            auto context_len = static_cast<size_t>(context_lens.ptr<int32_t>()[b]);
+            // kv_len must be valid
+            if (pk < context_len) {
+                auto block_idx = beams.ptr<int32_t>(b)[pk];
+                OPENVINO_ASSERT(block_idx >= 0, "block idx must be greater or equal than 0");
 
-                        for (size_t pq = 0; pq < q_len; pq++) {
-                            for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++) {
-                                buf_attn_w.ptr<float>(b, h, pq)[pk] =
-                                        dot_product(query.ptr<T>(b, h, pq), present_key.ptr<T2>(block_idx, h_group),
-                                            S, nullptr, nullptr, nullptr);
-                            }
-                        }
+                for (size_t pq = 0; pq < q_len; pq++) {
+                    for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++) {
+                        buf_attn_w.ptr<float>(b, h, pq)[pk] =
+                                dot_product(query.ptr<T>(b, h, pq), present_key.ptr<T2>(block_idx, h_group),
+                                    S, nullptr, nullptr, nullptr);
                     }
-                    parallel_it_step(b, B, h_group, h_group_num, pk, kv_len);
                 }
-            } else {
+            }
+        });
+    } else {
+        parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
+            size_t start{0}, end{0};
+            splitter(B * h_group_num * kv_len, nthr, ithr, start, end);
+
+            size_t b, h_group, pk;
+            if (start < end) {
+                parallel_it_init(start, b, B, h_group, h_group_num, pk, kv_len);
                 if (q_len == 1 && h_each_group_len == 1) {
                     if (B == 1) {
                         // the memory will be continuous when b==1
@@ -704,11 +725,11 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     }
                 }
             }
-        }
-    });
+        });
+    }
 
     _attn = ov::intel_cpu::profilerManagerInstance.startProfile("t1_softmax");
-    parallel_for3d(B, H, q_len, [&](size_t b, size_t h, size_t pq) {
+    parallel_for3d_dynamic(B, H, q_len, [&](size_t b, size_t h, size_t pq) {
         auto cur_kv_len = kv_len;
         auto ncausal = auto_causal ? (cur_kv_len - q_len + pq + 1) : cur_kv_len;
         if (is_pagedattn) {
@@ -739,37 +760,42 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
     // attn_w * V
     buf_attn_score.resize<float>({static_cast<size_t>(nthr), B, q_len, H, S});
     // buf_attn_w {B, H, q_len, kv_len}
-    parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
-        size_t start{0}, end{0};
-        splitter(B * h_group_num * kv_len, nthr, ithr, start, end);
 
-        memset(buf_attn_score.ptr<float>(ithr, 0, 0, 0, 0), 0, buf_attn_score.stride(0) * sizeof(float));
+    if (is_pagedattn) {
+        parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
+            memset(buf_attn_score.ptr<float>(ithr, 0, 0, 0, 0), 0, buf_attn_score.stride(0) * sizeof(float));
+        });
 
-        size_t b, h_group, pv;
-        if (start < end) {
-            parallel_it_init(start, b, B, h_group, h_group_num, pv, kv_len);
-            if (is_pagedattn) {
-                for (size_t iwork = start; iwork < end; ++iwork) {
-                    auto context_len = static_cast<size_t>(context_lens.ptr<int32_t>()[b]);
-                    // kv_len must be valid
-                    if (pv < context_len) {
-                        auto block_idx = beams.ptr<int32_t>(b)[pv];
-                        OPENVINO_ASSERT(block_idx >= 0, "block idx in vcache must be greater or equal than 0");
-                        auto* v = present_value.ptr<T2>(block_idx, h_group);
-                        for (size_t pq = 0; pq < q_len; pq++) {
-                            for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++) {
-                                attn_acc_value(buf_attn_score.ptr<float>(ithr, b, pq, h),
-                                            buf_attn_w.ptr<float>(b, h, pq)[pv],
-                                            v,
-                                            S,
-                                            nullptr,
-                                            nullptr);
-                            }
-                        }
+        parallel_for3d_dynamic(B, h_group_num, kv_len, [&](size_t b, size_t h_group, size_t pv) {
+            auto ithr = parallel_get_thread_num();
+            auto context_len = static_cast<size_t>(context_lens.ptr<int32_t>()[b]);
+            // kv_len must be valid
+            if (pv < context_len) {
+                auto block_idx = beams.ptr<int32_t>(b)[pv];
+                OPENVINO_ASSERT(block_idx >= 0, "block idx in vcache must be greater or equal than 0");
+                auto* v = present_value.ptr<T2>(block_idx, h_group);
+                for (size_t pq = 0; pq < q_len; pq++) {
+                    for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++) {
+                        attn_acc_value(buf_attn_score.ptr<float>(ithr, b, pq, h),
+                                    buf_attn_w.ptr<float>(b, h, pq)[pv],
+                                    v,
+                                    S,
+                                    nullptr,
+                                    nullptr);
                     }
-                    parallel_it_step(b, B, h_group, h_group_num, pv, kv_len);
                 }
-            } else {
+            }
+        });
+    } else {
+        parallel_nt_static(nthr, [&](const size_t ithr, const size_t nthr) {
+            size_t start{0}, end{0};
+            splitter(B * h_group_num * kv_len, nthr, ithr, start, end);
+
+            memset(buf_attn_score.ptr<float>(ithr, 0, 0, 0, 0), 0, buf_attn_score.stride(0) * sizeof(float));
+
+            size_t b, h_group, pv;
+            if (start < end) {
+                parallel_it_init(start, b, B, h_group, h_group_num, pv, kv_len);
                 if (q_len == 1 && h_each_group_len == 1) {
                     for (size_t iwork = start; iwork < end; ++iwork) {
                         auto b_kv = beams ? beams.ptr<int32_t>(b)[pv] : b;
@@ -802,11 +828,11 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     }
                 }
             }
-        }
-    });
+        });
+    }
 
     _attn = ov::intel_cpu::profilerManagerInstance.startProfile("t1_reduce");
-    parallel_for3d(B, H, q_len, [&](size_t b, size_t h, size_t pq) {
+    parallel_for3d_dynamic(B, H, q_len, [&](size_t b, size_t h, size_t pq) {
         auto* temp = buf_attn_score.ptr<float>(0, b, pq, h);
         size_t temp_stride = buf_attn_score.stride(0);
         auto* dst = has_out_transpose ? output_emb.ptr<T>(b, pq, h * S) : output_emb.ptr<T>(b, h, pq);
