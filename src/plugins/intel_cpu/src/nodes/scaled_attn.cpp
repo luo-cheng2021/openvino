@@ -872,10 +872,7 @@ struct MHASingleToken {
 #ifdef OPENVINO_ARCH_X86_64
     std::shared_ptr<JitMatMulVecAMX> m_gemv;
 #endif
-    MHASingleToken() {
-        m_attn_w.resize<float>({200, 32, 10, 1024});
-        m_attn_w = 0;
-    }
+    MHASingleToken() {}
 
     // Q, K, V is ready, do attention
     // query         [B, H, q_len, S]

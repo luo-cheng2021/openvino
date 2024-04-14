@@ -201,7 +201,7 @@ static void attn_acc_value_block(float* out, float* weight, uint8_t* v, size_t S
         auto attn_w_vec0 = _mm512_set1_ps(weight[0] * v_f0[0]);
         auto zp0 = _mm512_set1_ps(v_f0[1]);
         size_t i = 0;
-        //prefetch_bytes(64, _MM_HINT_T0, 4096, v);
+        prefetch_bytes(64, _MM_HINT_T0, 4096, v);
         for (; i + vec_len_f32_avx512 <= S; i += vec_len_f32_avx512) {
             auto v_out = mm512_uni_loadu_ps(out + i);
             auto v0 = _mm512_sub_ps(_mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_loadu_si128(reinterpret_cast<__m128i*>(v + i + 8)))), zp0);
@@ -930,18 +930,22 @@ static void dot_product_block(TA* a, TB* b, float* c, size_t n, size_t block_siz
 template<typename TA>
 static __attribute__((noinline)) void dot_product_block(TA* a, uint8_t* b, float* c, size_t n, size_t block_size) {
 #if defined(HAVE_AVX512F)
-    // asm("int3");
     for (size_t j = 0; j < block_size; j++) {
         auto vsum = _mm512_setzero_ps();
         auto b0 = reinterpret_cast<float*>(b);
         auto v_zp = _mm512_set1_ps(b0[1]);
         prefetch_bytes(64, _MM_HINT_T0, 4096, b);
-        for (size_t i = 0; i + vec_len_f32_avx512 <= n; i += vec_len_f32_avx512) {
+        size_t i = 0;
+        for (; i + vec_len_f32_avx512 <= n; i += vec_len_f32_avx512) {
             auto va = mm512_uni_loadu_ps(a + i);
             auto vb = _mm512_sub_ps(_mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_loadu_si128(reinterpret_cast<__m128i*>(b + i + 8)))), v_zp);
             vsum = _mm512_fmadd_ps(va, vb, vsum);
         }
-        *c++ = _mm512_reduce_add_ps(vsum) * b0[0];
+        auto sum = _mm512_reduce_add_ps(vsum);
+        for (; i < n; i++) {
+            sum += a[i] * (b[i] - b0[1]);
+        }
+        *c++ = sum * b0[0];
         b += n + 8;
     }
     return;
@@ -1146,10 +1150,10 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
         if (1 || B >= static_cast<size_t>(nthr)) {
             // if present_key is true, it means q*k is already computed in the caller
             if (present_key)
-                buf_attn_w.resize<float>({static_cast<size_t>(nthr), q_len, h_each_group_len, (max_context_len + block_size - 1) / block_size * block_size});
-            buf_attn_score.resize<float>({static_cast<size_t>(nthr), q_len, h_each_group_len, S});
+                buf_attn_w.resize<float>({static_cast<size_t>(nthr), q_len, H, (max_context_len + block_size - 1) / block_size * block_size});
+            buf_attn_score.resize<float>({static_cast<size_t>(nthr), q_len, H, S});
             auto tid = gettid();
-            parallel_for2d(B, h_group_num, [&](size_t b, size_t h_group) {
+            parallel_for(B, [&](size_t b) {
                 auto ithr = parallel_get_thread_num();
                 auto context_len = static_cast<size_t>(context_lens.ptr<int32_t>()[b]);
                 auto cur_tid = gettid();
@@ -1167,9 +1171,11 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                         for (size_t pk = 0; pk < context_len; pk += block_size) {
                             size_t pk_in_blocks = pk / block_size;
                             auto block_number = beams.ptr<int32_t>(b)[pk_in_blocks];
-                            for (size_t h = h_group * h_each_group_len, group_idx = 0; h < (h_group + 1) * h_each_group_len; h++, group_idx++) {
-                                dot_product_block(query.ptr<T>(b, h, pq), present_key.ptr<T2>(block_number, h_group),
-                                    buf_attn_w.ptr<float>(ithr, pq, group_idx) + pk, S, std::min(block_size, context_len - pk));
+                            for (size_t h_group = 0; h_group < h_group_num; h_group++) {
+                                for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++) {
+                                    dot_product_block(query.ptr<T>(b, h, pq), present_key.ptr<T2>(block_number, h_group),
+                                        buf_attn_w.ptr<float>(ithr, pq, h) + pk, S, std::min(block_size, context_len - pk));
+                                }
                             }
                         }
                     }
@@ -1187,24 +1193,26 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                 auto ncausal = context_len;
                 auto attn_mask_prec = attention_mask.get_precision();
                 for (size_t pq = 0; pq < q_len; pq++)
-                    for (size_t h = h_group * h_each_group_len, group_idx = 0; h < (h_group + 1) * h_each_group_len; h++, group_idx++) {
-                        // apply attention mask & sofmax
-                        float* alibi_ptr = alibi_mask ? &alibi_mask.at<float>({b, h, pq, 0}, true) : nullptr;
-                        uint8_t* attn_mask_ptr = nullptr;
-                        if (attention_mask)
-                            attn_mask_ptr = reinterpret_cast<uint8_t*>(&attention_mask.at<T>({b, h, pq, 0}, true));
-                        uint8_t* cmask_ptr = causal_mask ? &causal_mask.at<uint8_t>({b, h, pq, 0}, true) : nullptr;
-                        attn_softmax_kernel(buf_attn_w.ptr<float>(ithr, pq, group_idx),
-                                            buf_attn_w.ptr<float>(ithr, pq, group_idx),
-                                            d_scale,
-                                            alibi_ptr,
-                                            attn_mask_ptr,
-                                            cmask_ptr,
-                                            select_nfltmax_at_0,
-                                            ncausal,
-                                            context_len,
-                                            attn_mask_prec,
-                                            ov::element::f32);
+                    for (size_t h_group = 0; h_group < h_group_num; h_group++) {
+                        for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++) {
+                            // apply attention mask & sofmax
+                            float* alibi_ptr = alibi_mask ? &alibi_mask.at<float>({b, h, pq, 0}, true) : nullptr;
+                            uint8_t* attn_mask_ptr = nullptr;
+                            if (attention_mask)
+                                attn_mask_ptr = reinterpret_cast<uint8_t*>(&attention_mask.at<T>({b, h, pq, 0}, true));
+                            uint8_t* cmask_ptr = causal_mask ? &causal_mask.at<uint8_t>({b, h, pq, 0}, true) : nullptr;
+                            attn_softmax_kernel(buf_attn_w.ptr<float>(ithr, pq, h),
+                                                buf_attn_w.ptr<float>(ithr, pq, h),
+                                                d_scale,
+                                                alibi_ptr,
+                                                attn_mask_ptr,
+                                                cmask_ptr,
+                                                select_nfltmax_at_0,
+                                                ncausal,
+                                                context_len,
+                                                attn_mask_prec,
+                                                ov::element::f32);
+                        }
                     }
 
                 {
@@ -1216,19 +1224,20 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     }
                     _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name);
                 }
-
-                memset(buf_attn_score.ptr<float>(ithr), 0, q_len * h_each_group_len * S * sizeof(float));
-                for (size_t pq = 0; pq < q_len; pq++) {
-                    for (size_t pv = 0; pv < context_len; pv += block_size) {
-                        size_t pv_in_blocks = pv / block_size;
-                        auto block_number = beams.ptr<int32_t>(b)[pv_in_blocks];
+                memset(buf_attn_score.ptr<float>(ithr), 0, q_len * H * S * sizeof(float));
+                for (size_t pv = 0; pv < context_len; pv += block_size) {
+                    size_t pv_in_blocks = pv / block_size;
+                    auto block_number = beams.ptr<int32_t>(b)[pv_in_blocks];
+                    for (size_t h_group = 0; h_group < h_group_num; h_group++) {
                         auto* v = present_value.ptr<T2>(block_number, h_group);
-                        for (size_t h = h_group * h_each_group_len, group_idx = 0; h < (h_group + 1) * h_each_group_len; h++, group_idx++) {
-                            attn_acc_value_block(buf_attn_score.ptr<float>(ithr, pq, group_idx),
-                                                 buf_attn_w.ptr<float>(ithr, pq, group_idx) + pv,
-                                                 v,
-                                                 S,
-                                                 std::min(block_size, context_len - pv));
+                        for (size_t pq = 0; pq < q_len; pq++) {
+                            for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++) {
+                                attn_acc_value_block(buf_attn_score.ptr<float>(ithr, pq, h),
+                                                     buf_attn_w.ptr<float>(ithr, pq, h) + pv,
+                                                     v,
+                                                     S,
+                                                     std::min(block_size, context_len - pv));
+                            }
                         }
                     }
                 }
@@ -1241,11 +1250,11 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     }
                     _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name);
                 }
-                for (size_t pq = 0; pq < q_len; pq++) {
-                    // convert to dst
-                    for (size_t h = h_group * h_each_group_len, group_idx = 0; h < (h_group + 1) * h_each_group_len; h++, group_idx++)
-                        cvt_copy(output_emb.ptr<T>(b, pq, h * S), buf_attn_score.ptr<float>(ithr, pq, group_idx), S);
-                }
+                // convert to dst
+                for (size_t pq = 0; pq < q_len; pq++)
+                    for (size_t h_group = 0; h_group < h_group_num; h_group++)
+                        for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++)
+                            cvt_copy(output_emb.ptr<T>(b, pq, h * S), buf_attn_score.ptr<float>(ithr, pq, h), S);
                 {
                     char name[] = "t1_tbb_workerA";
                     if (cur_tid == tid) {
