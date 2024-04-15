@@ -1129,6 +1129,47 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
     // only consider k or v theoretical cost
     snprintf(buf, sizeof(buf), "t1_BL%ld,%ld,MC%.2f,%.2f", B, real_len, access_size / 260000000.0f,
         H * real_len * S * 32 / 16 * 2 / 60 / 1800000.0f);
+    {
+        ov::intel_cpu::PlainTensor t;
+        size_t s = 1024 * 1024 * 30;
+        t.resize<uint8_t>({1, s});
+        memset(t.ptr<uint8_t>(), 0, s);
+#if defined(HAVE_AVX512)
+        for (size_t i = 0; i < s; i += 64) {
+            _mm_clflush(t.ptr<uint8_t>(0, i));
+        }
+#endif
+        {
+            PROFILE(_attn, "test_single");
+            for (size_t i = 0; i < s; i += 64)
+                *static_cast<volatile uint8_t*>(t.ptr<uint8_t>(0, i));
+        }
+#if defined(HAVE_AVX512)
+        for (size_t i = 0; i < s; i += 64) {
+            _mm_clflush(t.ptr<uint8_t>(0, i));
+        }
+#endif
+        {
+            std::atomic<int> x(0);
+            PROFILE(_attn, "test_mul");
+            parallel_for_dynamic(nthr, [&] (size_t b) {
+                auto ithr = parallel_get_thread_num();
+                if (b == 10) {
+                    for (size_t i = 0; i < s; i += 64)
+                        *static_cast<volatile uint8_t*>(t.ptr<uint8_t>(0, i));
+                    x = 1;
+                } else {
+                    int desired = 1, expected = 1;
+                    while (!x.compare_exchange_strong(expected, desired)) {
+                    #if defined(HAVE_AVX512)
+                        _mm_pause();
+                    #endif
+                        expected = 1;
+                    }
+                }
+            });
+        }
+    }
     PROFILE(_attn, buf);
 
 #if defined(HAVE_AVX2) && !defined(HAVE_AVX512F)
@@ -1147,25 +1188,28 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
 
     // TODO: refactor to seperate files
     if (is_pagedattn) {
-        if (1 || B >= static_cast<size_t>(nthr)) {
+        if (B >= static_cast<size_t>(nthr)) {
             // if present_key is true, it means q*k is already computed in the caller
             if (present_key)
                 buf_attn_w.resize<float>({static_cast<size_t>(nthr), q_len, H, (max_context_len + block_size - 1) / block_size * block_size});
             buf_attn_score.resize<float>({static_cast<size_t>(nthr), q_len, H, S});
             auto tid = gettid();
-            parallel_for(B, [&](size_t b) {
+            parallel_for_dynamic(B, [&](size_t b) {
+            //parallel_for(B, [&](size_t b) {
                 auto ithr = parallel_get_thread_num();
                 auto context_len = static_cast<size_t>(context_lens.ptr<int32_t>()[b]);
                 auto cur_tid = gettid();
-                char name[] = "t1_q*k_workerA";
-                if (cur_tid == tid) {
-                    name[sizeof(name) - 2] = '0';
-                } else {
-                    name[sizeof(name) - 2] += ithr;
-                }
-                if (cur_tid != tid && ithr % 16 != 0)
+                char name[] = "t1_q*k_worker";
+                char name_buf[256];
+                // if (cur_tid == tid) {
+                //     name[sizeof(name) - 2] = '0';
+                // } else {
+                //     name[sizeof(name) - 2] += ithr;
+                // }
+                snprintf(name_buf, sizeof(name_buf), "%s_%ld_%ld", name, cur_tid, context_len);
+                if (cur_tid != tid && ithr % 4 != 0)
                     ov::intel_cpu::profilerManagerInstance.enabled = false;
-                PROFILE(_attn, name);
+                PROFILE(_attn, name_buf);
                 if (present_key) {
                     for (size_t pq = 0; pq < q_len; pq++) {
                         for (size_t pk = 0; pk < context_len; pk += block_size) {
@@ -1181,13 +1225,14 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     }
                 }
                 {
-                    char name[] = "t1_softmax_workerA";
-                    if (cur_tid == tid) {
-                        name[sizeof(name) - 2] = '0';
-                    } else {
-                        name[sizeof(name) - 2] += ithr;
-                    }
-                    _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name);
+                    char name[] = "t1_softmax_worker";
+                    // if (cur_tid == tid) {
+                    //     name[sizeof(name) - 2] = '0';
+                    // } else {
+                    //     name[sizeof(name) - 2] += ithr;
+                    // }
+                    snprintf(name_buf, sizeof(name_buf), "%s_%ld_%ld", name, cur_tid, context_len);
+                    _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name_buf);
                 }
 
                 auto ncausal = context_len;
@@ -1216,13 +1261,14 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     }
 
                 {
-                    char name[] = "t1_k*v_workerA";
-                    if (cur_tid == tid) {
-                        name[sizeof(name) - 2] = '0';
-                    } else {
-                        name[sizeof(name) - 2] += ithr;
-                    }
-                    _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name);
+                    char name[] = "t1_k*v_worker";
+                    // if (cur_tid == tid) {
+                    //     name[sizeof(name) - 2] = '0';
+                    // } else {
+                    //     name[sizeof(name) - 2] += ithr;
+                    // }
+                    snprintf(name_buf, sizeof(name_buf), "%s_%ld_%ld", name, cur_tid, context_len);
+                    _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name_buf);
                 }
                 memset(buf_attn_score.ptr<float>(ithr), 0, q_len * H * S * sizeof(float));
                 for (size_t pv = 0; pv < context_len; pv += block_size) {
@@ -1242,13 +1288,14 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     }
                 }
                 {
-                    char name[] = "t1_out_cvt_workerA";
-                    if (cur_tid == tid) {
-                        name[sizeof(name) - 2] = '0';
-                    } else {
-                        name[sizeof(name) - 2] += ithr;
-                    }
-                    _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name);
+                    char name[] = "t1_out_cvt_worker";
+                    // if (cur_tid == tid) {
+                    //     name[sizeof(name) - 2] = '0';
+                    // } else {
+                    //     name[sizeof(name) - 2] += ithr;
+                    // }
+                    snprintf(name_buf, sizeof(name_buf), "%s_%ld_%ld", name, cur_tid, context_len);
+                    _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name_buf);
                 }
                 // convert to dst
                 for (size_t pq = 0; pq < q_len; pq++)
@@ -1256,13 +1303,14 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                         for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++)
                             cvt_copy(output_emb.ptr<T>(b, pq, h * S), buf_attn_score.ptr<float>(ithr, pq, h), S);
                 {
-                    char name[] = "t1_tbb_workerA";
-                    if (cur_tid == tid) {
-                        name[sizeof(name) - 2] = '0';
-                    } else {
-                        name[sizeof(name) - 2] += ithr;
-                    }
-                    _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name);
+                    char name[] = "t1_tbb_worker";
+                    // if (cur_tid == tid) {
+                    //     name[sizeof(name) - 2] = '0';
+                    // } else {
+                    //     name[sizeof(name) - 2] += ithr;
+                    // }
+                    snprintf(name_buf, sizeof(name_buf), "%s_%ld_%ld", name, cur_tid, context_len);
+                    _attn = ov::intel_cpu::profilerManagerInstance.startProfile(name_buf);
                 }
             });
         } else {

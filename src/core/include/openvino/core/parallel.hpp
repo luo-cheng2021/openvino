@@ -437,6 +437,21 @@ void parallel_for(const T0& D0, const F& func) {
 #endif
 }
 
+template <typename T0, typename F>
+void parallel_for_dynamic(const T0& D0, const F& func) {
+#if (OV_THREAD == OV_THREAD_TBB || OV_THREAD == OV_THREAD_TBB_AUTO)
+    tbb::parallel_for(tbb::blocked_range<T0>(0, D0), [=](const tbb::blocked_range<T0>& r) {
+        for (T0 d0 = r.begin(); d0 < r.end(); d0++) {
+            func(d0);
+        }
+    });
+#else
+    parallel_for(D0, [&](size_t d0) {
+        func(d0);
+    });
+#endif
+}
+
 template <typename T0, typename T1, typename F>
 void for_2d(const int& ithr, const int& nthr, const T0& D0, const T1& D1, const F& func) {
     const size_t work_amount = (size_t)D0 * D1;
