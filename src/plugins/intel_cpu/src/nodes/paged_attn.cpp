@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include "utils/profiler.hpp"
 
 using namespace ov::Extensions::Cpu;
 using namespace ov::Extensions::Cpu::XARCH;
