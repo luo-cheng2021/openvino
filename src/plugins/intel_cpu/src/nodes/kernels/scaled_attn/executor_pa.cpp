@@ -1195,7 +1195,19 @@ struct MHAHelper {
 template <typename DATA_TYPE, typename KVCACHE_TYPE>
 struct MHA {
     MHAHelper<DATA_TYPE, KVCACHE_TYPE>& _helper;
-    struct AttnWorkItem {
+
+    struct StaticAttnWorkItem {
+        int32_t batch_in_seq;                       // batch idx in sequence
+        int32_t batch_in_reorder;
+        int32_t will_access_token;
+    };
+    struct ThreadWorkRange {
+        int32_t start_batch_no;
+        int32_t start_head_no;
+        int32_t end_batch_no;
+        int32_t end_head_no;
+    };
+    struct DynAttnWorkItem {
         int32_t batch_in_reorder;                   // which batch in reorder buffer will be used
         int32_t batch_in_seq;                       // batch idx in sequence
         int32_t q_len;                              // current sequence length, 1 for second token, 2+ for first token
@@ -1208,15 +1220,144 @@ struct MHA {
     };
     struct WorkItems {
     private:
-        std::vector<AttnWorkItem> attn_items;
+        std::vector<StaticAttnWorkItem> static_attn_items;
+        std::vector<ThreadWorkRange> thread_work_ranges;
+        std::vector<DynAttnWorkItem> dyn_attn_items;
         std::vector<ReorderWorkItem> reorder_items;
         int32_t max_kv_len_in_reorder;              // max kv len between first tokens
         int32_t max_batch_in_reorder;
         int32_t total_kv_len;
 
+        int32_t dyn_start_no;
+        int32_t dyn_head_no;
+        int32_t seq_cout;
+        int32_t dyn_count;
+        int32_t _Hk;
+        std::atomic<int32_t> dyn_cur;
+        bool use_static_schedule;
+
     public:
-        void reset(const PlainTensor& query, const PlainTensor& past_lens, const PlainTensor& subsequence_begins, size_t block_size) {
-            attn_items.clear();
+        bool try_init_schedule_static(const PlainTensor& query, const PlainTensor& past_lens, const PlainTensor& subsequence_begins,
+            size_t block_size, size_t Hk, size_t thread_num) {
+            static_attn_items.clear();
+            reorder_items.clear();
+            max_kv_len_in_reorder = 0;
+            max_batch_in_reorder = 0;
+            total_kv_len = 0;
+
+            seq_cout = static_cast<int32_t>(past_lens.m_dims[0]);
+            _Hk = Hk;
+            size_t will_access_tokens = 0;
+            for (int32_t i = 0; i < seq_cout; i++) {
+                auto q_len = subsequence_begins.ptr<int32_t>()[i + 1] - subsequence_begins.ptr<int32_t>()[i];
+                auto kv_len = past_lens.ptr<int32_t>()[i] + q_len;
+                auto kv_len_in_block = static_cast<int32_t>(div_up(kv_len, block_size));
+                auto will_access_token = static_cast<int32_t>(q_len + (q_len == 1 ? kv_len * 2 : kv_len_in_block * block_size * 2));
+                static_attn_items.emplace_back(StaticAttnWorkItem{
+                    i,
+                    max_batch_in_reorder,
+                    will_access_token
+                });
+                will_access_tokens += will_access_token;
+                if (q_len != 1) {
+                    auto reorder_sub_work_count = kv_len_in_block;
+                    max_kv_len_in_reorder = std::max(max_kv_len_in_reorder, kv_len);
+                    for (int32_t block_id = 0; block_id < reorder_sub_work_count; block_id++) {
+                        reorder_items.emplace_back(ReorderWorkItem{
+                            i,                       // batch_in_seq
+                            max_batch_in_reorder,    // batch_in_reorder
+                            block_id                 // kv_block_id
+                        });
+                    }
+                    max_batch_in_reorder++;
+                }
+                total_kv_len += kv_len;
+            }
+            // 1, sort
+            std::sort(static_attn_items.begin(), static_attn_items.end(), [block_size] (const StaticAttnWorkItem& left, const StaticAttnWorkItem& right) {
+                auto left_tokens = left.will_access_token;
+                auto right_tokens = right.will_access_token;
+                return left_tokens > right_tokens;
+            });
+            // 2, get avg blocks for a thread
+            auto avg_tokens_per_thread = static_cast<int32_t>(will_access_tokens * Hk / thread_num);
+            if (static_attn_items[0].will_access_token > avg_tokens_per_thread)
+                return false;
+            // 3, find start point for each thread
+            thread_work_ranges.resize(thread_num);
+            int32_t cur_batch = 0, cur_head = 0;
+            for (size_t i = 0; i < thread_num; i++) {
+                auto thread_want_tokens = avg_tokens_per_thread;
+                thread_work_ranges[i].start_batch_no = cur_batch;
+                thread_work_ranges[i].start_head_no = cur_head;
+                bool allocated = false;
+                while (cur_batch < seq_cout) {
+                    auto cur_left_tokens = static_cast<int32_t>(static_attn_items[cur_batch].will_access_token * (Hk - cur_head));
+                    if (cur_left_tokens < thread_want_tokens) {
+                        // the head number of current batch is not enough for current thread
+                        thread_want_tokens -= cur_left_tokens;
+                        cur_batch++;
+                        cur_head = 0;
+                    } else {
+                        auto wanted_head_num = thread_want_tokens / static_attn_items[cur_batch].will_access_token;
+                        cur_head += wanted_head_num;
+                        if (cur_head == static_cast<int32_t>(Hk)) {
+                            cur_batch++;
+                            cur_head = 0;
+                        }
+
+                        thread_work_ranges[i].end_batch_no = cur_batch;
+                        thread_work_ranges[i].end_head_no = cur_head;
+                        OPENVINO_ASSERT(thread_work_ranges[i].start_head_no != thread_work_ranges[i].end_head_no ||
+                            thread_work_ranges[i].start_batch_no != thread_work_ranges[i].end_batch_no, "no task is allocated for thread ", i);
+                        allocated = true;
+                        break;
+                    }
+                }
+                if (!allocated) {
+                    cur_batch = seq_cout;
+                    cur_head = 0;
+                    thread_work_ranges[i].end_batch_no = seq_cout;
+                    thread_work_ranges[i].end_head_no = 0;
+                }
+            }
+            // 4, get dynamic start point
+            dyn_start_no = cur_batch;
+            dyn_head_no = cur_head;
+            dyn_count = 0;
+            dyn_cur = 0;
+            for (; cur_batch < seq_cout; cur_batch++) {
+                dyn_count += Hk - cur_head;
+                cur_head = 0;
+            }
+            OPENVINO_ASSERT(dyn_count >= 0, "work count for dynamic schedule is less than 0, dyn_count:", dyn_count);
+            return true;
+        }
+        bool get_dyn_workitem(int32_t& batch, int32_t& head_no, int32_t& work_count) {
+            auto cur_idx = dyn_cur.fetch_add(1);
+            if (cur_idx >= dyn_count)
+                return false;
+
+            work_count = 1;
+            auto cur_batch = dyn_start_no;
+            auto cur_head = dyn_head_no;
+            bool got = false;
+            for (; cur_batch < seq_cout; cur_batch++) {
+                if (cur_idx < _Hk - cur_head) {
+                    head_no = cur_head + cur_idx;
+                    batch = cur_batch;
+                    got = true;
+                    break;
+                }
+                cur_idx -= _Hk - cur_head;
+                cur_head = 0;
+            }
+            OPENVINO_ASSERT(got, "get_dyn_workitem failed.");
+            OPENVINO_ASSERT(batch < seq_cout && head_no < _Hk, "get_dyn_workitem, batch:", batch, "head:", head_no);
+            return true;
+        }
+        void init_schedule_dyn(const PlainTensor& query, const PlainTensor& past_lens, const PlainTensor& subsequence_begins, size_t block_size) {
+            dyn_attn_items.clear();
             reorder_items.clear();
             max_kv_len_in_reorder = 0;
             max_batch_in_reorder = 0;
@@ -1228,7 +1369,7 @@ struct MHA {
                 auto kv_len = past_lens.ptr<int32_t>()[i] + q_len;
                 auto kv_len_in_block = static_cast<int32_t>(div_up(kv_len, block_size));
                 if (q_len == 1) {
-                    attn_items.emplace_back(AttnWorkItem{
+                    dyn_attn_items.emplace_back(DynAttnWorkItem{
                         0,                          // batch_in_reorder
                         i,                          // batch_in_seq
                         1ull,                       // q_len
@@ -1249,7 +1390,7 @@ struct MHA {
                     // workitems for attention
                     auto attn_sub_work_count = static_cast<int32_t>(div_up(q_len, block_size));
                     for (int32_t block_id = 0; block_id < attn_sub_work_count; block_id++) {
-                        attn_items.emplace_back(AttnWorkItem{
+                        dyn_attn_items.emplace_back(DynAttnWorkItem{
                             max_batch_in_reorder,    // batch_in_reorder
                             i,                       // batch_in_seq
                             q_len,                   // q_len
@@ -1260,18 +1401,20 @@ struct MHA {
                 }
                 total_kv_len += kv_len;
             }
-            // std::sort(attn_items.begin(), attn_items.end(), [] (const AttnWorkItem& left, const AttnWorkItem& right) {
-            //     // kv block number which will be acessed later
-            //     auto left_kv_blocks = left.q_block_id;
-            //     auto right_kv_blocks = right.q_block_id;
-            //     return left_kv_blocks > right_kv_blocks;
-            // });
         }
-        const AttnWorkItem& get_attn_work_item(size_t idx) const {
-            return attn_items[idx];
+        void reset(const PlainTensor& query, const PlainTensor& past_lens, const PlainTensor& subsequence_begins, size_t block_size,
+            size_t hk, size_t thread_num) {
+            use_static_schedule = true;
+            if (!try_init_schedule_static(query, past_lens, subsequence_begins, block_size, hk, thread_num)) {
+                use_static_schedule = false;
+                init_schedule_dyn(query, past_lens, subsequence_begins, block_size);
+            }
+        }
+        const DynAttnWorkItem& get_attn_work_item(size_t idx) const {
+            return dyn_attn_items[idx];
         }
         size_t attn_work_size() const {
-            return attn_items.size();
+            return dyn_attn_items.size();
         }
         const ReorderWorkItem& get_reorder_work_item(size_t idx) const {
             return reorder_items[idx];
@@ -1288,13 +1431,21 @@ struct MHA {
         size_t get_total_kv_len() const {
             return static_cast<size_t>(total_kv_len);
         }
+        bool is_static_schedule() const {
+            return use_static_schedule;
+        }
+        const ThreadWorkRange& get_work_range(size_t ithr) const {
+            return thread_work_ranges[ithr];
+        }
+        const std::vector<StaticAttnWorkItem>& get_static_tasks() const {
+            return static_attn_items;
+        }
     };
 
     WorkItems _workitems;
 
     MHA(MHAHelper<DATA_TYPE, KVCACHE_TYPE>& helper) : _helper(helper) {}
 
-    // one loop to handle first and second tokens
     void exec_loop_mixed(const PlainTensor& q,
                          const PlainTensor& k_cache,
                          const PlainTensor& v_cache,
@@ -1358,7 +1509,7 @@ struct MHA {
             const auto q_len = static_cast<size_t>(item.q_len);
             size_t ithr = parallel_get_thread_num();
 
-            if (ithr % 32 != 0)
+            if (ithr % 8 != 0)
                 ov::intel_cpu::profilerManagerInstance.enabled = false;
             char name_buf[256];
 
@@ -1400,6 +1551,141 @@ struct MHA {
         });
     }
 
+    void exec_loop_static(const PlainTensor& q,
+                         const PlainTensor& k_cache,
+                         const PlainTensor& v_cache,
+                         const PlainTensor& output_emb,
+                         size_t max_context_len,
+                         const PlainTensor& past_lens,
+                         const PlainTensor& subsequence_begins,
+                         const PlainTensor& block_indices,
+                         const PlainTensor& block_indices_begins,
+                         const PlainTensor& alibi_slopes) {
+        auto Hk = v_cache.m_dims[1];
+
+        constexpr bool q_is_bf16 = precision_of<DATA_TYPE>::value == ov::element::bf16;
+        constexpr bool q_cache_is_same = precision_of<DATA_TYPE>::value == precision_of<KVCACHE_TYPE>::value;
+        auto reorder_work_count = _workitems.reorder_work_size();
+
+        PROFILE(_attn, "mixed_pack");
+        // buffer for transpose and repack
+        _helper.init_reorder_buffers(_workitems.get_reorder_max_batch_size(), div_up(_workitems.get_reorder_max_kv_len(), _helper._block_size));
+
+        // packed k, v
+        parallel_for2d_dynamic(reorder_work_count, Hk, [&](size_t w, size_t hk) {
+            const auto& item = _workitems.get_reorder_work_item(w);
+            const auto batch_in_seq = item.batch_in_seq;
+            const auto batch_in_reorder = item.batch_in_reorder;
+            const auto kv_block = item.kv_block_id;
+            auto block_number = block_indices.ptr<int32_t>()[block_indices_begins.ptr<int32_t>()[batch_in_seq] + kv_block];
+            if (block_number < 0)
+                return;
+
+            auto ithr = parallel_get_thread_num();
+            auto* k_ptr = k_cache.ptr<KVCACHE_TYPE>(block_number, hk);
+            auto* v_ptr = v_cache.ptr<KVCACHE_TYPE>(block_number, hk);
+            transpose_16Nx16K(_helper._qk_scratch_b.template ptr<DATA_TYPE>(batch_in_reorder, kv_block, hk),
+                k_ptr,
+                _helper._output.template ptr<DATA_TYPE>(ithr),
+                _helper._block_size,
+                _helper._S, _helper._block_size, _helper._S);
+            if (q_is_bf16) {
+                pack_32Nx16K(_helper._wv_scratch_b.template ptr<DATA_TYPE>(batch_in_reorder, kv_block, hk),
+                    v_ptr,
+                    _helper._output.template ptr<DATA_TYPE>(ithr),
+                    _helper._block_size,
+                    _helper._S,
+                    _helper._S);
+            } else {
+                // need to decompress
+                if (!q_cache_is_same) {
+                    dequant(_helper._wv_scratch_b.template ptr<DATA_TYPE>(batch_in_reorder, kv_block, hk), v_ptr, _helper._block_size, _helper._S);
+                }
+            }
+        });
+
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("mixed_attn");
+        parallel_nt_static(_helper._nthr, [&](const size_t ithr, const size_t nthr){
+            auto thr = parallel_get_thread_num();
+            if (thr % 8 != 0)
+                ov::intel_cpu::profilerManagerInstance.enabled = false;
+            char name_buf[256];
+            bool is_static = true;
+
+            // static task part
+            const auto& static_works = _workitems.get_static_tasks();
+            const auto& thread_range = _workitems.get_work_range(ithr);
+            int32_t start_batch_no = thread_range.start_batch_no, start_head_no = thread_range.start_head_no;
+            auto do_task = [&](int32_t batch, int32_t head_no) {
+                auto b_seq = static_works[batch].batch_in_seq;
+                auto hk = head_no;
+                auto q_len = static_cast<size_t>(subsequence_begins.ptr<int32_t>()[b_seq + 1] - subsequence_begins.ptr<int32_t>()[b_seq]);
+                auto b_token = subsequence_begins.ptr<int32_t>()[b_seq];
+
+                if (q_len == 1) {
+                    auto cur_kv_len = static_cast<size_t>(past_lens.ptr<int32_t>()[b_seq]) + q_len;
+
+                    snprintf(name_buf, sizeof(name_buf), "%s1_s%d_hk%d_kv%ld", is_static ? "s" : "d",
+                        b_seq, hk, cur_kv_len);
+                    PROFILE(_attn, name_buf);
+
+                    _helper.exec_kernel_one_bh(q.slice(0, b_token, b_token), k_cache, v_cache,
+                        output_emb.slice(0, b_token, b_token),
+                        block_indices.ptr<int32_t>() + block_indices_begins.ptr<int32_t>()[b_seq],
+                        ithr, hk, 1ul, cur_kv_len, alibi_slopes);
+                } else {
+                    const auto batch_in_reorder = static_works[batch].batch_in_reorder;
+
+                    auto cur_kv_len = static_cast<size_t>(past_lens.ptr<int32_t>()[b_seq]) + q_len;
+                    snprintf(name_buf, sizeof(name_buf), "%sn_s%d_hk%d_q%ld_kv%ld", is_static ? "s" : "d",
+                        b_seq, hk, q_len, cur_kv_len);
+                    PROFILE(_attn, name_buf);
+
+                    for (size_t q_blk = 0; q_blk < div_up(q_len, _helper._block_size); q_blk++) {
+                        const auto q_cnt = std::min(_helper._block_size, q_len - q_blk * _helper._block_size);
+                        const auto cur_kv_len = static_cast<size_t>(past_lens.ptr<int32_t>()[b_seq]) + q_blk * _helper._block_size + q_cnt;
+                        PlainTensor sub_query;
+                        sub_query.resize({q_len, _helper._H, _helper._S}, q.ptr<DATA_TYPE>(b_token));
+                        sub_query = sub_query.permute({1, 0, 2});
+                        _helper.exec_kernel_multiple(sub_query,
+                            v_cache,
+                            output_emb.slice(0, b_token, b_token + q_len).reshape({q_len, _helper._H * _helper._S}),
+                            _helper._qk_scratch_b.slice(0, batch_in_reorder, batch_in_reorder),
+                            _helper._wv_scratch_b.slice(0, batch_in_reorder, batch_in_reorder),
+                            block_indices.ptr<int32_t>() + block_indices_begins.ptr<int32_t>()[b_seq],
+                            ithr,
+                            q_blk,
+                            hk,
+                            q_len,
+                            cur_kv_len,
+                            alibi_slopes);
+                    }
+                }
+            };
+            while (true) {
+                do_task(start_batch_no, start_head_no);
+
+                // advance to next item
+                if (++start_head_no == static_cast<int32_t>(_helper._Hk)) {
+                    start_head_no = 0;
+                    start_batch_no++;
+                }
+                if (start_head_no == thread_range.end_head_no && start_batch_no == thread_range.end_batch_no)
+                    break;
+            }
+            // dynamic part
+            is_static = false;
+            while (true) {
+                int32_t batch, head_no, work_count;
+                if (!_workitems.get_dyn_workitem(batch, head_no, work_count))
+                    break;
+                for (auto i = 0; i < work_count; i++) {
+                    do_task(batch, head_no);
+                }
+            }
+        });
+    }
+
     // Q, K, V is ready, do attention
     void operator()(PlainTensor& query,
                     PlainTensor& present_key,
@@ -1411,7 +1697,7 @@ struct MHA {
                     const PlainTensor& block_indices,
                     const PlainTensor& block_indices_begins,
                     const PlainTensor& alibi_slopes) {
-        _workitems.reset(query, past_lens, subsequence_begins, _helper._block_size);
+        _workitems.reset(query, past_lens, subsequence_begins, _helper._block_size, _helper._Hk, _helper._nthr);
 
         auto nthr = static_cast<size_t>(parallel_get_max_threads());
 
@@ -1438,9 +1724,14 @@ struct MHA {
             access_size / 260000000.0f);
         PROFILE(_attn, buf);
 
-        if (past_lens.m_dims[0] >= nthr || _workitems.get_reorder_max_batch_size() > 0) {
-            exec_loop_mixed(query, present_key, present_value, output_emb, max_context_len, past_lens, subsequence_begins,
-                block_indices, block_indices_begins, alibi_slopes);
+        if (past_lens.m_dims[0] * Hk >= 2 * nthr || _workitems.get_reorder_max_batch_size() > 0) {
+            if (_workitems.is_static_schedule()) {
+                exec_loop_static(query, present_key, present_value, output_emb, max_context_len, past_lens, subsequence_begins,
+                    block_indices, block_indices_begins, alibi_slopes);
+            } else {
+                exec_loop_mixed(query, present_key, present_value, output_emb, max_context_len, past_lens, subsequence_begins,
+                    block_indices, block_indices_begins, alibi_slopes);
+            }
         } else {
             _helper.exec_loop_bhl(query, present_key, present_value, output_emb, max_context_len, past_lens, subsequence_begins,
                 block_indices, block_indices_begins, alibi_slopes);
