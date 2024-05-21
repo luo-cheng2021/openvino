@@ -1200,6 +1200,7 @@ struct MHA {
         int32_t batch_in_seq;                       // batch idx in sequence
         int32_t batch_in_reorder;
         int32_t will_access_token;
+        int32_t q_len;
     };
     struct ThreadWorkRange {
         int32_t start_batch_no;
@@ -1252,11 +1253,12 @@ struct MHA {
                 auto q_len = subsequence_begins.ptr<int32_t>()[i + 1] - subsequence_begins.ptr<int32_t>()[i];
                 auto kv_len = past_lens.ptr<int32_t>()[i] + q_len;
                 auto kv_len_in_block = static_cast<int32_t>(div_up(kv_len, block_size));
-                auto will_access_token = static_cast<int32_t>(q_len + (q_len == 1 ? kv_len * 2 : kv_len_in_block * block_size * 2));
+                auto will_access_token = static_cast<int32_t>(q_len + (q_len == 1 ? kv_len : kv_len_in_block * block_size));
                 static_attn_items.emplace_back(StaticAttnWorkItem{
                     i,
                     max_batch_in_reorder,
-                    will_access_token
+                    will_access_token,
+                    q_len
                 });
                 will_access_tokens += will_access_token;
                 if (q_len != 1) {
@@ -1275,6 +1277,12 @@ struct MHA {
             }
             // 1, sort
             std::sort(static_attn_items.begin(), static_attn_items.end(), [block_size] (const StaticAttnWorkItem& left, const StaticAttnWorkItem& right) {
+                if (left.q_len != right.q_len) {
+                    if (left.q_len == 1)
+                        return false;
+                    if (right.q_len == 1)
+                        return true;
+                }
                 auto left_tokens = left.will_access_token;
                 auto right_tokens = right.will_access_token;
                 return left_tokens > right_tokens;
@@ -1285,54 +1293,62 @@ struct MHA {
                 return false;
             // 3, find start point for each thread
             thread_work_ranges.resize(thread_num);
-            int32_t cur_batch = 0, cur_head = 0;
-            for (size_t i = 0; i < thread_num; i++) {
-                auto thread_want_tokens = avg_tokens_per_thread;
-                thread_work_ranges[i].start_batch_no = cur_batch;
-                thread_work_ranges[i].start_head_no = cur_head;
-                bool allocated = false;
-                while (cur_batch < seq_cout) {
-                    auto cur_left_tokens = static_cast<int32_t>(static_attn_items[cur_batch].will_access_token * (Hk - cur_head));
-                    if (cur_left_tokens < thread_want_tokens) {
-                        // the head number of current batch is not enough for current thread
-                        thread_want_tokens -= cur_left_tokens;
-                        cur_batch++;
-                        cur_head = 0;
-                    } else {
-                        auto wanted_head_num = thread_want_tokens / static_attn_items[cur_batch].will_access_token;
-                        cur_head += wanted_head_num;
-                        if (cur_head == static_cast<int32_t>(Hk)) {
-                            cur_batch++;
-                            cur_head = 0;
-                        }
+            int32_t cur_batch = 0;
+            // int32_t cur_head = 0;
+            // for (size_t i = 0; i < thread_num; i++) {
+            //     auto thread_want_tokens = avg_tokens_per_thread;
+            //     thread_work_ranges[i].start_batch_no = cur_batch;
+            //     thread_work_ranges[i].start_head_no = cur_head;
+            //     bool allocated = false;
+            //     while (cur_batch < seq_cout) {
+            //         auto cur_left_tokens = static_cast<int32_t>(static_attn_items[cur_batch].will_access_token * (Hk - cur_head));
+            //         if (cur_left_tokens < thread_want_tokens) {
+            //             // the head number of current batch is not enough for current thread
+            //             thread_want_tokens -= cur_left_tokens;
+            //             cur_batch++;
+            //             cur_head = 0;
+            //         } else {
+            //             auto wanted_head_num = thread_want_tokens / static_attn_items[cur_batch].will_access_token;
+            //             cur_head += wanted_head_num;
+            //             if (cur_head == static_cast<int32_t>(Hk)) {
+            //                 cur_batch++;
+            //                 cur_head = 0;
+            //             }
 
-                        thread_work_ranges[i].end_batch_no = cur_batch;
-                        thread_work_ranges[i].end_head_no = cur_head;
-                        OPENVINO_ASSERT(thread_work_ranges[i].start_head_no != thread_work_ranges[i].end_head_no ||
-                            thread_work_ranges[i].start_batch_no != thread_work_ranges[i].end_batch_no, "no task is allocated for thread ", i);
-                        allocated = true;
-                        break;
-                    }
-                }
-                if (!allocated) {
-                    cur_batch = seq_cout;
-                    cur_head = 0;
-                    thread_work_ranges[i].end_batch_no = seq_cout;
-                    thread_work_ranges[i].end_head_no = 0;
-                }
-            }
-            // 4, get dynamic start point
-            dyn_start_no = cur_batch;
-            dyn_head_no = cur_head;
-            dyn_count = 0;
-            dyn_cur = 0;
-            for (; cur_batch < seq_cout; cur_batch++) {
-                dyn_count += Hk - cur_head;
-                cur_head = 0;
-            }
+            //             thread_work_ranges[i].end_batch_no = cur_batch;
+            //             thread_work_ranges[i].end_head_no = cur_head;
+            //             OPENVINO_ASSERT(thread_work_ranges[i].start_head_no != thread_work_ranges[i].end_head_no ||
+            //                 thread_work_ranges[i].start_batch_no != thread_work_ranges[i].end_batch_no, "no task is allocated for thread ", i);
+            //             allocated = true;
+            //             break;
+            //         }
+            //     }
+            //     if (!allocated) {
+            //         cur_batch = seq_cout;
+            //         cur_head = 0;
+            //         thread_work_ranges[i].end_batch_no = seq_cout;
+            //         thread_work_ranges[i].end_head_no = 0;
+            //     }
+            // }
+            // // 4, get dynamic start point
+            // dyn_start_no = cur_batch;
+            // dyn_head_no = cur_head;
+            // dyn_count = 0;
+            // dyn_cur = 0;
+            // for (; cur_batch < seq_cout; cur_batch++) {
+            //     dyn_count += Hk - cur_head;
+            //     cur_head = 0;
+            // }
             dyn_start_no = 0;
             dyn_head_no = 0;
-            dyn_count = Hk * seq_cout;
+            dyn_count = 0;
+            dyn_cur = 0;
+            for (cur_batch = 0; cur_batch < seq_cout; cur_batch++) {
+                if (static_attn_items[cur_batch].q_len > 1)
+                    dyn_count += Hk;
+                else
+                    dyn_count += (Hk + 1) / 2;
+            }
             OPENVINO_ASSERT(dyn_count >= 0, "work count for dynamic schedule is less than 0, dyn_count:", dyn_count);
             return true;
         }
@@ -1341,18 +1357,20 @@ struct MHA {
             if (cur_idx >= dyn_count)
                 return false;
 
-            work_count = 1;
             auto cur_batch = dyn_start_no;
             auto cur_head = dyn_head_no;
             bool got = false;
             for (; cur_batch < seq_cout; cur_batch++) {
-                if (cur_idx < _Hk - cur_head) {
-                    head_no = cur_head + cur_idx;
+                auto q_len = static_attn_items[cur_batch].q_len;
+                work_count = q_len == 1 ? 2 : 1;
+                if (cur_idx < div_up(_Hk - cur_head, work_count)) {
+                    head_no = cur_head + cur_idx * work_count;
                     batch = cur_batch;
                     got = true;
+                    work_count = std::min(work_count, _Hk - head_no);
                     break;
                 }
-                cur_idx -= _Hk - cur_head;
+                cur_idx -= div_up(_Hk - cur_head, work_count);
                 cur_head = 0;
             }
             OPENVINO_ASSERT(got, "get_dyn_workitem failed.");
@@ -1512,7 +1530,7 @@ struct MHA {
             const auto q_len = static_cast<size_t>(item.q_len);
             size_t ithr = parallel_get_thread_num();
 
-            if (ithr % 8 != 0)
+            if (ithr % 32 != 0)
                 ov::intel_cpu::profilerManagerInstance.enabled = false;
             char name_buf[256];
 
@@ -1587,7 +1605,7 @@ struct MHA {
             auto ithr = parallel_get_thread_num();
             auto* k_ptr = k_cache.ptr<KVCACHE_TYPE>(block_number, hk);
             auto* v_ptr = v_cache.ptr<KVCACHE_TYPE>(block_number, hk);
-            transpose_16Nx16K(_helper._qk_scratch_b.template ptr<DATA_TYPE>(batch_in_reorder, kv_block, hk),
+            transpose_16NxK(_helper._qk_scratch_b.template ptr<DATA_TYPE>(batch_in_reorder, kv_block, hk),
                 k_ptr,
                 _helper._output.template ptr<DATA_TYPE>(ithr),
                 _helper._block_size,
@@ -1598,6 +1616,7 @@ struct MHA {
                     _helper._output.template ptr<DATA_TYPE>(ithr),
                     _helper._block_size,
                     _helper._S,
+                    rnd_up(_helper._S, _helper._block_size),
                     _helper._S);
             } else {
                 // need to decompress
@@ -1610,7 +1629,7 @@ struct MHA {
         _attn = ov::intel_cpu::profilerManagerInstance.startProfile("mixed_attn");
         parallel_nt_static(_helper._nthr, [&](const size_t ithr, const size_t nthr){
             auto thr = parallel_get_thread_num();
-            if (thr % 8 != 0)
+            if (thr % 32 != 0)
                 ov::intel_cpu::profilerManagerInstance.enabled = false;
             char name_buf[256];
             bool is_static = true;
@@ -1683,7 +1702,7 @@ struct MHA {
                 if (!_workitems.get_dyn_workitem(batch, head_no, work_count))
                     break;
                 for (auto i = 0; i < work_count; i++) {
-                    do_task(batch, head_no);
+                    do_task(batch, head_no++);
                 }
             }
         });
