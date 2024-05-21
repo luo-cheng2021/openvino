@@ -1330,6 +1330,9 @@ struct MHA {
                 dyn_count += Hk - cur_head;
                 cur_head = 0;
             }
+            dyn_start_no = 0;
+            dyn_head_no = 0;
+            dyn_count = Hk * seq_cout;
             OPENVINO_ASSERT(dyn_count >= 0, "work count for dynamic schedule is less than 0, dyn_count:", dyn_count);
             return true;
         }
@@ -1662,7 +1665,7 @@ struct MHA {
                     }
                 }
             };
-            while (true) {
+            while (false) {
                 do_task(start_batch_no, start_head_no);
 
                 // advance to next item
