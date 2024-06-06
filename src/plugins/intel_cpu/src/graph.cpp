@@ -33,6 +33,7 @@
 #include "openvino/core/model.hpp"
 #include "openvino/core/node.hpp"
 #include "openvino/core/type/element_type.hpp"
+#include "perf_count.h"
 #include "utils/debug_capabilities.h"
 #include "utils/general_utils.h"
 #include "utils/ngraph_utils.hpp"
@@ -1342,8 +1343,19 @@ public:
 #endif
 } // namespace
 
+struct Stat {
+    PerfCount inferDynamic;
+    PerfCount update;
+    PerfCount exec;
+    ~Stat() {
+        std::cout << "inferDynamic count " << inferDynamic.count() << " all " << inferDynamic.all() << " avg " << inferDynamic.avg() << "\n";
+        std::cout << "updateNodes count " << update.count() << " all " << update.all() << " avg " << update.avg() << "\n";
+        std::cout << "execNode count " << exec.count() << " all " << exec.all() << " avg " << exec.avg() << "\n";
+    }
+} g_stat;
 
 void Graph::InferDynamic(SyncInferRequest* request) {
+    PerfHelper h1(g_stat.inferDynamic);
     dnnl::stream stream(getEngine());
 
     PROFILE(_prof0, std::string("Graph::InferDynamic_#") + std::to_string(infer_count));
@@ -1357,9 +1369,11 @@ void Graph::InferDynamic(SyncInferRequest* request) {
     size_t inferCounter = 0;
     for (auto stopIndx : m_executableSyncNodesInds) {
         {
+            PerfHelper h2(g_stat.update);
             PROFILE(_prof, "updateNodes");
             updateNodes->run(stopIndx);
         }
+        PerfHelper h3(g_stat.exec);
         for (; inferCounter < stopIndx; ++inferCounter) {
             auto& node = m_executableGraphNodes[inferCounter];
             VERBOSE(node, getConfig().debugCaps.verbose);
