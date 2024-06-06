@@ -26,6 +26,7 @@ public:
 
     uint64_t avg() const { return (num == 0) ? 0 : total_duration / num; }
     uint32_t count() const { return num; }
+    uint64_t all() const { return total_duration; }
 
 private:
     void start_itr() {
