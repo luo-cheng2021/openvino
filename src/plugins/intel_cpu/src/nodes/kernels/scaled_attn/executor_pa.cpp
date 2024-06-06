@@ -297,7 +297,7 @@ static void attn_acc_value_block(float* out, float* weight, uint8_t* v, size_t S
 }
 
 template<typename TA, typename TB>
-static void dot_product_block(TA* a, TB* b, float* c, size_t n, size_t block_size) {
+static void dot_product_block(TA* a, TB* b, float* c, size_t n, size_t block_size, TB* b_next = nullptr) {
 #if defined(HAVE_AVX512F)
     size_t j = 0;
     for (; j + 4 <= block_size; j += 4) {
@@ -310,8 +310,11 @@ static void dot_product_block(TA* a, TB* b, float* c, size_t n, size_t block_siz
             auto va = mm512_uni_loadu_ps(a + i);
             vsum0 = _mm512_fmadd_ps(va, mm512_uni_loadu_ps(b + i), vsum0);
             vsum1 = _mm512_fmadd_ps(va, mm512_uni_loadu_ps(b + i + n), vsum1);
+            prefetch_bytes(64, _MM_HINT_T0, 0, b_next);
             vsum2 = _mm512_fmadd_ps(va, mm512_uni_loadu_ps(b + i + 2 * n), vsum2);
             vsum3 = _mm512_fmadd_ps(va, mm512_uni_loadu_ps(b + i + 3 * n), vsum3);
+            prefetch_bytes(64, _MM_HINT_T0, 0, b_next + 32);
+            b_next += 64;
         }
         float sum0 = _mm512_reduce_add_ps(vsum0);
         float sum1 = _mm512_reduce_add_ps(vsum1);
@@ -409,7 +412,7 @@ static void dot_product_block(TA* a, TB* b, float* c, size_t n, size_t block_siz
 }
 
 template<typename TA>
-static void dot_product_block(TA* a, uint8_t* b, float* c, size_t n, size_t block_size) {
+static void dot_product_block(TA* a, uint8_t* b, float* c, size_t n, size_t block_size, uint8_t* b_next = nullptr) {
     // The layout for per token per head:
     // |scale(f32)|zeropoint(f32)|quantized feature(u8,idx_1)|quantized feature(u8,idx_2)|...|quantized feature(u8,idx_S)|
     // The quantized feature will start from 8bytes=sizeof(float)+sizeof(float)
@@ -1007,7 +1010,7 @@ struct MHAHelper {
     void exec_kernel_one_bh(const PlainTensor& query, const PlainTensor& present_key, const PlainTensor& present_value, const PlainTensor& output_emb,
         const int32_t* block_table, size_t ithr, size_t hk, size_t q_len, size_t cur_kv_len, const PlainTensor& alibi_slopes) {
         //PROFILE(_attn,  "t1_qk");
-        if (_fastpath_valid) {
+        if (0 && _fastpath_valid) {
             _gemv->tile_config();
             for (size_t pk = 0, i = 0; pk < cur_kv_len; pk += _block_size, i++) {
                 auto block_number = block_table[i];
@@ -1022,10 +1025,13 @@ struct MHAHelper {
         } else {
             for (size_t pk = 0, i = 0; pk < cur_kv_len; pk += _block_size, i++) {
                 auto block_number = block_table[i];
+                bool not_last = cur_kv_len - pk >= _block_size;
+                auto next_block_number = block_table[not_last ? i + 1 : i];
                 for (size_t pq = 0; pq < q_len; pq++) {
                     for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
                         dot_product_block(query.ptr<DATA_TYPE>(h, pq), present_key.ptr<KVCACHE_TYPE>(block_number, hk),
-                            _weight.ptr<float>(ithr, h, pq) + pk, _S, std::min(_block_size, cur_kv_len - pk));
+                            _weight.ptr<float>(ithr, h, pq) + pk, _S, std::min(_block_size, cur_kv_len - pk),
+                            present_key.ptr<KVCACHE_TYPE>(next_block_number, hk));
                     }
                 }
             }
@@ -1347,7 +1353,7 @@ struct MHA {
                 if (static_attn_items[cur_batch].q_len > 1)
                     dyn_count += Hk;
                 else
-                    dyn_count += (Hk + 1) / 2;
+                    dyn_count += (Hk + 3) / 4;
             }
             OPENVINO_ASSERT(dyn_count >= 0, "work count for dynamic schedule is less than 0, dyn_count:", dyn_count);
             return true;
@@ -1362,7 +1368,7 @@ struct MHA {
             bool got = false;
             for (; cur_batch < seq_cout; cur_batch++) {
                 auto q_len = static_attn_items[cur_batch].q_len;
-                work_count = q_len == 1 ? 2 : 1;
+                work_count = q_len == 1 ? 4 : 1;
                 if (cur_idx < div_up(_Hk - cur_head, work_count)) {
                     head_no = cur_head + cur_idx * work_count;
                     batch = cur_batch;
@@ -1747,6 +1753,7 @@ struct MHA {
         PROFILE(_attn, buf);
 
         if (past_lens.m_dims[0] * Hk >= 2 * nthr || _workitems.get_reorder_max_batch_size() > 0) {
+        //if (past_lens.m_dims[0] >= nthr || _workitems.get_reorder_max_batch_size() > 0) {
             if (_workitems.is_static_schedule()) {
                 exec_loop_static(query, present_key, present_value, output_emb, max_context_len, past_lens, subsequence_begins,
                     block_indices, block_indices_begins, alibi_slopes);
