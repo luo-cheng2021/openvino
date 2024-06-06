@@ -260,6 +260,7 @@ void summary_perf(const Graph &graph) {
         return;
 
     std::map<std::string, double> perf_by_type;
+    std::map<std::string, uint64_t> perf_by_type_all;
     std::map<NodePtr, double> perf_by_node;
     double total_avg = 0;
     uint64_t total = 0;
@@ -268,13 +269,17 @@ void summary_perf(const Graph &graph) {
         auto type = node->getTypeStr() + "_" + node->getPrimitiveDescriptorType();
         auto name = node->getName();
 
-        total += node->PerfCounter().count() * avg;
+        auto all = node->PerfCounter().all();
+        total += all;
         total_avg += avg;
 
-        if (perf_by_type.count(type))
+        if (perf_by_type.count(type)) {
             perf_by_type[type] += avg;
-        else
+            perf_by_type_all[type] += all;
+        } else {
             perf_by_type[type] = avg;
+            perf_by_type_all[type] = all;
+        }
 
         if (perf_by_node.count(node))
             perf_by_node[node] += avg;
@@ -288,6 +293,25 @@ void summary_perf(const Graph &graph) {
     std::cout << "Summary of " << graph.GetName() << " @" << std::hash<uint64_t>{}(reinterpret_cast<uint64_t>(&graph)) << std::endl;
     std::cout << "     Total(us): " << (uint64_t)(total) << std::endl;
     std::cout << " Total_avg(us): " << (uint64_t)(total_avg) << std::endl;
+    {
+        std::cout << " perf_by_type_all:" << std::endl;
+        std::vector<std::pair<std::string, uint64_t> > A;
+        for (auto& it : perf_by_type_all)
+            A.push_back(it);
+        sort(A.begin(), A.end(),
+             [](std::pair<std::string, uint64_t>& a,
+                std::pair<std::string, uint64_t>& b){
+                 return a.second > b.second;
+             });
+
+        for (auto& it : A) {
+            //std::stringstream ss;
+            int percentage = static_cast<int>(it.second*1000/total);
+            if (percentage == 0) break;
+            printf("%10.1f %% :  %8ld(ms) %s\n", percentage / 10.0f, it.second / 1000, it.first.c_str());
+            //std::cout << ss.str();
+        }
+    }
     {
         std::cout << " perf_by_type:" << std::endl;
         std::vector<std::pair<std::string, double> > A;
@@ -307,7 +331,7 @@ void summary_perf(const Graph &graph) {
             std::cout << ss.str();
         }
     }
-    {
+    if (0) {
         std::cout << " perf_by_node:" << std::endl;
         std::vector<std::pair<NodePtr, double> > A;
         for (auto& it : perf_by_node)
