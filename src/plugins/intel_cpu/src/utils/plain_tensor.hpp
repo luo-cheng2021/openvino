@@ -89,11 +89,60 @@ struct precision_of<float16> {
 
 #define PLAINTENSOR_RANK_MAX 8
 
+struct ptr_wrapper {
+    ptr_wrapper() = default;
+
+    template<typename D>
+    ptr_wrapper(uint8_t* p, D&& d) {
+        _ptr = std::shared_ptr<uint8_t>(p, std::move(d));
+    }
+
+    ptr_wrapper(uint8_t* p) {
+        _p_raw = p;
+    }
+
+    ptr_wrapper(ptr_wrapper&& o) {
+        _p_raw = o._p_raw;
+        _ptr = std::move(o._ptr);
+    }
+
+    ptr_wrapper(const ptr_wrapper& o) {
+        _p_raw = o._p_raw;
+        _ptr = o._ptr;
+    }
+
+    ptr_wrapper& operator= (ptr_wrapper&& o) {
+        _p_raw = o._p_raw;
+        _ptr = std::move(o._ptr);
+        return *this;
+    }
+
+    ptr_wrapper& operator= (const ptr_wrapper& o) {
+        _p_raw = o._p_raw;
+        _ptr = o._ptr;
+        return *this;
+    }
+
+    uint8_t* get() {
+        if (_ptr)
+            return _ptr.get();
+        return _p_raw;
+    }
+
+    uint8_t* get() const {
+        if (_ptr)
+            return _ptr.get();
+        return _p_raw;
+    }
+
+    std::shared_ptr<uint8_t> _ptr;
+    uint8_t* _p_raw = nullptr;
+};
 struct PlainTensor {
     size_t m_strides[PLAINTENSOR_RANK_MAX];
     size_t m_dims[PLAINTENSOR_RANK_MAX];
     size_t m_rank = 0;
-    std::shared_ptr<uint8_t> m_ptr;
+    ptr_wrapper m_ptr;
     size_t m_capacity = 0;
     size_t m_element_size = 0;
     size_t m_offset = 0;
@@ -101,7 +150,7 @@ struct PlainTensor {
     MemoryPtr m_mem;        // hold memory ptr reference
 
     operator bool() const {
-        return m_ptr != nullptr;
+        return m_ptr.get() != nullptr;
     }
 
     VectorDims shape() const {
@@ -348,7 +397,7 @@ struct PlainTensor {
                         OPENVINO_ASSERT(false, "PlainTensor call posix_memalign failed: ", rc);
                     }
                 #endif
-                m_ptr = std::shared_ptr<uint8_t>(static_cast<uint8_t*>(ptr), [](uint8_t* ptr) {
+                m_ptr = ptr_wrapper(static_cast<uint8_t*>(ptr), [](uint8_t* ptr) {
                     #ifdef _WIN32
                         _aligned_free(ptr);
                     #else
@@ -361,7 +410,7 @@ struct PlainTensor {
         } else {
             // m_capacity is zero to indicate that we don't own the memory
             m_capacity = 0;
-            m_ptr = std::shared_ptr<uint8_t>(static_cast<uint8_t*>(data), [](uint8_t*) {});
+            m_ptr = ptr_wrapper(static_cast<uint8_t*>(data));
         }
     }
 
@@ -471,7 +520,7 @@ struct PlainTensor {
     int max_repr_len = 256;
 
     std::string repr(int max_total_lines = 16, int lines_per_row = 1) const {
-        if (!m_ptr) {
+        if (!m_ptr.get()) {
             return "{empty}";
         }
         std::stringstream ss;
