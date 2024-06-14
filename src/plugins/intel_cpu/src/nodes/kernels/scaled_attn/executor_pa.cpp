@@ -805,6 +805,7 @@ struct MHAHelper {
         auto prev_score_stride = _weight.stride(2);
         auto want_score_stride = rnd_up(kv_len, _block_size);
         auto new_score_stride = std::max(prev_score_stride, want_score_stride);
+        new_score_stride = std::max(new_score_stride, 4096ul);
         // resize temporary buffers, weight.size(3) will be aligned to block_size
         _weight.resize<float>({static_cast<size_t>(_nthr), H, _block_size, new_score_stride});
         _output.resize<float>({static_cast<size_t>(_nthr), _block_size, H, S});
@@ -1514,7 +1515,8 @@ struct MHA {
 
         PROFILE(_attn, "mixed_pack");
         // buffer for transpose and repack
-        _helper.init_reorder_buffers(_workitems.get_reorder_max_batch_size(), div_up(_workitems.get_reorder_max_kv_len(), _helper._block_size));
+        if ( _workitems.get_reorder_max_batch_size() > 0)
+            _helper.init_reorder_buffers(_workitems.get_reorder_max_batch_size(), div_up(_workitems.get_reorder_max_kv_len(), _helper._block_size));
 
         // packed k, v
         parallel_for2d_dynamic(reorder_work_count, Hk, [&](size_t w, size_t hk) {
