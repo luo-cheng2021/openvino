@@ -310,10 +310,10 @@ static void dot_product_block(TA* a, TB* b, float* c, size_t n, size_t block_siz
             auto va = mm512_uni_loadu_ps(a + i);
             vsum0 = _mm512_fmadd_ps(va, mm512_uni_loadu_ps(b + i), vsum0);
             vsum1 = _mm512_fmadd_ps(va, mm512_uni_loadu_ps(b + i + n), vsum1);
-            prefetch_bytes(64, _MM_HINT_T0, 0, b_next);
+            // prefetch_bytes(64, _MM_HINT_T0, 0, b_next);
             vsum2 = _mm512_fmadd_ps(va, mm512_uni_loadu_ps(b + i + 2 * n), vsum2);
             vsum3 = _mm512_fmadd_ps(va, mm512_uni_loadu_ps(b + i + 3 * n), vsum3);
-            prefetch_bytes(64, _MM_HINT_T0, 0, b_next + 32);
+            // prefetch_bytes(64, _MM_HINT_T0, 0, b_next + 32);
             b_next += 64;
         }
         float sum0 = _mm512_reduce_add_ps(vsum0);
@@ -1384,45 +1384,67 @@ struct MHA {
             return true;
         }
         void init_schedule_dyn(const PlainTensor& query, const PlainTensor& past_lens, const PlainTensor& subsequence_begins, size_t block_size) {
-            dyn_attn_items.clear();
-            reorder_items.clear();
+            // dyn_attn_items.clear();
+            // reorder_items.clear();
             max_kv_len_in_reorder = 0;
             max_batch_in_reorder = 0;
             total_kv_len = 0;
 
             auto seq_cout = static_cast<int32_t>(past_lens.m_dims[0]);
+            size_t dyn_attn_items_size = 0;
+            size_t reorder_items_size = 0;
             for (int32_t i = 0; i < seq_cout; i++) {
                 auto q_len = subsequence_begins.ptr<int32_t>()[i + 1] - subsequence_begins.ptr<int32_t>()[i];
                 auto kv_len = past_lens.ptr<int32_t>()[i] + q_len;
                 auto kv_len_in_block = static_cast<int32_t>(div_up(kv_len, block_size));
                 if (q_len == 1) {
-                    dyn_attn_items.emplace_back(DynAttnWorkItem{
+                    dyn_attn_items_size += 1;
+                } else {
+                    auto reorder_sub_work_count = kv_len_in_block;
+                    reorder_items_size += reorder_sub_work_count;
+
+                    // workitems for attention
+                    auto attn_sub_work_count = static_cast<int32_t>(div_up(q_len, block_size));
+                    dyn_attn_items_size += attn_sub_work_count;
+                }
+            }
+            dyn_attn_items.resize(dyn_attn_items_size);
+            reorder_items.resize(reorder_items_size);
+
+            dyn_attn_items_size = 0;
+            reorder_items_size = 0;
+            for (int32_t i = 0; i < seq_cout; i++) {
+                auto q_len = subsequence_begins.ptr<int32_t>()[i + 1] - subsequence_begins.ptr<int32_t>()[i];
+                auto kv_len = past_lens.ptr<int32_t>()[i] + q_len;
+                auto kv_len_in_block = static_cast<int32_t>(div_up(kv_len, block_size));
+                if (q_len == 1) {
+                    dyn_attn_items[dyn_attn_items_size++] = DynAttnWorkItem{
                         0,                          // batch_in_reorder
                         i,                          // batch_in_seq
                         1ull,                       // q_len
                         // kv_len in blocks, used in the sort function
                         kv_len_in_block - 1
-                    });
+                    };
                 } else {
                     auto reorder_sub_work_count = kv_len_in_block;
                     max_kv_len_in_reorder = std::max(max_kv_len_in_reorder, kv_len);
                     for (int32_t block_id = 0; block_id < reorder_sub_work_count; block_id++) {
-                        reorder_items.emplace_back(ReorderWorkItem{
+                        reorder_items[reorder_items_size++] = ReorderWorkItem{
                             i,                       // batch_in_seq
                             max_batch_in_reorder,    // batch_in_reorder
                             block_id                 // kv_block_id
-                        });
+                        };
                     }
 
                     // workitems for attention
                     auto attn_sub_work_count = static_cast<int32_t>(div_up(q_len, block_size));
                     for (int32_t block_id = 0; block_id < attn_sub_work_count; block_id++) {
-                        dyn_attn_items.emplace_back(DynAttnWorkItem{
+                        dyn_attn_items[dyn_attn_items_size++] = DynAttnWorkItem{
                             max_batch_in_reorder,    // batch_in_reorder
                             i,                       // batch_in_seq
                             q_len,                   // q_len
                             block_id                 // q_block_id
-                        });
+                        };
                     }
                     max_batch_in_reorder++;
                 }
@@ -1432,7 +1454,7 @@ struct MHA {
         void reset(const PlainTensor& query, const PlainTensor& past_lens, const PlainTensor& subsequence_begins, size_t block_size,
             size_t hk, size_t thread_num) {
             use_static_schedule = true;
-            if (!try_init_schedule_static(query, past_lens, subsequence_begins, block_size, hk, thread_num)) {
+            if (1 || !try_init_schedule_static(query, past_lens, subsequence_begins, block_size, hk, thread_num)) {
                 use_static_schedule = false;
                 init_schedule_dyn(query, past_lens, subsequence_begins, block_size);
             }
@@ -1543,7 +1565,7 @@ struct MHA {
             if (q_len == 1) {
                 const auto cur_kv_len = static_cast<size_t>(past_lens.ptr<int32_t>()[batch_in_seq]) + 1;
 
-                snprintf(name_buf, sizeof(name_buf), "1_w%ld_hk%ld_kv%ld", w, hk, cur_kv_len);
+                snprintf(name_buf, sizeof(name_buf), "1%ldh%ldk%ld", w, hk, cur_kv_len);
                 PROFILE(_attn, name_buf);
 
                 _helper.exec_kernel_one_bh(q.slice(0, batch_in_token, batch_in_token), k_cache, v_cache,
@@ -1556,7 +1578,7 @@ struct MHA {
                 const auto q_cnt = std::min(_helper._block_size, q_len - q_blk * _helper._block_size);
                 const auto cur_kv_len = static_cast<size_t>(past_lens.ptr<int32_t>()[batch_in_seq]) + q_blk * _helper._block_size + q_cnt;
 
-                snprintf(name_buf, sizeof(name_buf), "n_w%ld_hk%ld_kv%ld", w, hk, cur_kv_len);
+                snprintf(name_buf, sizeof(name_buf), "n%ldh%ldk%ld", w, hk, cur_kv_len);
                 PROFILE(_attn, name_buf);
 
                 PlainTensor sub_query;
@@ -1743,7 +1765,7 @@ struct MHA {
             access_size = Hk * kv_len * (S + 8);
         access_size += B_token * H * S * query.m_element_size;    // query
         // only consider k or v theoretical cost
-        snprintf(buf, sizeof(buf), "t%ld,f%ld,s%ld,kv%ld,MC%.2f",
+        snprintf(buf, sizeof(buf), "t%ld,f%ld,s%ld,k%ld,MC%.2f",
             B_token,                                 // total tokens number
             _workitems.get_reorder_max_batch_size(),    // first token number
             // second token number
