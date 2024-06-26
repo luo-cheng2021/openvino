@@ -296,6 +296,81 @@ static void attn_acc_value_block(float* out, float* weight, uint8_t* v, size_t S
     }
 }
 
+template<typename T>
+static void attn_acc_value_block4(float* out, float* weight, T* v, size_t out_stride, size_t weight_stride, size_t S, size_t block_size) {
+}
+
+static void attn_acc_value_block4(float* out, float* weight, uint8_t* v, size_t out_stride, size_t weight_stride, size_t S, size_t block_size) {
+    // The layout for per token per head:
+    // |scale(f32)|zeropoint(f32)|quantized feature(u8,idx_1)|quantized feature(u8,idx_2)|...|quantized feature(u8,idx_S)|
+    // The quantized feature will start from 8bytes=sizeof(float)+sizeof(float)
+#if defined(HAVE_AVX512F)
+    size_t j = 0;
+    for (; j < block_size; j++) {
+        auto v_f0 = reinterpret_cast<float*>(v);
+        auto attn_w_vec0 = _mm512_set1_ps(weight[0] * v_f0[0]);
+        auto attn_w_vec1 = _mm512_set1_ps(weight[weight_stride] * v_f0[0]);
+        auto attn_w_vec2 = _mm512_set1_ps(weight[2 * weight_stride] * v_f0[0]);
+        auto attn_w_vec3 = _mm512_set1_ps(weight[3 * weight_stride] * v_f0[0]);
+        auto zp0 = _mm512_set1_ps(v_f0[1]);
+        size_t i = 0;
+        v += 8;
+        for (; i + vec_len_f32_avx512 <= S; i += vec_len_f32_avx512) {
+            auto v_out0 = mm512_uni_loadu_ps(out + i);
+            auto v_out1 = mm512_uni_loadu_ps(out + i + out_stride);
+            auto v_out2 = mm512_uni_loadu_ps(out + i + out_stride * 2);
+            auto v_out3 = mm512_uni_loadu_ps(out + i + out_stride * 3);
+            auto v0 = _mm512_sub_ps(_mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_loadu_si128(reinterpret_cast<__m128i*>(v + i)))), zp0);
+            v_out0 = _mm512_fmadd_ps(attn_w_vec0, v0, v_out0);
+            v_out1 = _mm512_fmadd_ps(attn_w_vec1, v0, v_out1);
+            v_out2 = _mm512_fmadd_ps(attn_w_vec2, v0, v_out2);
+            v_out3 = _mm512_fmadd_ps(attn_w_vec3, v0, v_out3);
+
+            _mm512_storeu_ps(out + i, v_out0);
+            _mm512_storeu_ps(out + i + out_stride, v_out1);
+            _mm512_storeu_ps(out + i + out_stride * 2, v_out2);
+            _mm512_storeu_ps(out + i + out_stride * 3, v_out3);
+        }
+        for (; i < S; i++) {
+            out[i] += weight[0] * (v[i] - v_f0[1]) * v_f0[0];
+        }
+        v += S;
+        weight++;
+    }
+    return;
+#elif defined(HAVE_AVX2)
+    size_t j = 0;
+    for (; j < block_size; j++) {
+        auto v_f0 = reinterpret_cast<float*>(v);
+        auto attn_w_vec0 = _mm256_set1_ps(weight[0] * v_f0[0]);
+        auto zp0 = _mm256_set1_ps(v_f0[1]);
+        size_t i = 0;
+        v += 8;
+        for (; i + vec_len_f32_avx2 <= S; i += vec_len_f32_avx2) {
+            auto v_out = mm256_uni_loadu_ps(out + i);
+            auto v0 = _mm256_sub_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<__m128i*>(v + i)))), zp0);
+            v_out = _mm256_fmadd_ps(attn_w_vec0, v0, v_out);
+
+            mm256_uni_storeu_ps(out + i, v_out);
+        }
+        for (; i < S; i++) {
+            out[i] += weight[0] * (v[i] - v_f0[1]) * v_f0[0];
+        }
+        v += S;
+        weight++;
+    }
+    return;
+#endif
+    for (size_t j = 0; j < block_size; j++) {
+        auto v0 = reinterpret_cast<float*>(v);
+        v += 8;
+        for (size_t i = 0; i < S; i++) {
+            out[i] += weight[j] * (v[i] - v0[1]) * v0[0];
+        }
+        v += S;
+    }
+}
+
 template<typename TA, typename TB>
 static void dot_product_block(TA* a, TB* b, float* c, size_t n, size_t block_size) {
 #if defined(HAVE_AVX512F)
@@ -405,6 +480,134 @@ static void dot_product_block(TA* a, TB* b, float* c, size_t n, size_t block_siz
         }
         b += n;
         *c++ = sum;
+    }
+}
+
+template<typename TA, typename TB>
+static void dot_product_block4(TA* a, TB* b, float* c, size_t a_stride, size_t c_stride, size_t n, size_t block_size) {
+}
+
+template<typename TA>
+static void dot_product_block4(TA* a, uint8_t* b, float* c, size_t a_stride, size_t c_stride, size_t n, size_t block_size) {
+    // The layout for per token per head:
+    // |scale(f32)|zeropoint(f32)|quantized feature(u8,idx_1)|quantized feature(u8,idx_2)|...|quantized feature(u8,idx_S)|
+    // The quantized feature will start from 8bytes=sizeof(float)+sizeof(float)
+#if defined(HAVE_AVX512F)
+    size_t j = 0;
+    for (; j < block_size; j++) {
+        auto vsum0 = _mm512_setzero_ps();
+        auto vsum1 = _mm512_setzero_ps();
+        auto vsum2 = _mm512_setzero_ps();
+        auto vsum3 = _mm512_setzero_ps();
+
+        auto b0 = reinterpret_cast<float*>(b);
+        auto v_zp = _mm512_set1_ps(b0[1]);
+        size_t i = 0;
+        b += 8;
+        for (; i + vec_len_f32_avx512 <= n; i += vec_len_f32_avx512) {
+            auto va0 = mm512_uni_loadu_ps(a + i);
+            auto va1 = mm512_uni_loadu_ps(a + i + a_stride);
+            auto va2 = mm512_uni_loadu_ps(a + i + a_stride * 2);
+            auto va3 = mm512_uni_loadu_ps(a + i + a_stride * 3);
+            auto vb = _mm512_sub_ps(_mm512_cvtepi32_ps(_mm512_cvtepu8_epi32(_mm_loadu_si128(reinterpret_cast<__m128i*>(b + i)))), v_zp);
+            vsum0 = _mm512_fmadd_ps(va0, vb, vsum0);
+            vsum1 = _mm512_fmadd_ps(va1, vb, vsum1);
+            vsum2 = _mm512_fmadd_ps(va2, vb, vsum2);
+            vsum3 = _mm512_fmadd_ps(va3, vb, vsum3);
+        }
+        float sum0 = _mm512_reduce_add_ps(vsum0);
+        float sum1 = _mm512_reduce_add_ps(vsum1);
+        float sum2 = _mm512_reduce_add_ps(vsum2);
+        float sum3 = _mm512_reduce_add_ps(vsum3);
+
+        b += n;
+        *c = sum0 * b0[0];
+        *(c + c_stride) = sum1 * b0[0];
+        *(c + c_stride * 2) = sum2 * b0[0];
+        *(c + c_stride * 3) = sum3 * b0[0];
+        c++;
+    }
+    return;
+#elif defined(HAVE_AVX2)
+    size_t j = 0;
+    for (; j + 4 <= block_size; j += 4) {
+        auto vsum0 = _mm256_setzero_ps();
+        auto vsum1 = _mm256_setzero_ps();
+        auto vsum2 = _mm256_setzero_ps();
+        auto vsum3 = _mm256_setzero_ps();
+        auto b0 = reinterpret_cast<float*>(b);
+        auto b1 = reinterpret_cast<float*>(b + n + 8);
+        auto b2 = reinterpret_cast<float*>(b + (n + 8) * 2);
+        auto b3 = reinterpret_cast<float*>(b + (n + 8) * 3);
+        auto v_zp0 = _mm256_set1_ps(b0[1]);
+        auto v_zp1 = _mm256_set1_ps(b1[1]);
+        auto v_zp2 = _mm256_set1_ps(b2[1]);
+        auto v_zp3 = _mm256_set1_ps(b3[1]);
+        size_t i = 0;
+        b += 8;
+        for (; i + vec_len_f32_avx2 <= n; i += vec_len_f32_avx2) {
+            auto va = mm256_uni_loadu_ps(a + i);
+            auto vb0 = _mm256_sub_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<__m128i*>(b + i)))), v_zp0);
+            auto vb1 = _mm256_sub_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<__m128i*>(b + i + n + 8)))), v_zp1);
+            auto vb2 = _mm256_sub_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<__m128i*>(b + i + 2 * (n + 8))))), v_zp2);
+            auto vb3 = _mm256_sub_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<__m128i*>(b + i + 3 * (n + 8))))), v_zp3);
+
+            vsum0 = _mm256_fmadd_ps(va, vb0, vsum0);
+            vsum1 = _mm256_fmadd_ps(va, vb1, vsum1);
+            vsum2 = _mm256_fmadd_ps(va, vb2, vsum2);
+            vsum3 = _mm256_fmadd_ps(va, vb3, vsum3);
+        }
+        hsum(vsum0);
+        hsum(vsum1);
+        hsum(vsum2);
+        hsum(vsum3);
+        float sum0 = _mm256_cvtss_f32(vsum0);
+        float sum1 = _mm256_cvtss_f32(vsum1);
+        float sum2 = _mm256_cvtss_f32(vsum2);
+        float sum3 = _mm256_cvtss_f32(vsum3);
+        for (; i < n; i++) {
+            sum0 += a[i] * (b[i] - b0[1]);
+            sum1 += a[i] * (b[i + n + 8] - b1[1]);
+            sum2 += a[i] * (b[i + 2 * (n + 8)] - b2[1]);
+            sum3 += a[i] * (b[i + 3 * (n + 8)] - b3[1]);
+        }
+        c[0] = sum0 * b0[0];
+        c[1] = sum1 * b1[0];
+        c[2] = sum2 * b2[0];
+        c[3] = sum3 * b3[0];
+        c += 4;
+        b +=  4 * (n + 8) - 8;
+    }
+    for (; j < block_size; j++) {
+        auto vsum = _mm256_setzero_ps();
+        auto b0 = reinterpret_cast<float*>(b);
+        auto v_zp = _mm256_set1_ps(b0[1]);
+        size_t i = 0;
+        b += 8;
+        for (; i + vec_len_f32_avx2 <= n; i += vec_len_f32_avx2) {
+            auto va = mm256_uni_loadu_ps(a + i);
+            auto vb = _mm256_sub_ps(_mm256_cvtepi32_ps(_mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<__m128i*>(b + i)))), v_zp);
+            vsum = _mm256_fmadd_ps(va, vb, vsum);
+        }
+        hsum(vsum);
+        float sum = _mm256_cvtss_f32(vsum);
+        for (; i < n; i++) {
+            sum += a[i] * (b[i] - b0[1]);
+        }
+        b += n;
+        *c++ = sum * b0[0];
+    }
+    return;
+#endif
+    for (size_t j = 0; j < block_size; j++) {
+        float sum = 0;
+        auto b0 = reinterpret_cast<float*>(b);
+        b += 8;
+        for (size_t i = 0; i < n; i++) {
+            sum += a[i] * (b[i] - b0[1]);
+        }
+        b += n;
+        *c++ = sum * b0[0];
     }
 }
 
@@ -1006,7 +1209,7 @@ struct MHAHelper {
     //  output: [nthr, 32, H, S]
     void exec_kernel_one_bh(const PlainTensor& query, const PlainTensor& present_key, const PlainTensor& present_value, const PlainTensor& output_emb,
         const int32_t* block_table, size_t ithr, size_t hk, size_t q_len, size_t cur_kv_len, const PlainTensor& alibi_slopes) {
-        //PROFILE(_attn,  "t1_qk");
+        PROFILE(_attn,  "t1_qk");
         if (_fastpath_valid) {
             _gemv->tile_config();
             for (size_t pk = 0, i = 0; pk < cur_kv_len; pk += _block_size, i++) {
@@ -1023,15 +1226,20 @@ struct MHAHelper {
             for (size_t pk = 0, i = 0; pk < cur_kv_len; pk += _block_size, i++) {
                 auto block_number = block_table[i];
                 for (size_t pq = 0; pq < q_len; pq++) {
-                    for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
-                        dot_product_block(query.ptr<DATA_TYPE>(h, pq), present_key.ptr<KVCACHE_TYPE>(block_number, hk),
-                            _weight.ptr<float>(ithr, h, pq) + pk, _S, std::min(_block_size, cur_kv_len - pk));
-                    }
+                    auto h = hk * _h_each_group_len;
+                    for (int j = 0; j < 4; j++)
+                        cvt_copy(_output.ptr<float>(ithr, 0, j), query.ptr<DATA_TYPE>(h + j, pq), _S);
+                    dot_product_block4(_output.ptr<float>(ithr), present_key.ptr<KVCACHE_TYPE>(block_number, hk), _weight.ptr<float>(ithr, h, pq) + pk,
+                        _S, _weight.m_strides[1], _S, std::min(_block_size, cur_kv_len - pk));
+                    // for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
+                    //     dot_product_block(query.ptr<DATA_TYPE>(h, pq), present_key.ptr<KVCACHE_TYPE>(block_number, hk),
+                    //         _weight.ptr<float>(ithr, h, pq) + pk, _S, std::min(_block_size, cur_kv_len - pk));
+                    // }
                 }
             }
         }
 
-        //_attn = ov::intel_cpu::profilerManagerInstance.startProfile("t1_softmax");
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("t1_softmax");
         for (size_t pq = 0; pq < q_len; pq++) {
             for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
                 // apply attention mask & sofmax
@@ -1056,19 +1264,28 @@ struct MHAHelper {
             }
         }
 
-        //_attn = ov::intel_cpu::profilerManagerInstance.startProfile("t1_kv");
+        _attn = ov::intel_cpu::profilerManagerInstance.startProfile("t1_kv");
         memset(_output.ptr<float>(ithr), 0, q_len * _H * _S * sizeof(float));
         for (size_t pv = 0, i = 0; pv < cur_kv_len; pv += _block_size, i++) {
             auto block_number = block_table[i];
             auto* v = present_value.ptr<KVCACHE_TYPE>(block_number, hk);
             for (size_t pq = 0; pq < q_len; pq++) {
-                for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
-                    attn_acc_value_block(_output.ptr<float>(ithr, pq, h),
-                                         _weight.ptr<float>(ithr, h, pq) + pv,
-                                         v,
-                                         _S,
-                                         std::min(_block_size, cur_kv_len - pv));
-                }
+                auto h = hk * _h_each_group_len;
+                attn_acc_value_block4(_output.ptr<float>(ithr, pq, h),
+                                      _weight.ptr<float>(ithr, h, pq) + pv,
+                                      v,
+                                      _S,
+                                      _weight.m_strides[2],
+                                      _S,
+                                      std::min(_block_size, cur_kv_len - pv));
+
+                // for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
+                //     attn_acc_value_block(_output.ptr<float>(ithr, pq, h),
+                //                          _weight.ptr<float>(ithr, h, pq) + pv,
+                //                          v,
+                //                          _S,
+                //                          std::min(_block_size, cur_kv_len - pv));
+                // }
             }
         }
         // convert to dst
@@ -1103,6 +1320,7 @@ struct MHAHelper {
         _weight_bhl.resize<float>({B, _H, q_len, rnd_up(max_context_len, std::max(_block_size, size_t{16}))});
 
         parallel_for3d_dynamic(B, kv_len_in_blocks, _Hk, [&](size_t b, size_t pk_in_blocks, size_t hk) {
+            auto ithr = parallel_get_thread_num();
             auto context_len = static_cast<size_t>(past_lens.ptr<int32_t>()[b]) + 1;
             // kv_len must be valid
             auto pk = pk_in_blocks * _block_size;
@@ -1119,10 +1337,15 @@ struct MHAHelper {
                     _gemv->tile_release();
                 } else {
                     for (size_t pq = 0; pq < q_len; pq++) {
-                        for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
-                            dot_product_block(query.ptr<DATA_TYPE>(b, h, pq), present_key.ptr<KVCACHE_TYPE>(block_number, hk),
-                                _weight_bhl.ptr<float>(b, h, pq) + pk, _S, std::min(_block_size, context_len - pk));
-                        }
+                        auto h = hk * _h_each_group_len;
+                        for (int j = 0; j < 4; j++)
+                            cvt_copy(_output.ptr<float>(ithr, 0, j), query.ptr<DATA_TYPE>(b, h + j, pq), _S);
+                        dot_product_block4(_output.ptr<float>(ithr), present_key.ptr<KVCACHE_TYPE>(block_number, hk), _weight_bhl.ptr<float>(b, h, pq) + pk,
+                            _S, _weight_bhl.m_strides[2], _S, std::min(_block_size, context_len - pk));
+                        // for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
+                        //     dot_product_block(query.ptr<DATA_TYPE>(b, h, pq), present_key.ptr<KVCACHE_TYPE>(block_number, hk),
+                        //         _weight_bhl.ptr<float>(b, h, pq) + pk, _S, std::min(_block_size, context_len - pk));
+                        // }
                     }
                 }
             }
@@ -1171,13 +1394,22 @@ struct MHAHelper {
                 auto block_number = block_indices.ptr<int32_t>()[block_indices_begins.ptr<int32_t>()[b] + pv_in_blocks];
                 auto* v = present_value.ptr<KVCACHE_TYPE>(block_number, hk);
                 for (size_t pq = 0; pq < q_len; pq++) {
-                    for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
-                        attn_acc_value_block(_output_bhl.ptr<float>(ithr, b, pq, h),
-                                             _weight_bhl.ptr<float>(b, h, pq) + pv,
-                                             v,
-                                             _S,
-                                             std::min(_block_size, context_len - pv));
-                    }
+                    auto h = hk * _h_each_group_len;
+                    attn_acc_value_block4(_output_bhl.ptr<float>(ithr, b, pq, h),
+                                        _weight_bhl.ptr<float>(b, h, pq) + pv,
+                                        v,
+                                        _S,
+                                        _weight_bhl.m_strides[2],
+                                        _S,
+                                        std::min(_block_size, context_len - pv));
+
+                    // for (size_t h = hk * _h_each_group_len; h < (hk + 1) * _h_each_group_len; h++) {
+                    //     attn_acc_value_block(_output_bhl.ptr<float>(ithr, b, pq, h),
+                    //                          _weight_bhl.ptr<float>(b, h, pq) + pv,
+                    //                          v,
+                    //                          _S,
+                    //                          std::min(_block_size, context_len - pv));
+                    // }
                 }
             }
         });
@@ -1358,7 +1590,7 @@ struct MHA {
             const auto q_len = static_cast<size_t>(item.q_len);
             size_t ithr = parallel_get_thread_num();
 
-            if (ithr % 32 != 0)
+            if (ithr % 64 != 0)
                 ov::intel_cpu::profilerManagerInstance.enabled = false;
             char name_buf[256];
 
