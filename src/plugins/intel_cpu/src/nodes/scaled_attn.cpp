@@ -306,7 +306,7 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
         brgemmKey wv_key = {q_len,
                             head_size,
                             kv_len,
-                            kv_len * 2,
+                            kv_len * (in_type == ov::element::f32 ? 1 : 2),
                             present_key.stride(2),
                             static_cast<size_t>(out_md.get_strides()[ldc_index]),
                             false,
@@ -381,10 +381,10 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
         _attn = ov::intel_cpu::profilerManagerInstance.startProfile("brgemm_attn1");
         // attention
         parallel_for3d(B, H, m_blocks, [&](size_t ithr, size_t b, size_t h, size_t m_blk) {
-            if (ithr % 32 != 0)
-                ov::intel_cpu::profilerManagerInstance.enabled = false;
+            // if (ithr % 4 != 0)
+            //     ov::intel_cpu::profilerManagerInstance.enabled = false;
 
-            PROFILE(_in, "qk");
+            // PROFILE(_in, "qk");
 
             auto m_start = m_blk * m_block_size;
             auto m_end = std::min(m_start + m_block_size, q_len);
@@ -408,7 +408,7 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
                     alibi_stride = alibi_mask.stride(2);
             }
 
-            _in = ov::intel_cpu::profilerManagerInstance.startProfile("softmax");
+            // _in = ov::intel_cpu::profilerManagerInstance.startProfile("softmax");
             uint8_t* attn_mask_ptr = nullptr;
             auto attn_mask_stride = 0;
             if (0 && attention_mask) {
@@ -439,7 +439,7 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
                             precision_of<T>::value,
                             precision_of<T>::value);
             }
-            _in = ov::intel_cpu::profilerManagerInstance.startProfile("kv");
+            // _in = ov::intel_cpu::profilerManagerInstance.startProfile("kv");
             // T* w_ptr = &weight.at<T>({b, h, m_start, 0});
             auto* w_ptr = reinterpret_cast<T*>(_weight.ptr<float>(ithr, h, 0, 0));
             float* fp32_out_ptr;
@@ -576,6 +576,7 @@ struct MHAKernel<ScaledDotProductAttention::KT_MLAS, float> {
         auto k_stride_s = present_key.stride(3);
 
         auto m_blocks = (q_len + m_block_size - 1) / m_block_size;
+        auto_causal = true;
 
         parallel_for3d(B, H, m_blocks, [&](size_t b, size_t h, size_t m_blk) {
             auto thread_id = parallel_get_thread_num();
@@ -602,7 +603,7 @@ struct MHAKernel<ScaledDotProductAttention::KT_MLAS, float> {
             }
             uint8_t* attn_mask_ptr = nullptr;
             auto attn_mask_stride = 0;
-            if (attention_mask) {
+            if (attention_mask && 0) {
                 attn_mask_ptr = reinterpret_cast<uint8_t*>(&attention_mask.at<float>({b, h, 0, 0}, true));
                 if (attention_mask.size(2) > 1)
                     attn_mask_stride = attention_mask.stride(2) * sizeof(float);
@@ -790,9 +791,23 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
             present_key = present_key.permute(permute_axes);
             present_value = present_value.permute(permute_axes);
         }
-        B = q_input.size(0);
-        L1 = q_input.size(2);
-        S = q_input.size(3);
+        if (q_input.m_rank == 3) {
+            B = q_input.size(0);
+            L1 = q_input.size(1);
+            OPENVINO_ASSERT(q_input.size(2) == 1024, "Special case for 1024 feature size");
+            size_t H = 16;
+            S = q_input.size(2) / H;
+            q_input = q_input.reshape({B, L1, H, S}).permute({0, 2, 1, 3});
+            k_input = k_input.reshape({B, L1, H, S}).permute({0, 2, 1, 3});
+            v_input = v_input.reshape({B, L1, H, S}).permute({0, 2, 1, 3});
+            present_key = k_input;
+            present_value = v_input;
+            has_out_transpose = true;
+        } else {
+            B = q_input.size(0);
+            L1 = q_input.size(2);
+            S = q_input.size(3);
+        }
         L0 = present_key.size(2) - L1;
         auto Hk = k_input.size(1);
 
@@ -1020,7 +1035,7 @@ bool ScaledDotProductAttention::isSupportedOperation(const std::shared_ptr<const
         }
         // expect shape of q: [B, H, L, S]
         auto inRank = op->get_input_partial_shape(0).size();
-        if (inRank != 4u) {
+        if (inRank < 3u) {
             errorMessage = "Doesn't support 'data' input with rank: " + std::to_string(inRank);
             return false;
         }

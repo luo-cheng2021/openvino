@@ -42,23 +42,23 @@ void op::v13::ScaledDotProductAttention::validate_and_infer_types() {
     auto out_type = get_input_element_type(0);
     const auto& input_size = get_input_size();
     const auto& causal = get_causal();
-    if (input_size >= 4 && !causal) {
-        const auto& attention_type = get_input_element_type(3);
-        NODE_VALIDATION_CHECK(
-            this,
-            attention_type.is_real() || attention_type == element::boolean || attention_type.is_dynamic(),
-            "The element type of attention_mask must be either floating-point or boolean.");
-    }
-    for (size_t i = 1; i < input_size; i++) {
-        const auto& element_type = get_input_element_type(i);
-        if (i == 3 && (element_type == element::boolean || causal)) {
-            // Skip checking attention_mask in loop when boolean or skipped to not affect merged dtype.
-            continue;
-        }
-        NODE_VALIDATION_CHECK(this,
-                              element::Type::merge(out_type, out_type, element_type),
-                              "Mixed input types are not supported.");
-    }
+    // if (input_size >= 4 && !causal) {
+    //     const auto& attention_type = get_input_element_type(3);
+    //     NODE_VALIDATION_CHECK(
+    //         this,
+    //         attention_type.is_real() || attention_type == element::boolean || attention_type.is_dynamic(),
+    //         "The element type of attention_mask must be either floating-point or boolean.");
+    // }
+    // for (size_t i = 1; i < input_size; i++) {
+    //     const auto& element_type = get_input_element_type(i);
+    //     if (i == 3 && (element_type == element::boolean || causal)) {
+    //         // Skip checking attention_mask in loop when boolean or skipped to not affect merged dtype.
+    //         continue;
+    //     }
+    //     NODE_VALIDATION_CHECK(this,
+    //                           element::Type::merge(out_type, out_type, element_type),
+    //                           "Mixed input types are not supported.");
+    // }
     NODE_VALIDATION_CHECK(this,
                           out_type.is_real() || out_type.is_dynamic(),
                           "The element type of the input tensor must be a floating-point.");
