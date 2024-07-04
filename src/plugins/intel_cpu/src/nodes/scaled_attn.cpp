@@ -406,7 +406,7 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
                                      qk_scratch_a ? &qk_scratch_a.at<T>({tid, 0}) : nullptr);
             float* alibi_ptr = nullptr;
             auto alibi_stride = 0;
-            if (0 && alibi_mask) {
+            if (alibi_mask) {
                 alibi_ptr = &alibi_mask.at<float>({b, h, 0, 0}, true);
                 if (alibi_mask.size(2) > 1)
                     alibi_stride = alibi_mask.stride(2);
@@ -415,14 +415,14 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
             _in = ov::intel_cpu::profilerManagerInstance.startProfile("softmax");
             uint8_t* attn_mask_ptr = nullptr;
             auto attn_mask_stride = 0;
-            if (0 && attention_mask) {
+            if (attention_mask) {
                 attn_mask_ptr = reinterpret_cast<uint8_t*>(&attention_mask.at<T>({b, h, 0, 0}, true));
                 if (attention_mask.size(2) > 1)
                     attn_mask_stride = attention_mask.stride(2) * sizeof(T);
             }
             uint8_t* cmask_ptr = nullptr;
             auto cmask_stride = 0;
-            if (0 && causal_mask) {
+            if (causal_mask) {
                 cmask_ptr = &causal_mask.at<uint8_t>({b, h, 0, 0}, true);
                 if (causal_mask.size(2) > 1)
                     cmask_stride = causal_mask.stride(2);

@@ -172,7 +172,6 @@ inline void scale_add2_reduce_max(float* a,
     auto v_max2 = v_max0;
     auto v_max3 = v_max0;
     auto v_scale = _mm512_set1_ps(scale);
-    size_t i = 0;
     auto v_zeroi32 = _mm512_setzero_epi32();
     auto v_nfltmax = _mm512_set1_ps(-FLT_MAX);
     auto kmask_xor = _cvtu32_mask16(select_nfltmax_at_0 ? 0xFFFF : 0);
