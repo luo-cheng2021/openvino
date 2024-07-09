@@ -95,7 +95,7 @@ struct RoPE::RoPEExecutorRotateHalf : public RoPE::Executor {
     RoPEExecutorRotateHalf(const op::internal::RoPE::Config& config) : m_config(config) {
         jit_rotary_compile_params jcp;
         jcp.src_prc = precision_of<T>::value;
-        jcp.dst_prc = precision_of<T>::value;
+        jcp.dst_prc = ov::element::Type_t::f32;
         jcp.rotary_ndims = config.rotary_ndims;
         jcp.interleave = false;
         m_rotaryKernel = createJitKernel(jcp);
@@ -150,7 +150,12 @@ struct RoPE::RoPEExecutorRotateHalf : public RoPE::Executor {
             auto* dst = t_dst.ptr<T>(b, h, p, 0);
 
             if (m_rotaryKernel) {
-                execJitKernel(m_rotaryKernel, src, dst, cos, sin);
+                float buf_f32[1024];
+                execJitKernel(m_rotaryKernel, src, buf_f32, cos, sin);
+
+                for (size_t i = 0; i < rotary_dims; i++) {
+                    dst[i] = buf_f32[i];
+                }
             } else {
                 auto half_rotary_dims = rotary_dims / 2;
                 size_t i = 0;

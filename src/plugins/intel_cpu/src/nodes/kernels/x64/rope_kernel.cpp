@@ -79,7 +79,7 @@ void jit_rotary_kernel<isa>::rotary_half(size_t step) {
     // sin[i] * src1
     uni_vmulps(vmm_dst0, vmm_sin, vmm_src1);
     // cos[i] * src0 - sin[i] * src1
-    vfmsub231ps(vmm_dst0, vmm_cos, vmm_src0);
+    sim_vfmsub231ps(vmm_dst0, vmm_cos, vmm_src0);
     store(reg_dst, vmm_dst0, m_jcp.dst_prc, step);
 
     // cos[i + halfRotaryNdims]
@@ -89,7 +89,7 @@ void jit_rotary_kernel<isa>::rotary_half(size_t step) {
     // cos[i + half_rotary_dims] * src1
     uni_vmulps(vmm_dst0, vmm_cos, vmm_src1);
     // cos[i + half_rotary_dims] * src1 + sin[i + half_rotary_dims] * src0
-    vfmadd231ps(vmm_dst0, vmm_sin, vmm_src0);
+    sim_vfmadd231ps(vmm_dst0, vmm_sin, vmm_src0);
     store(reg_dst, vmm_dst0, m_jcp.dst_prc, step, half_rotary_ndims * m_jcp.dst_prc.size());
 
     add(reg_src, m_jcp.src_prc.size() * step);
@@ -144,12 +144,12 @@ void jit_rotary_kernel<isa>::rotary_interleave(size_t step) {
     // sin[j] * src1
     uni_vmulps(vmm_dst0, vmm_sin, vmm_src1);
     // cos[j] * src0 - sin[j] * src1
-    vfmsub231ps(vmm_dst0, vmm_cos, vmm_src0);
+    sim_vfmsub231ps(vmm_dst0, vmm_cos, vmm_src0);
 
     // cos[j] * src1
     uni_vmulps(vmm_dst1, vmm_cos, vmm_src1);
     // cos[j] * src1 + sin[j] * src0
-    vfmadd231ps(vmm_dst1, vmm_sin, vmm_src0);
+    sim_vfmadd231ps(vmm_dst1, vmm_sin, vmm_src0);
     if (isa == cpu_isa_t::avx2) {
         // dst0: 0 2 4 6 8 10 12 14
         // dst1: 1 3 5 7 9 11 13 15

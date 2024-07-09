@@ -39,6 +39,18 @@ struct jit_rotary_kernel : public JitKernel<jit_rotary_compile_params, jit_rotar
 
     explicit jit_rotary_kernel(const jit_rotary_compile_params& jcp) : JitKernel(jit_name(), jcp, isa) {}
 
+    void sim_vfmsub231ps(const Xbyak::Xmm& v_dst,
+                                        const Xbyak::Xmm& v_src,
+                                        const Xbyak::Operand& op) {
+        assert(!v_dst.isEqualIfNotInherited(op));
+        vmulps(v_src, v_src, op);
+        vsubps(v_dst, v_src, v_dst);
+    }
+    void sim_vfmadd231ps(const Xbyak::Xmm &x1, const Xbyak::Xmm &x2,
+            const Xbyak::Operand &op) {
+        vmulps(x2, x2, op);
+        vaddps(x1, x1, x2);
+    }
 private:
     using Vmm = typename dnnl::impl::utils::conditional3<isa == dnnl::impl::cpu::x64::sse41,  Xbyak::Xmm,
         isa == dnnl::impl::cpu::x64::avx2,  Xbyak::Ymm,  Xbyak::Zmm>::type;
