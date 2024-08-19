@@ -544,6 +544,14 @@ void parallel_for3d(const T0& D0, const T1& D1, const T2& D2, const F& func) {
         for_3d(ithr, nthr, D0, D1, D2, func);
     });
 #elif OV_THREAD == OV_THREAD_OMP
+// #pragma omp parallel for collapse(3)
+//     for (T0 d0 = 0; d0 < D0; ++d0) {
+//         for (T1 d1 = 0; d1 < D1; ++d1) {
+//             for (T2 d2 = 0; d2 < D2; ++d2) {
+//                 func(d0, d1, d2);
+//             }
+//         }
+//     }
 #    pragma omp parallel
     for_3d(parallel_get_thread_num(), parallel_get_num_threads(), D0, D1, D2, func);
 #elif OV_THREAD == OV_THREAD_SEQ

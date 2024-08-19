@@ -1331,27 +1331,27 @@ public:
 #endif
 
 #if (OV_THREAD == OV_THREAD_OMP)
-class UpdateNodes : public UpdateNodesBase {
-public:
-    using UpdateNodesBase::UpdateNodesBase;
-    void operator()(size_t stopIndx) {
-        m_completion.store(false);
-        auto startCounter = m_prepareCounter.load();
+// class UpdateNodes : public UpdateNodesBase {
+// public:
+//     using UpdateNodesBase::UpdateNodesBase;
+//     void operator()(size_t stopIndx) {
+//         m_completion.store(false);
+//         auto startCounter = m_prepareCounter.load();
 
-        #pragma omp parallel
-        #pragma omp sections
-        {
-            #pragma omp section
-            {
-                updateDynParams(startCounter, stopIndx);
-            }
-            #pragma omp section
-            {
-                updateShapes(startCounter, stopIndx);
-            }
-        }
-    }
-};
+//         #pragma omp parallel
+//         #pragma omp sections
+//         {
+//             #pragma omp section
+//             {
+//                 updateDynParams(startCounter, stopIndx);
+//             }
+//             #pragma omp section
+//             {
+//                 updateShapes(startCounter, stopIndx);
+//             }
+//         }
+//     }
+// };
 #endif
 
 #endif
@@ -1484,7 +1484,7 @@ void Graph::Infer(SyncInferRequest* request) {
 
     switch (status) {
     case Status::ReadyDynamic:
-        InferDynamic(request, UpdateNodes(m_executableGraphNodes));
+        InferDynamic(request, UpdateNodesSeq(m_executableGraphNodes));
         break;
     case Status::ReadyDynamicSeq:
         InferDynamic(request, UpdateNodesSeq(m_executableGraphNodes));

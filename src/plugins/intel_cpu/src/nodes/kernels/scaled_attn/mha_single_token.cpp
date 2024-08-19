@@ -735,6 +735,8 @@ static void attn_reduce(T* dst, float* temp, size_t M, size_t S, size_t temp_str
 
 template <typename T, typename T2>
 static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
+                             const ov::intel_cpu::PlainTensor& key,
+                             const ov::intel_cpu::PlainTensor& value,
                              const ov::intel_cpu::PlainTensor& present_key,
                              const ov::intel_cpu::PlainTensor& present_value,
                              const ov::intel_cpu::PlainTensor& alibi_mask,
@@ -808,6 +810,9 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                         auto p = past_k_scale_zp.ptr<float>(0, h_group, pk);
                         auto p_k = present_key.ptr<T2>(0, h_group, pk);
                         prefetch_bytes(S, _MM_HINT_T0, 4096, p_k);
+                        if (pk == kv_len - 1) {
+                            std::memcpy(p_k, key.ptr<T2>(b, h_group), S * sizeof(T2));
+                        }
                         buf_attn_w.ptr<float>(0, h_group, 0)[pk] =
                                 dot_product(query.ptr<T>(0, h_group), p_k,
                                     S, p, p + 1, head_sum.ptr<float>(0, h_group));
@@ -817,6 +822,9 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                         auto b_kv = beams ? beams.ptr<int32_t>(b)[pk] : b;
                         auto p = past_k_scale_zp.ptr<float>(b_kv, h_group, pk);
                         auto p_k = present_key.ptr<T2>(b_kv, h_group, pk);
+                        if (pk == kv_len - 1) {
+                            std::memcpy(p_k, key.ptr<T2>(b, h_group), S * sizeof(T2));
+                        }
                         buf_attn_w.ptr<float>(b, h_group, 0)[pk] =
                                 dot_product(query.ptr<T>(b, h_group), p_k,
                                     S, p, p + 1, head_sum.ptr<float>(b, h_group));
@@ -825,6 +833,9 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
             } else {
                 for (size_t pk = 0; pk < kv_len; ++pk) {
                     auto b_kv = beams ? beams.ptr<int32_t>(b)[pk] : b;
+                    if (pk == kv_len - 1) {
+                        std::memcpy(present_key.ptr<T2>(b_kv, h_group, pk), key.ptr<T2>(b, h_group), S * sizeof(T2));
+                    }
                     for (size_t pq = 0; pq < q_len; pq++) {
                         auto p = past_k_scale_zp.ptr<float>(b_kv, h_group, pk);
                         for (size_t h = h_group * h_each_group_len; h < (h_group + 1) * h_each_group_len; h++) {
@@ -864,6 +875,9 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
                     auto b_kv = beams ? beams.ptr<int32_t>(b)[pv] : b;
                     auto* v = present_value.ptr<T2>(b_kv, h_group, pv);
                     auto p = past_v_scale_zp.ptr<float>(pv, b_kv, h_group);
+                    if (pv == kv_len - 1) {
+                        std::memcpy(v, value.ptr<T2>(b, h_group), S * sizeof(T2));
+                    }
                     for (size_t pq = 0; pq < q_len; pq++) {
                         for (size_t h = h_group * h_each_group_len, group_idx = 0; h < (h_group + 1) * h_each_group_len; h++, group_idx++) {
                             attn_acc_value(buf_attn_score.ptr<float>(ithr, pq, group_idx),
@@ -1048,6 +1062,8 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
 }
 
 void mha_single_token(const ov::intel_cpu::PlainTensor& query,
+                      const ov::intel_cpu::PlainTensor& key,
+                      const ov::intel_cpu::PlainTensor& value,
                       const ov::intel_cpu::PlainTensor& present_key,
                       const ov::intel_cpu::PlainTensor& present_value,
                       const ov::intel_cpu::PlainTensor& alibi_mask,
@@ -1064,7 +1080,7 @@ void mha_single_token(const ov::intel_cpu::PlainTensor& query,
                       ov::intel_cpu::PlainTensor& head_sum) {
     if (query.get_precision() == ov::element::bf16) {
         if (present_key.get_precision() == ov::element::u8) {
-            mha_single_token_kernel<ov::bfloat16, uint8_t>(query,
+            mha_single_token_kernel<ov::bfloat16, uint8_t>(query, key, value,
                                                            present_key,
                                                            present_value,
                                                            alibi_mask,
@@ -1080,7 +1096,7 @@ void mha_single_token(const ov::intel_cpu::PlainTensor& query,
                                                            past_v_scale_zp,
                                                            head_sum);
         } else {
-            mha_single_token_kernel<ov::bfloat16, ov::bfloat16>(query,
+            mha_single_token_kernel<ov::bfloat16, ov::bfloat16>(query, key, value,
                                                                 present_key,
                                                                 present_value,
                                                                 alibi_mask,
@@ -1098,7 +1114,7 @@ void mha_single_token(const ov::intel_cpu::PlainTensor& query,
         }
     } else if (query.get_precision() == ov::element::f32) {
         if (present_key.get_precision() == ov::element::u8) {
-            mha_single_token_kernel<float, uint8_t>(query,
+            mha_single_token_kernel<float, uint8_t>(query, key, value,
                                                     present_key,
                                                     present_value,
                                                     alibi_mask,
@@ -1114,7 +1130,7 @@ void mha_single_token(const ov::intel_cpu::PlainTensor& query,
                                                     past_v_scale_zp,
                                                     head_sum);
         } else if (present_key.get_precision() == ov::element::f16) {
-            mha_single_token_kernel<float, ov::float16>(query,
+            mha_single_token_kernel<float, ov::float16>(query, key, value,
                                                         present_key,
                                                         present_value,
                                                         alibi_mask,
@@ -1130,7 +1146,7 @@ void mha_single_token(const ov::intel_cpu::PlainTensor& query,
                                                         past_v_scale_zp,
                                                         head_sum);
         } else {
-            mha_single_token_kernel<float, float>(query,
+            mha_single_token_kernel<float, float>(query, key, value,
                                                 present_key,
                                                 present_value,
                                                 alibi_mask,

@@ -676,14 +676,16 @@ void StridedSlice::StridedSliceCommonExecutor::indicesCalculation() {
         return srcIdx * params.attrs.dataSize;
     };
 
-    parallel_nt(nThreads, [&](const int ithr, const int nthr) {
-        size_t start = 0, end = 0;
+    //parallel_nt(nThreads, [&](const int ithr, const int nthr) {
+    parallel_for(workAmount, [&] (const int j) {
+        //size_t start = 0, end = 0;
         VectorDims coords(params.nDimsForWork, 0);
-        splitter(workAmount, nthr, ithr, start, end);
-        parallel_init(start, params.nDimsForWork, params.dstBlockedDims, coords);
+        //splitter(workAmount, nthr, ithr, start, end);
+        parallel_init(j, params.nDimsForWork, params.dstBlockedDims, coords);
 
         size_t srcIdx = getSrcIdx(coords);
-        for (size_t j = start; j < end; ++j) {
+        //for (size_t j = start; j < end; ++j) {
+        {
             dstIndices[j] = j * lastDstDim;
             srcIndices[j] = srcIdx;
 
@@ -728,11 +730,12 @@ void StridedSlice::StridedSliceCommonExecutor::exec(const std::vector<MemoryCPtr
     const uint8_t* srcData = srcMemory[0]->getDataAs<const uint8_t>();
     uint8_t* dstData = dstMemory[0]->getDataAs<uint8_t>();
     const uint8_t* srcShiftedData = srcData + srcShift;
-    parallel_nt(nThreads, [&](const int ithr, const int nthr) {
-        size_t start = 0, end = 0;
-        splitter(workAmount, nthr, ithr, start, end);
+    parallel_for(workAmount, [&] (const int iwork) {
+    // parallel_nt(nThreads, [&](const int ithr, const int nthr) {
+        // size_t start = 0, end = 0;
+        // splitter(workAmount, nthr, ithr, start, end);
 
-        for (size_t iwork = start; iwork < end; ++iwork)
+        // for (size_t iwork = start; iwork < end; ++iwork)
             cpu_memcpy(&dstData[dstIndices[iwork]], &srcShiftedData[srcIndices[iwork]], lastDstDim);
     });
 }

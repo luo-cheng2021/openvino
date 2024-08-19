@@ -17,6 +17,7 @@
 #if defined(OPENVINO_ARCH_X86_64)
 #include "kernels/x64/mlp_kernel.hpp"
 #endif
+#include "utils/profiler.hpp"
 
 namespace ov {
 namespace intel_cpu {
@@ -244,10 +245,12 @@ struct LLMMLP::Impl {
         int strideC = dstStrides[dstStrides.size() - 2] * sizeof(ov::bfloat16);
 
         for (int m = 0; m < M;) {
-            int BM = std::min(M - m, 512);
+            //PROFILE(_attn, "gateup");
+            int BM = std::min(M - m, 256);
             setM(BM);
 
             gate_up.runGateUp(pA, strideA, BM, m_actUp.ptr<ov::bfloat16>(), m_actUp.stride_bytes(0), m_config, m_tempC);
+            //_attn = ov::intel_cpu::profilerManagerInstance.startProfile("down");
             down.run(reinterpret_cast<uint8_t*>(m_actUp.ptr<ov::bfloat16>()), m_actUp.stride_bytes(0), BM, dstC, strideC, m_tempC);
 
             m += BM;

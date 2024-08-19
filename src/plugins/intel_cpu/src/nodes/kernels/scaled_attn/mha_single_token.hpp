@@ -16,6 +16,8 @@ namespace Cpu {
 namespace XARCH {
 
 void mha_single_token(const ov::intel_cpu::PlainTensor& query,
+                      const ov::intel_cpu::PlainTensor& key,
+                      const ov::intel_cpu::PlainTensor& value,
                       const ov::intel_cpu::PlainTensor& present_key,
                       const ov::intel_cpu::PlainTensor& present_value,
                       const ov::intel_cpu::PlainTensor& alibi_mask,

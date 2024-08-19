@@ -39,6 +39,7 @@
 #include <string>
 #include <vector>
 #include "utils/profiler.hpp"
+#include "kernels/scaled_attn/linux_perf.hpp"
 
 using namespace ov::Extensions::Cpu::XARCH;
 using namespace dnnl::impl;
@@ -384,7 +385,8 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
 
         _attn = ov::intel_cpu::profilerManagerInstance.startProfile("brgemm_attn1");
         // attention
-        parallel_for3d(B, H, m_blocks, [&](size_t ithr, size_t b, size_t h, size_t m_blk) {
+        parallel_for3d(B, H, m_blocks, [&](size_t b, size_t h, size_t m_blk) {
+            auto ithr = parallel_get_thread_num();
             if (ithr % 32 != 0)
                 ov::intel_cpu::profilerManagerInstance.enabled = false;
 
@@ -844,6 +846,8 @@ struct MHASingleToken {
     // attention_mask [B, 1, q_len, kv_len]
     // output_emb    [B, L1, H, S]
     void operator()(PlainTensor& query,
+                    PlainTensor& key,
+                    PlainTensor& value,
                     PlainTensor& present_key,
                     PlainTensor& present_value,
                     const PlainTensor& alibi_mask,
@@ -863,7 +867,7 @@ struct MHASingleToken {
 
         // aligned to cache line (64bytes=16*sizeof(float)) to avoid false sharing
         m_attn_w.resize<float>({B, H, q_len, (kv_len + 15) / 16 * 16});
-        mha_single_token(query, present_key, present_value, alibi_mask, attention_mask, beams,
+        mha_single_token(query, key, value, present_key, present_value, alibi_mask, attention_mask, beams,
             output_emb, m_attn_w, m_temp, has_out_transpose, auto_causal, d_scale, k_scale_zp, v_scale_zp, m_head_sum);
     }
 };
@@ -903,7 +907,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
         float scale_input = 0.0f;
         size_t B, L1, L0, S;
 
-        PROFILE(_attn, "attn_execute");
+        //PROFILE(_attn, "attn_execute");
         q_input.reset(inputs[0]);
         k_input.reset(inputs[1]);
         v_input.reset(inputs[2]);
@@ -987,7 +991,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
         if (!use_one_token) {
             char buf[256];
             snprintf(buf, sizeof(buf), "first_BL%ld,%ld", B, L1);
-            _attn = ov::intel_cpu::profilerManagerInstance.startProfile(buf);
+            //_attn = ov::intel_cpu::profilerManagerInstance.startProfile(buf);
 
             // multi-token version
             kernel(strm, q_input, k_input, v_input, {}, use_attn_mask ? attn_mask : PlainTensor(),
@@ -998,7 +1002,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
             //  1, in matrix mutiply, using AMX is not efficency because the M dimension of A will alway be 1
             //  2, using float will save the repack cost which typically is required for bf16/int8 opt
             //  3, using dot product can leverage the SIMD while easily adapt to indirect kv cache
-            kernel_single_token(q_input, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor(),
+            kernel_single_token(q_input, k_input, v_input, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor(),
                 output_emb, beam_table, has_out_transpose, auto_causal, scale_input, k_scale_zp, v_scale_zp);
         }
     }
@@ -1154,7 +1158,7 @@ void ScaledDotProductAttention::execute(dnnl::stream strm) {
         presentk_input = inputs[1];
         presentv_input = inputs[2];
     }
-    _attn = ov::intel_cpu::profilerManagerInstance.startProfile("pg_exec");
+    //_attn = ov::intel_cpu::profilerManagerInstance.startProfile("pg_exec");
     m_executor->execute(strm, m_config, inputs, output, presentk_input, presentv_input, beam_input, k_scale_zp, v_scale_zp);
 }
 
@@ -1209,6 +1213,7 @@ void ScaledDotProductAttention::assignState(const std::shared_ptr<VariableStateK
 }
 
 void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k, const MemoryPtr& mem_cur_v, const MemoryPtr& mem_beam_idx) {
+    std::cout << "--------------------------------------==========================\n";
     std::vector<size_t> order = {0, 1, 2, 3};
     if (!m_config.config.permute_axes.empty()) {
         order = m_config.config.permute_axes;
@@ -1251,7 +1256,7 @@ void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k,
     // 2. resize pastkv
     ov::element::Type kvcache_precision = m_k_state->internal_desc()->getPrecision();
     {
-        auto shape = {B, H, (L0 + L1) * 2, S};
+        auto shape = {B, H, (L0 + L1 + 63), S};
         auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(kvcache_precision,
             Shape(reverse(shape)),
             shape,
@@ -1287,8 +1292,8 @@ void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k,
             auto& old_scale_zp_v = m_v_state->get_scale_zp();
             PlainTensor new_scale_zp_k, new_scale_zp_v;
 
-            new_scale_zp_k.resize<float>({B, H, (L0 + L1) * 2, 2});
-            new_scale_zp_v.resize<float>({B, H, (L0 + L1) * 2, 2});
+            new_scale_zp_k.resize<float>({B, H, (L0 + L1 + 63), 2});
+            new_scale_zp_v.resize<float>({B, H, (L0 + L1 + 63), 2});
             parallel_for2d(B, H, [&](size_t b, size_t h) {
                 auto idx = static_cast<size_t>(table[b]);
                 for (size_t m = 0; m < L0; m++) {
@@ -1324,12 +1329,12 @@ void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k,
 
         m_k_state->assign_internal_state(new_internal_mem_k);
         m_v_state->assign_internal_state(new_internal_mem_v);
-        m_k_state->assign_internal_state_max_size(B * H * (L0 + L1) * 2 * S);
-        m_v_state->assign_internal_state_max_size(B * H * (L0 + L1) * 2 * S);
+        m_k_state->assign_internal_state_max_size(B * H * (L0 + L1 + 63) * S);
+        m_v_state->assign_internal_state_max_size(B * H * (L0 + L1 + 63) * S);
     }
     // 3. create beam table
     {
-        auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(ov::element::i32, Shape{B, (L0 + L1) * 2});
+        auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(ov::element::i32, Shape{B, (L0 + L1 + 63)});
 
         auto new_hidden_state_k = std::make_shared<Memory>(getEngine(), mem_desc);
         auto new_hidden_state_v = std::make_shared<Memory>(getEngine(), mem_desc);
@@ -1357,8 +1362,8 @@ void ScaledDotProductAttention::resetBeamTablePastkv(const MemoryPtr& mem_cur_k,
 
         m_k_state->assign_hidden_state(new_hidden_state_k);
         m_v_state->assign_hidden_state(new_hidden_state_v);
-        m_k_state->assign_hidden_state_max_size(B * (L0 + L1) * 2);
-        m_v_state->assign_hidden_state_max_size(B * (L0 + L1) * 2);
+        m_k_state->assign_hidden_state_max_size(B * (L0 + L1 + 63));
+        m_v_state->assign_hidden_state_max_size(B * (L0 + L1 + 63));
     }
 }
 
@@ -1412,7 +1417,7 @@ void ScaledDotProductAttention::updateBeamTable(const MemoryPtr& mem_beam_idx, s
     // resize buffer
     bool need_redefine = true;
     if (B * (L0 + L1) > m_k_state->hidden_state_max_size()) {
-        auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(ov::element::i32, Shape{B, (L0 + L1) * 2});
+        auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(ov::element::i32, Shape{B, (L0 + L1 + 63) });
 
         auto new_hidden_state_k = std::make_shared<Memory>(getEngine(), mem_desc);
         auto new_hidden_state_v = std::make_shared<Memory>(getEngine(), mem_desc);
@@ -1429,8 +1434,8 @@ void ScaledDotProductAttention::updateBeamTable(const MemoryPtr& mem_beam_idx, s
         }
         m_k_state->assign_hidden_state(new_hidden_state_k);
         m_v_state->assign_hidden_state(new_hidden_state_v);
-        m_k_state->assign_hidden_state_max_size(B * (L0 + L1) * 2);
-        m_v_state->assign_hidden_state_max_size(B * (L0 + L1) * 2);
+        m_k_state->assign_hidden_state_max_size(B * (L0 + L1 + 63));
+        m_v_state->assign_hidden_state_max_size(B * (L0 + L1 + 63));
         hidden_state_k = new_hidden_state_k;
         hidden_state_v = new_hidden_state_v;
         beam_table_k = new_beam_table_k;
@@ -1539,6 +1544,24 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
         }
         return result;
     };
+//     {
+//     auto pt = LinuxPerf::Profile("o", 0);
+// #pragma omp parallel for num_threads(40)// collapse(2)
+//     for (size_t b = 0; b < B * H / 32; ++b) {
+//     // for (size_t b = 0; b < B; ++b) {
+//     //     for (size_t h = 0; h < H; ++h) {
+//             //for (size_t m = 0; m < L1; ++m) {
+//                 auto p = LinuxPerf::Profile("s", 0);
+//                 asm("nop");
+//             //}
+//         // }
+//     }
+//     // parallel_for5d(B / 8, H, L1, L1, L1, [&] (size_t, size_t, size_t, size_t, size_t) {
+//     // //parallel_for(B * H / 128, [&] (size_t i) {
+//     //     auto p = LinuxPerf::Profile("s", 0);
+//     // });
+//     }
+
     auto internal_mem_k = m_k_state->internal_state_mem();
     auto internal_mem_v = m_v_state->internal_state_mem();
 
@@ -1552,8 +1575,9 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
     // resize buffer
     ov::element::Type kvcache_precision = m_k_state->internal_desc()->getPrecision();
     bool need_redefine = true;
+    bool out = false;
     if (B * H * (L0 + L1) * S > m_k_state->internal_state_max_size()) {
-        auto new_shape = {B, H, (L0 + L1) * 2, S};
+        auto new_shape = {B, H, (L0 + L1 + 63), S};
         auto mem_desc = std::make_shared<CpuBlockedMemoryDesc>(kvcache_precision,
             Shape(reverse(new_shape)),
             new_shape,
@@ -1578,17 +1602,19 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
         internal_mem_v = new_internal_mem_v;
         past_k = new_pastk;
         past_v = new_pastv;
+        // std::cout << getName() << " allocate ptr: " << new_pastk.ptr_v() << "\n";
+        out = true;
         m_k_state->assign_internal_state(new_internal_mem_k);
         m_v_state->assign_internal_state(new_internal_mem_v);
-        m_k_state->assign_internal_state_max_size(B * H * (L0 + L1) * 2 * S);
-        m_v_state->assign_internal_state_max_size(B * H * (L0 + L1) * 2 * S);
+        m_k_state->assign_internal_state_max_size(B * H * (L0 + L1 + 63) * S);
+        m_v_state->assign_internal_state_max_size(B * H * (L0 + L1 + 63) * S);
         if (kvcache_precision == ov::element::u8) {
             auto& old_scale_zp_k = m_k_state->get_scale_zp();
             auto& old_scale_zp_v = m_v_state->get_scale_zp();
             PlainTensor new_scale_zp_k, new_scale_zp_v;
 
-            new_scale_zp_k.resize<float>({B, H, (L0 + L1) * 2, 2});
-            new_scale_zp_v.resize<float>({B, H, (L0 + L1) * 2, 2});
+            new_scale_zp_k.resize<float>({B, H, (L0 + L1 + 63), 2});
+            new_scale_zp_v.resize<float>({B, H, (L0 + L1 + 63), 2});
             if (L0 > 0 && !is_reset) {
                 parallel_for2d(B, H, [&](size_t b, size_t h) {
                     memcpy(new_scale_zp_k.ptr<float>(b, h),
@@ -1652,6 +1678,9 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
         past_k = past_k.permute(order);
         past_v = past_v.permute(order);
     }
+    if (is_reset && !out) {
+        //std::cout << getName() << " reset ptr: " << past_k.ptr_v() << "\n";
+    }
     if (L0 > 0 && is_reset) {
         auto inputNumber = getOriginalInputsNumber();
         auto k_mem = getSrcMemoryAtPort(inputNumber - 2);
@@ -1672,12 +1701,16 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
         }
     }
 
-    if (kvcache_precision == ov::element::u8) {
-        attn_quantkv(cur_k, cur_v,
-            past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1),
-            m_k_state->get_scale_zp().slice(2, L0, L0 + L1), m_v_state->get_scale_zp().slice(2, L0, L0 + L1));
-    } else {
-        attn_memcpy(cur_k, cur_v, past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1));
+    PROFILE(_attn, "cpy");
+    auto nthr = parallel_get_max_threads();
+    if (0 || H % nthr != 0 || L1 != 1) {
+        if (kvcache_precision == ov::element::u8) {
+            attn_quantkv(cur_k, cur_v,
+                past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1),
+                m_k_state->get_scale_zp().slice(2, L0, L0 + L1), m_v_state->get_scale_zp().slice(2, L0, L0 + L1));
+        } else {
+            attn_memcpy(cur_k, cur_v, past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1));
+        }
     }
 }
 

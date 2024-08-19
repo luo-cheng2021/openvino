@@ -17,6 +17,7 @@
 #include "openvino/core/parallel.hpp"
 #include "common.hpp"
 #include "attn_memcpy.hpp"
+#include "linux_perf.hpp"
 
 namespace ov {
 namespace Extensions {
@@ -61,18 +62,74 @@ void attn_memcpy_kernel(const ov::intel_cpu::PlainTensor& k_input,
     });
 }
 
+auto _xx = LinuxPerf::Init();
+
 static void attn_memcpy_kernel(const ov::intel_cpu::PlainTensor& k_input,
                                const ov::intel_cpu::PlainTensor& v_input,
                                const ov::intel_cpu::PlainTensor& past_k_output,
                                const ov::intel_cpu::PlainTensor& past_v_output) {
     size_t B = k_input.m_dims[0], H = k_input.m_dims[1], L1 = k_input.m_dims[2], S = k_input.m_dims[3];
+    static int n;
+    // if (n++ % 40 != 0)
+    //     return;
+//     {
+//     auto pt = LinuxPerf::Profile("t", 0);
+// #pragma omp parallel for // collapse(2)
+//     for (size_t b = 0; b < H; ++b) {
+//     // for (size_t b = 0; b < B; ++b) {
+//     //     for (size_t h = 0; h < H; ++h) {
+//             //for (size_t m = 0; m < L1; ++m) {
+//                 //auto p = LinuxPerf::Profile("s", 0);
+//                 asm("nop");
+//                 asm("pause");
+//             //}
+//         // }
+//     }
+//     }
+
+    auto p0 = LinuxPerf::Profile("all", 0);
     parallel_for3d(B, H, L1, [&](size_t b, size_t h, size_t m) {
+        // auto p = LinuxPerf::Profile("cp", ithr);
+
         std::memcpy(past_k_output.ptr_v(b, h, m, 0),
                     k_input.ptr_v(b, h, m, 0),
                     S * k_input.m_element_size);
         std::memcpy(past_v_output.ptr_v(b, h, m, 0),
                     v_input.ptr_v(b, h, m, 0),
                     S * v_input.m_element_size);
+        // attn_copy(past_k_output.ptr<ov::bfloat16>(b, h, m, 0),
+        //         k_input.ptr<ov::bfloat16>(b, h, m, 0),
+        //         S);
+        // attn_copy(past_v_output.ptr<ov::bfloat16>(b, h, m, 0),
+        //         v_input.ptr<ov::bfloat16>(b, h, m, 0),
+        //         S);
+        // std::memcpy(k_input.ptr_v(b, h, m, b / 8),
+        //             k_input.ptr_v(b, h, m, 0),
+        //             S * k_input.m_element_size);
+        // std::memcpy(v_input.ptr_v(b, h, m, b / 8),
+        //             v_input.ptr_v(b, h, m, 0),
+        //             S * v_input.m_element_size);
+        // } else {
+        //     //auto p = LinuxPerf::Profile("cp", 0);
+        //     std::memcpy(past_k_output.ptr_v(b, h, m, 0),
+        //                 k_input.ptr_v(b, h, m, 0),
+        //                 S * k_input.m_element_size);
+        //     std::memcpy(past_v_output.ptr_v(b, h, m, 0),
+        //                 v_input.ptr_v(b, h, m, 0),
+        //                 S * v_input.m_element_size);
+        //     // attn_copy(past_k_output.ptr<ov::bfloat16>(b, h, m, 0),
+        //     //         k_input.ptr<ov::bfloat16>(b, h, m, 0),
+        //     //         S);
+        //     // attn_copy(past_v_output.ptr<ov::bfloat16>(b, h, m, 0),
+        //     //         v_input.ptr<ov::bfloat16>(b, h, m, 0),
+        //     //         S);
+        //     // std::memcpy(k_input.ptr_v(b, h, m, b / 8),
+        //     //             k_input.ptr_v(b, h, m, 0),
+        //     //             S * k_input.m_element_size);
+        //     // std::memcpy(v_input.ptr_v(b, h, m, b / 8),
+        //     //             v_input.ptr_v(b, h, m, 0),
+        //     //             S * v_input.m_element_size);
+        // }
     });
 }
 
