@@ -39,6 +39,7 @@
 #include <string>
 #include <vector>
 #include "utils/profiler.hpp"
+#include "kernels/scaled_attn/linux_perf.hpp"
 
 using namespace ov::Extensions::Cpu::XARCH;
 using namespace dnnl::impl;
@@ -384,7 +385,8 @@ struct MHAKernel<ScaledDotProductAttention::KT_ONEDNN, T> {
 
         _attn = ov::intel_cpu::profilerManagerInstance.startProfile("brgemm_attn1");
         // attention
-        parallel_for3d(B, H, m_blocks, [&](size_t ithr, size_t b, size_t h, size_t m_blk) {
+        parallel_for3d(B, H, m_blocks, [&](size_t b, size_t h, size_t m_blk) {
+            auto ithr = parallel_get_thread_num();
             if (ithr % 32 != 0)
                 ov::intel_cpu::profilerManagerInstance.enabled = false;
 
@@ -844,6 +846,8 @@ struct MHASingleToken {
     // attention_mask [B, 1, q_len, kv_len]
     // output_emb    [B, L1, H, S]
     void operator()(PlainTensor& query,
+                    PlainTensor& key,
+                    PlainTensor& value,
                     PlainTensor& present_key,
                     PlainTensor& present_value,
                     const PlainTensor& alibi_mask,
@@ -863,7 +867,7 @@ struct MHASingleToken {
 
         // aligned to cache line (64bytes=16*sizeof(float)) to avoid false sharing
         m_attn_w.resize<float>({B, H, q_len, (kv_len + 15) / 16 * 16});
-        mha_single_token(query, present_key, present_value, alibi_mask, attention_mask, beams,
+        mha_single_token(query, key, value, present_key, present_value, alibi_mask, attention_mask, beams,
             output_emb, m_attn_w, m_temp, has_out_transpose, auto_causal, d_scale, k_scale_zp, v_scale_zp, m_head_sum);
     }
 };
@@ -903,7 +907,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
         float scale_input = 0.0f;
         size_t B, L1, L0, S;
 
-        PROFILE(_attn, "attn_execute");
+        //PROFILE(_attn, "attn_execute");
         q_input.reset(inputs[0]);
         k_input.reset(inputs[1]);
         v_input.reset(inputs[2]);
@@ -987,7 +991,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
         if (!use_one_token) {
             char buf[256];
             snprintf(buf, sizeof(buf), "first_BL%ld,%ld", B, L1);
-            _attn = ov::intel_cpu::profilerManagerInstance.startProfile(buf);
+            //_attn = ov::intel_cpu::profilerManagerInstance.startProfile(buf);
 
             // multi-token version
             kernel(strm, q_input, k_input, v_input, {}, use_attn_mask ? attn_mask : PlainTensor(),
@@ -998,7 +1002,7 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
             //  1, in matrix mutiply, using AMX is not efficency because the M dimension of A will alway be 1
             //  2, using float will save the repack cost which typically is required for bf16/int8 opt
             //  3, using dot product can leverage the SIMD while easily adapt to indirect kv cache
-            kernel_single_token(q_input, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor(),
+            kernel_single_token(q_input, k_input, v_input, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor(),
                 output_emb, beam_table, has_out_transpose, auto_causal, scale_input, k_scale_zp, v_scale_zp);
         }
     }
@@ -1154,7 +1158,7 @@ void ScaledDotProductAttention::execute(dnnl::stream strm) {
         presentk_input = inputs[1];
         presentv_input = inputs[2];
     }
-    _attn = ov::intel_cpu::profilerManagerInstance.startProfile("pg_exec");
+    //_attn = ov::intel_cpu::profilerManagerInstance.startProfile("pg_exec");
     m_executor->execute(strm, m_config, inputs, output, presentk_input, presentv_input, beam_input, k_scale_zp, v_scale_zp);
 }
 
@@ -1672,12 +1676,16 @@ void ScaledDotProductAttention::updatePastkv(const MemoryPtr& mem_cur_k, const M
         }
     }
 
-    if (kvcache_precision == ov::element::u8) {
-        attn_quantkv(cur_k, cur_v,
-            past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1),
-            m_k_state->get_scale_zp().slice(2, L0, L0 + L1), m_v_state->get_scale_zp().slice(2, L0, L0 + L1));
-    } else {
-        attn_memcpy(cur_k, cur_v, past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1));
+    PROFILE(_attn, "cpy");
+    auto nthr = parallel_get_max_threads();
+    if (0 || H % nthr != 0 || L1 != 1) {
+        if (kvcache_precision == ov::element::u8) {
+            attn_quantkv(cur_k, cur_v,
+                past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1),
+                m_k_state->get_scale_zp().slice(2, L0, L0 + L1), m_v_state->get_scale_zp().slice(2, L0, L0 + L1));
+        } else {
+            attn_memcpy(cur_k, cur_v, past_k.slice(2, L0, L0 + L1), past_v.slice(2, L0, L0 + L1));
+        }
     }
 }
 
