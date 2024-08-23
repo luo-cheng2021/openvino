@@ -13,6 +13,7 @@
 #include "memory_desc/dnnl_blocked_memory_desc.h"
 #include "onednn/dnnl.h"
 #include "openvino/core/parallel.hpp"
+#include "openvino/op/mha.hpp"
 #include "openvino/op/scaled_dot_product_attention.hpp"
 #include "openvino/util/common_util.hpp"
 #include "shape_inference/custom/scaled_attn.hpp"
@@ -846,6 +847,72 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
 
     AttentionExecutor(GraphContext::CPtr ctx) : context(ctx), kernel(context) {}
 
+    void execute(dnnl::stream strm, const Config& config, const std::vector<MemoryPtr>& inputs, const MemoryPtr output,
+                 const MemoryPtr, const MemoryPtr, const MemoryPtr, const PlainTensor&, const PlainTensor&) override {
+        PlainTensor q_input;           // f32[B, H, L1, S]
+        PlainTensor k_input;           // f32[B, H|1, L1, S] / [B, H|1, L0+L1, S]
+        PlainTensor v_input;           // f32[B, H|1, L1, S] / [B, H|1, L0+L1, S]
+        PlainTensor kv_cache;
+        PlainTensor present_key, present_value;
+        PlainTensor beam_table;        // i32[B, max_kvLen]
+        PlainTensor attn_mask;
+        PlainTensor cos_tab;
+        PlainTensor sin_tab;
+        PlainTensor output_emb(output);
+        float scale_input = 0.0f;
+        size_t B, L1, L0, S;
+
+        q_input.reset(inputs[0]);
+        k_input.reset(inputs[1]);
+        v_input.reset(inputs[2]);
+        kv_cache.reset(inputs[3]);
+        // TODO: add support
+        //beam_table.reset(inputs[4]);
+        attn_mask.reset(inputs[5]);
+        cos_tab.reset(inputs[6]);
+        sin_tab.reset(inputs[7]);
+
+        B = q_input.size(0);
+        L1 = q_input.size(2);
+        S = q_input.size(3);
+        L0 = present_key.size(2) - L1;
+        auto Hk = k_input.size(1);
+
+        k_input.assert_dims({B, Hk, L1, S});
+        v_input.assert_dims({B, Hk, L1, S});
+        present_key.assert_dims({B, Hk, L0 + L1, S});
+        present_value.assert_dims({B, Hk, L0 + L1, S});
+        if (beam_table)
+            beam_table.assert_dims({B, L0 + L1});
+
+        bool use_one_token = L1 == 1;
+        if (!use_one_token) {
+            // multi-token version
+            kernel(strm, q_input, k_input, v_input, {}, attn_mask,
+                   output_emb, true, true, scale_input);
+        } else {
+            // 1-token version
+            // for second token, using a special AVX2/AVX512 float path:
+            //  1, in matrix mutiply, using AMX is not efficency because the M dimension of A will alway be 1
+            //  2, using float will save the repack cost which typically is required for bf16/int8 opt
+            //  3, using dot product can leverage the SIMD while easily adapt to indirect kv cache
+            PlainTensor k_scale_zp, v_scale_zp;
+            kernel_single_token(q_input, present_key, present_value, {}, attn_mask,
+                output_emb, beam_table, true, true, scale_input, k_scale_zp, v_scale_zp);
+        }
+    }
+};
+
+template <typename T>
+struct ScaledDotProductAttention::MHAExecutor : public ScaledDotProductAttention::Executor {
+    GraphContext::CPtr context;
+    PlainTensor attn_buf;          // f32[[B|1],[H|1], L1|1, L0+L1]
+
+    MHAKernel<KT_ONEDNN, T> kernel;
+    MHASingleToken kernel_single_token;
+
+    MHAExecutor(GraphContext::CPtr ctx) : context(ctx), kernel(context) {}
+
     void prepare_attn_mask(MemoryPtr attn_input) {
         attn_buf.resize<float>(attn_input->getStaticDims());
         auto p = attn_input->getDataAs<uint8_t>();
@@ -979,7 +1046,13 @@ ScaledDotProductAttention::ScaledDotProductAttention(const std::shared_ptr<ov::N
         m_config.config.is_causal = node->get_causal();
     } else {
         const auto node = std::dynamic_pointer_cast<const ScaledDotProductAttentionWithKVCache>(op);
-        m_config.config = node->get_config();
+        if (node) {
+            m_config.config = node->get_config();
+        } else {
+            const auto node = std::dynamic_pointer_cast<const ov::op::internal::MultiHeadAttention>(op);
+            m_config.config_mha = node->get_config();
+            m_config.mha_valid = true;
+        }
     }
 }
 
@@ -987,63 +1060,81 @@ void ScaledDotProductAttention::initSupportedPrimitiveDescriptors() {
     if (!supportedPrimitiveDescriptors.empty())
         return;
     auto rtPrecision = getRuntimePrecision();
-    auto orginSDPInputNumber = getOriginalInputsNumber() - (m_config.config.fuse_concat ? 3 : 0);
-
     NodeConfig config;
     auto& creatorsMap = BlockedDescCreator::getCommonCreators();
     config.inConfs.resize(getOriginalInputsNumber());
     config.outConfs.resize(getOriginalOutputsNumber());
+    // q, k, v
     config.inConfs[0].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
         rtPrecision, getInputShapeAtPort(0)));
     config.inConfs[1].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
         rtPrecision, getInputShapeAtPort(1)));
     config.inConfs[2].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
         rtPrecision, getInputShapeAtPort(2)));
-    auto nextPortIdx = 3;
-    if (orginSDPInputNumber > 3) {
-        // attn_mask
-        if (getOriginalInputPrecisionAtPort(nextPortIdx) == ov::element::u8) {
-            config.inConfs[nextPortIdx].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
-                ov::element::u8, getInputShapeAtPort(nextPortIdx)));
-        } else {
-            config.inConfs[nextPortIdx].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
-                rtPrecision, getInputShapeAtPort(nextPortIdx)));
+    if (!m_config.mha_valid) {
+        auto orginSDPInputNumber = getOriginalInputsNumber() - (m_config.config.fuse_concat ? 3 : 0);
+
+        auto nextPortIdx = 3;
+        if (orginSDPInputNumber > 3) {
+            // attn_mask
+            if (getOriginalInputPrecisionAtPort(nextPortIdx) == ov::element::u8) {
+                config.inConfs[nextPortIdx].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+                    ov::element::u8, getInputShapeAtPort(nextPortIdx)));
+            } else {
+                config.inConfs[nextPortIdx].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+                    rtPrecision, getInputShapeAtPort(nextPortIdx)));
+            }
+            nextPortIdx++;
         }
-        nextPortIdx++;
+        if (orginSDPInputNumber > 4) {
+            config.inConfs[nextPortIdx].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+                ov::element::f32, getInputShapeAtPort(nextPortIdx)));
+        }
+
+        if (m_config.config.fuse_concat) {
+            // beam_idx
+            config.inConfs[orginSDPInputNumber + 0].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+                ov::element::i32, getInputShapeAtPort(orginSDPInputNumber + 0)));
+
+            // Since the InputMemory nodes are simple proxy for the state memory as well as the init subgraph memory,
+            // it doesn't make sense to set the real KV cache precision, since we don't need any precision conversions
+            // provided by the common graph logic. We set precisions equal to the precisions of the state nodes to avoid
+            // reorder insertion in between MemoryInputSDPA and SDPA nodes.
+
+            auto past_k_input_mem_precision = getParentEdgeAt(orginSDPInputNumber + 1)->getParent()->getOriginalOutputPrecisionAtPort(0);
+            // pastk
+            config.inConfs[orginSDPInputNumber + 1].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+                past_k_input_mem_precision, getInputShapeAtPort(orginSDPInputNumber + 1)));
+
+            auto past_v_input_mem_precision = getParentEdgeAt(orginSDPInputNumber + 2)->getParent()->getOriginalOutputPrecisionAtPort(0);
+            // pastv
+            config.inConfs[orginSDPInputNumber + 2].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+                past_v_input_mem_precision, getInputShapeAtPort(orginSDPInputNumber + 2)));
+
+            config.outConfs[1].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+                past_k_input_mem_precision, getOutputShapeAtPort(1)));
+            config.outConfs[1].inPlace(-1);
+            config.outConfs[2].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+                past_v_input_mem_precision, getOutputShapeAtPort(2)));
+            config.outConfs[2].inPlace(-1);
+        }
+    } else {
+        // kvcache
+        config.inConfs[3].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+            getOriginalInputPrecisionAtPort(3), getInputShapeAtPort(3)));
+        // beam table
+        config.inConfs[4].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+            ov::element::i32, getInputShapeAtPort(4)));
+        // attn_mask
+        config.inConfs[5].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+            rtPrecision, getInputShapeAtPort(5)));
+        // cos_tab
+        config.inConfs[6].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+            ov::element::f32, getInputShapeAtPort(6)));
+        // sin_tab
+        config.inConfs[7].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
+            ov::element::f32, getInputShapeAtPort(7)));
     }
-    if (orginSDPInputNumber > 4) {
-        config.inConfs[nextPortIdx].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
-            ov::element::f32, getInputShapeAtPort(nextPortIdx)));
-    }
-
-    if (m_config.config.fuse_concat) {
-        // beam_idx
-        config.inConfs[orginSDPInputNumber + 0].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
-            ov::element::i32, getInputShapeAtPort(orginSDPInputNumber + 0)));
-
-        // Since the InputMemory nodes are simple proxy for the state memory as well as the init subgraph memory,
-        // it doesn't make sense to set the real KV cache precision, since we don't need any precision conversions
-        // provided by the common graph logic. We set precisions equal to the precisions of the state nodes to avoid
-        // reorder insertion in between MemoryInputSDPA and SDPA nodes.
-
-        auto past_k_input_mem_precision = getParentEdgeAt(orginSDPInputNumber + 1)->getParent()->getOriginalOutputPrecisionAtPort(0);
-        // pastk
-        config.inConfs[orginSDPInputNumber + 1].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
-            past_k_input_mem_precision, getInputShapeAtPort(orginSDPInputNumber + 1)));
-
-        auto past_v_input_mem_precision = getParentEdgeAt(orginSDPInputNumber + 2)->getParent()->getOriginalOutputPrecisionAtPort(0);
-        // pastv
-        config.inConfs[orginSDPInputNumber + 2].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
-            past_v_input_mem_precision, getInputShapeAtPort(orginSDPInputNumber + 2)));
-
-        config.outConfs[1].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
-            past_k_input_mem_precision, getOutputShapeAtPort(1)));
-        config.outConfs[1].inPlace(-1);
-        config.outConfs[2].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
-            past_v_input_mem_precision, getOutputShapeAtPort(2)));
-        config.outConfs[2].inPlace(-1);
-    }
-
     config.outConfs[0].setMemDesc(creatorsMap.at(LayoutType::ncsp)->createSharedDesc(
         rtPrecision, getOutputShapeAtPort(0)));
 
@@ -1062,6 +1153,17 @@ void ScaledDotProductAttention::createPrimitive() {
 
     auto builder = [&](const ScaledDotProductAttentionKey& key) -> std::shared_ptr<Executor> {
         std::shared_ptr<Executor> executor = nullptr;
+        if (m_config.mha_valid) {
+#ifdef OPENVINO_ARCH_X86_64
+            if (rtPrecision == ov::element::bf16) {
+                executor = std::make_shared<MHAExecutor<ov::bfloat16>>(context);
+            } else {
+                executor = std::make_shared<MHAExecutor<float>>(context);
+            }
+#endif
+            return executor;
+        }
+
         if (rtPrecision == ov::element::bf16) {
 #ifdef OPENVINO_ARCH_X86_64
             executor = std::make_shared<AttentionExecutor<KT_ONEDNN, ov::bfloat16>>(context);
@@ -1102,54 +1204,60 @@ void ScaledDotProductAttention::execute(dnnl::stream strm) {
     }
 
     PlainTensor k_scale_zp, v_scale_zp;
-    if (m_config.config.fuse_concat) {
-        CPU_NODE_ASSERT(m_k_state && m_v_state, "has null input states");
-        // initialization will be also completed in this func
-        gatherConcatPastkv(inputs[1], inputs[2], getSrcMemoryAtPort(orginSDPInputNumber));
+    if (!m_config.mha_valid) {
+        if (m_config.config.fuse_concat) {
+            CPU_NODE_ASSERT(m_k_state && m_v_state, "has null input states");
+            // initialization will be also completed in this func
+            gatherConcatPastkv(inputs[1], inputs[2], getSrcMemoryAtPort(orginSDPInputNumber));
 
-        presentk_input = m_k_state->internal_state_mem();
-        presentv_input = m_v_state->internal_state_mem();
-        beam_input = m_k_state->hidden_state_mem();
-        k_scale_zp = m_k_state->get_scale_zp();
-        v_scale_zp = m_v_state->get_scale_zp();
-    } else {
-        presentk_input = inputs[1];
-        presentv_input = inputs[2];
+            presentk_input = m_k_state->internal_state_mem();
+            presentv_input = m_v_state->internal_state_mem();
+            beam_input = m_k_state->hidden_state_mem();
+            k_scale_zp = m_k_state->get_scale_zp();
+            v_scale_zp = m_v_state->get_scale_zp();
+        } else {
+            presentk_input = inputs[1];
+            presentv_input = inputs[2];
+        }
     }
     m_executor->execute(strm, m_config, inputs, output, presentk_input, presentv_input, beam_input, k_scale_zp, v_scale_zp);
 }
 
 bool ScaledDotProductAttention::isSupportedOperation(const std::shared_ptr<const ov::Node>& op, std::string& errorMessage) noexcept {
     try {
+        const auto mha = std::dynamic_pointer_cast<const op::internal::MultiHeadAttention>(op);
         if (!std::dynamic_pointer_cast<const ov::op::v13::ScaledDotProductAttention>(op) &&
-            !std::dynamic_pointer_cast<const ScaledDotProductAttentionWithKVCache>(op)) {
-            errorMessage = "Only ScaledDotProductAttention or ScaledDotProductAttentionWithKVCache operation are supported";
+            !std::dynamic_pointer_cast<const ScaledDotProductAttentionWithKVCache>(op) &&
+            !mha) {
+            errorMessage = "Only ScaledDotProductAttention or ScaledDotProductAttentionWithKVCache or MultiHeadAttention operation are supported";
             return false;
         }
-        // expect shape of q: [B, H, L, S]
-        auto inRank = op->get_input_partial_shape(0).size();
-        if (inRank != 4u) {
-            errorMessage = "Doesn't support 'data' input with rank: " + std::to_string(inRank);
-            return false;
-        }
-        int orgSDPAInput = static_cast<int>(op->get_input_size());
-        const auto node = std::dynamic_pointer_cast<const ScaledDotProductAttentionWithKVCache>(op);
-        if (node) {
-            if (node->get_config().fuse_concat) {
-                orgSDPAInput -= 3;
-            }
-        }
-        if (orgSDPAInput > 3) {
-            inRank = op->get_input_partial_shape(3).size();
-            if (inRank > 4u) {
-                errorMessage = "Doesn't support 'attention mask' with rank: " + std::to_string(inRank);
+        if (!mha) {
+            // expect shape of q: [B, H, L, S]
+            auto inRank = op->get_input_partial_shape(0).size();
+            if (inRank != 4u) {
+                errorMessage = "Doesn't support 'data' input with rank: " + std::to_string(inRank);
                 return false;
             }
-        }
-        // using mha should be better for static shapes
-        if (!op->is_dynamic()) {
-            errorMessage = "Only run in dynamic mode";
-            return false;
+            int orgSDPAInput = static_cast<int>(op->get_input_size());
+            const auto node = std::dynamic_pointer_cast<const ScaledDotProductAttentionWithKVCache>(op);
+            if (node) {
+                if (node->get_config().fuse_concat) {
+                    orgSDPAInput -= 3;
+                }
+            }
+            if (orgSDPAInput > 3) {
+                inRank = op->get_input_partial_shape(3).size();
+                if (inRank > 4u) {
+                    errorMessage = "Doesn't support 'attention mask' with rank: " + std::to_string(inRank);
+                    return false;
+                }
+            }
+            // using mha should be better for static shapes
+            if (!op->is_dynamic()) {
+                errorMessage = "Only run in dynamic mode";
+                return false;
+            }
         }
     } catch (...) {
         return false;

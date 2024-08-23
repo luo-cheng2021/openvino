@@ -13,6 +13,7 @@
 #include "openvino/opsets/opset5.hpp"
 #include "openvino/opsets/opset6.hpp"
 #include "openvino/opsets/opset10.hpp"
+#include "openvino/op/mha.hpp"
 #include "openvino/op/paged_attention.hpp"
 #include <ov_ops/augru_cell.hpp>
 #include <ov_ops/augru_sequence.hpp>
@@ -602,7 +603,8 @@ void Transformations::PreLpt(const std::vector<ov::element::Type>& defaultPrecis
             std::string errorMsg;
             // Current SDPA impl is optimized only for LLM models, so we decompose it for others to avoid perf regression.
             // Matching the pattern is a little complicated, so we just check if there is any state nodes.
-            return node::ScaledDotProductAttention::isSupportedOperation(node, errorMsg) && model->get_variables().size() > 0;
+            return (node::ScaledDotProductAttention::isSupportedOperation(node, errorMsg) && model->get_variables().size() > 0) ||
+                    node->get_type_info() == ov::op::internal::MultiHeadAttention::get_type_info_static();
         },
         ov::pass::ScaledDotProductAttentionDecomposition);
 

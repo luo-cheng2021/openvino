@@ -53,9 +53,9 @@ private:
     ScaledDotProductAttentionWithKVCache::Config m_config;
 };
 
-class PAShapeInfer : public ShapeInferEmptyPads {
+class MultiHeadAttentionShapeInfer : public ShapeInferEmptyPads {
 public:
-    PAShapeInfer() {}
+    MultiHeadAttentionShapeInfer() {}
 
     IShapeInfer::Result infer(const std::vector<std::reference_wrapper<const VectorDims>>& input_shapes,
                               const std::unordered_map<size_t, MemoryPtr>& data_dependency) override {
@@ -70,8 +70,8 @@ public:
 };
 
 ShapeInferPtr SDPAShapeInferFactory::makeShapeInfer() const {
-    if (m_op->get_type_name() == std::string("PagedAttentionExtension")) {
-        return std::make_shared<PAShapeInfer>();
+    if (m_op->get_type_name() == std::string("MultiHeadAttention")) {
+        return std::make_shared<MultiHeadAttentionShapeInfer>();
     }
     if (auto sdpa = std::dynamic_pointer_cast<const ScaledDotProductAttentionWithKVCache>(m_op)) {
         const auto& config = sdpa->get_config();

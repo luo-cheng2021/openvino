@@ -17,3 +17,4 @@ from openvino._pyopenvino.op import loop
 from openvino._pyopenvino.op import tensor_iterator
 from openvino._pyopenvino.op import read_value
 from openvino._pyopenvino.op import Result
+from openvino._pyopenvino.op import _MultiHeadAttention

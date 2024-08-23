@@ -247,6 +247,7 @@ static const TypeToNameMap& get_type_to_name_tbl() {
         {"EmbeddingBagOffsets", Type::EmbeddingBagOffsets},
         {"LLMMLP", Type::LLMMLP},
         {"QKVProjection", Type::QKVProjection},
+        {"MultiHeadAttention", Type::ScaledDotProductAttention},
     };
     return type_to_name_tbl;
 }

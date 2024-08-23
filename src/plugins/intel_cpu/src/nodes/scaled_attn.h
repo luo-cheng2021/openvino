@@ -8,6 +8,7 @@
 #include "node.h"
 #include "transformations/cpu_opset/common/op/sdpa.hpp"
 #include "utils/plain_tensor.hpp"
+#include "openvino/op/mha.hpp"
 
 namespace ov {
 namespace intel_cpu {
@@ -59,6 +60,8 @@ private:
 
     struct Config {
         ScaledDotProductAttentionWithKVCache::Config config;
+        op::internal::MultiHeadAttention::Config config_mha;
+        bool mha_valid = false;
     };
 
     struct Executor {
@@ -71,6 +74,7 @@ private:
     Config m_config;
     std::shared_ptr<Executor> m_executor;
     template <KernelTypes KType, typename T> struct AttentionExecutor;
+    template <typename T> struct MHAExecutor;
     friend struct ScaledDotProductAttentionKey;
 
     std::shared_ptr<VariableStateKVcache> m_k_state;
