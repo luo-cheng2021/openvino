@@ -123,32 +123,34 @@ void jit_rms_kernel<isa>::generate() {
     // x * 1/Sqrt(ReduceMean(x^2,axes)+eps) * gamma
     // sum(x^2)
     align(16);
-    Xbyak::Label loop_4reg;
-    L(loop_4reg);
-    {
-        load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false);
-        vfmadd231ps(vmm_sum0, vmm_src, vmm_src);
-        load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false, vec_size * m_jcp.src_prc.size() * 1);
-        vfmadd231ps(vmm_sum1, vmm_src, vmm_src);
-        load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false, vec_size * m_jcp.src_prc.size() * 2);
-        vfmadd231ps(vmm_sum2, vmm_src, vmm_src);
-        load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false, vec_size * m_jcp.src_prc.size() * 3);
-        vfmadd231ps(vmm_sum3, vmm_src, vmm_src);
+    // NOTE: `(a+b)+c` may not be equal to `a+(b+c)` in float
+    // Xbyak::Label loop_4reg;
+    // L(loop_4reg);
+    // {
+    //     load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false);
+    //     vfmadd231ps(vmm_sum0, vmm_src, vmm_src);
+    //     load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false, vec_size * m_jcp.src_prc.size() * 1);
+    //     vfmadd231ps(vmm_sum1, vmm_src, vmm_src);
+    //     load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false, vec_size * m_jcp.src_prc.size() * 2);
+    //     vfmadd231ps(vmm_sum2, vmm_src, vmm_src);
+    //     load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false, vec_size * m_jcp.src_prc.size() * 3);
+    //     vfmadd231ps(vmm_sum3, vmm_src, vmm_src);
 
-        add(reg_src, vec_size * m_jcp.src_prc.size() * 4);
-        dec(reg_size);
-        jnz(loop_4reg);
-    }
+    //     add(reg_src, vec_size * m_jcp.src_prc.size() * 4);
+    //     dec(reg_size);
+    //     jnz(loop_4reg);
+    // }
     // 1 ~ 3 vmm
-    for (size_t i = m_jcp.data_size / (vec_size * 4) * 4; i < m_jcp.data_size / vec_size; i++) {
+    for (size_t i = 0/*m_jcp.data_size / (vec_size * 4) * 4*/; i < m_jcp.data_size / vec_size; i++) {
         load(vmm_src, reg_src, m_jcp.src_prc, vec_size, false);
-        vfmadd231ps(vmm_sum0, vmm_src, vmm_src);
+        // NOTE: use `mul + add` instread of `fmad`
+        sim_vfmadd231ps(vmm_sum0, vmm_src, vmm_src);
         add(reg_src, vec_size * m_jcp.src_prc.size());
     }
     // tail
     if (m_jcp.data_size % vec_size) {
         load(vmm_src, reg_src, m_jcp.src_prc, m_jcp.data_size % vec_size, false);
-        vfmadd231ps(vmm_sum0, vmm_src, vmm_src);
+        sim_vfmadd231ps(vmm_sum0, vmm_src, vmm_src);
     }
     vaddps(vmm_sum0, vmm_sum0, vmm_sum1);
     vaddps(vmm_sum2, vmm_sum2, vmm_sum3);
@@ -163,8 +165,16 @@ void jit_rms_kernel<isa>::generate() {
     mov(reg_tmp.cvt32(), float2int(m_jcp.eps));
     vmovd(xmm_tmp, reg_tmp.cvt32());
     vaddss(xmm_rsqrt, xmm_rsqrt, xmm_tmp);
+    // mov(reg_tmp.cvt32(), float2int(1.0f));
+    // vmovd(xmm1, reg_tmp.cvt32());
+    // vfmadd231ss(xmm_rsqrt, xmm_tmp, xmm1);
     // rsqrt(mean(x^2)+eps)
-    vrsqrtss(xmm_rsqrt, xmm_rsqrt, xmm_rsqrt);
+    // NOTE: use `result = 1.0f / sqrt(result)` instead of `result = rsqrt(result)`
+    // vrsqrtss(xmm_rsqrt, xmm_rsqrt, xmm_rsqrt);
+    vsqrtss(xmm_rsqrt, xmm_rsqrt, xmm_rsqrt);
+    mov(reg_tmp.cvt32(), float2int(1.0f));
+    vmovd(xmm_tmp, reg_tmp.cvt32());
+    vdivss(xmm_rsqrt, xmm_tmp, xmm_rsqrt);
 
     // x * rsqrt(mean(x^2)+eps)
     if (m_jcp.scale_size == 1) {

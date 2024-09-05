@@ -33,7 +33,11 @@ struct jit_rms_kernel : public JitKernel<jit_rms_compile_params, jit_rms_call_ar
     static constexpr size_t vec_size = dnnl::impl::cpu::x64::cpu_isa_traits<isa>::vlen / sizeof(float);
 
     explicit jit_rms_kernel(const jit_rms_compile_params& jcp) : JitKernel(jit_name(), jcp, isa) {}
-
+    void sim_vfmadd231ps(const Xbyak::Xmm &x1, const Xbyak::Xmm &x2,
+            const Xbyak::Operand &op) {
+        vmulps(x2, x2, op);
+        vaddps(x1, x1, x2);
+    }
 private:
     using Xmm = Xbyak::Xmm;
     using Vmm = typename dnnl::impl::utils::conditional3<isa == dnnl::impl::cpu::x64::sse41,  Xbyak::Xmm,
