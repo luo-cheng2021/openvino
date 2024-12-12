@@ -882,20 +882,20 @@ struct MHAHelper {
             _qk_scratch_a.resize<DATA_TYPE>({_nthr, _qk_gemm[_block_size - 1]->get_scratch_a_size() / sizeof(DATA_TYPE)});
             _wv_scratch_a.resize<DATA_TYPE>({_nthr, _wv_gemm[_block_size - 1]->get_scratch_a_size() / sizeof(DATA_TYPE)});
 
-            if ((S % 32 == 0) && (block_size % 16 == 0) && (S <= 32 * 6)) {
-                if (dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::amx_bf16) &&
-                    precision_of<DATA_TYPE>::value == ov::element::bf16 &&
-                    precision_of<KVCACHE_TYPE>::value == ov::element::bf16) {
-                    _fastpath_valid_prec = ov::element::bf16;
-                } else if (dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::amx_fp16) &&
-                           precision_of<DATA_TYPE>::value == ov::element::f16 &&
-                           precision_of<KVCACHE_TYPE>::value == ov::element::f16) {
-                    _fastpath_valid_prec = ov::element::f16;
-                }
-            }
-            if (one_of(_fastpath_valid_prec, ov::element::bf16, ov::element::f16) && !_gemv) {
-                _gemv = std::make_shared<JitMatMulVecAMX>(static_cast<int>(S), static_cast<int>(block_size), _fastpath_valid_prec);
-            }
+            // if ((S % 32 == 0) && (block_size % 16 == 0) && (S <= 32 * 6)) {
+            //     if (dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::amx_bf16) &&
+            //         precision_of<DATA_TYPE>::value == ov::element::bf16 &&
+            //         precision_of<KVCACHE_TYPE>::value == ov::element::bf16) {
+            //         _fastpath_valid_prec = ov::element::bf16;
+            //     } else if (dnnl::impl::cpu::x64::mayiuse(dnnl::impl::cpu::x64::amx_fp16) &&
+            //                precision_of<DATA_TYPE>::value == ov::element::f16 &&
+            //                precision_of<KVCACHE_TYPE>::value == ov::element::f16) {
+            //         _fastpath_valid_prec = ov::element::f16;
+            //     }
+            // }
+            // if (one_of(_fastpath_valid_prec, ov::element::bf16, ov::element::f16) && !_gemv) {
+            //     _gemv = std::make_shared<JitMatMulVecAMX>(static_cast<int>(S), static_cast<int>(block_size), _fastpath_valid_prec);
+            // }
         }
 
         if (init_alibi_lookup && (!_alibi_lookup || _alibi_lookup.m_dims[0] < kv_len)) {
@@ -1567,7 +1567,8 @@ struct MHA {
 
         auto nthr = static_cast<size_t>(parallel_get_max_threads());
 
-        if (past_lens.m_dims[0] >= nthr || _workitems.get_reorder_max_batch_size() > 0) {
+        // ACC: force second token to execute in `exec_kernel_one_bh` which will not split in the kv_len dimension
+        if (past_lens.m_dims[0] >= 0 || _workitems.get_reorder_max_batch_size() > 0) {
             exec_loop_mixed(query, present_key, present_value, output_emb, output_score, max_context_len, past_lens, subsequence_begins,
                 block_indices, block_indices_begins, alibi_slopes);
         } else {
@@ -1597,7 +1598,8 @@ struct AttentionExecutor : public PagedAttentionExecutor {
         subsequence_begins.reset(inputs[ID_SUBSEQUENCE_BEGINS]);    // [B_seq+1]
         block_indices.reset(inputs[ID_BLOCK_INDICES]);              // [num_blocks]
         block_indices_begins.reset(inputs[ID_BLOCK_INDICES_BEGINS]);// [B_seq+1]
-        scale = *inputs[ID_SCALE]->getDataAs<float>();
+        // ACC: force f32 precsion for scale if the runtime precision is bf16
+        scale = 0.0f;   //*inputs[ID_SCALE]->getDataAs<float>();
         sliding_window = static_cast<size_t>(*inputs[ID_SLIDING_WINDOW]->getDataAs<int32_t>());
         if (!inputs[ID_ALIBI_SLOPES]->getShape().hasZeroDims())
             alibi_slopes.reset(inputs[ID_ALIBI_SLOPES]);
@@ -1693,6 +1695,60 @@ struct AttentionExecutor : public PagedAttentionExecutor {
 
         _kernel(q, k_cache, v_cache, output_emb, output_score, max_context_len, past_lens, subsequence_begins, block_indices,
             block_indices_begins, alibi_slopes);
+        {
+            static int x = 0;
+            if (0 && x % 1 == 0) {
+                // std::cout << "layer=" << x << std::endl;
+                //std::cout << "q=" << q_input << std::endl;
+                auto S = k_cache.size(3);
+                auto disp = [S] (const PlainTensor& t) {
+                    auto H = t.size(1);
+                    auto L1 = t.size(0);
+                    for (auto h = 0ul; h < H; h++) {
+                        std::cout << "layer=" << x << " h=" << h << std::endl;
+                        for (auto l = 0ul; l < L1; l++) {
+                            for (auto s = 0ul; s < S; s++) {
+                                std::cout << t.at<DATA_TYPE>({l, h, 0, s}) << " ";
+                            }
+                            std::cout << std::endl;
+                        }
+                    }
+                };
+                std::cout << "q=" << std::endl;
+                disp(q);
+                std::cout << "k=" << std::endl;
+                disp(k);
+                std::cout << "v=" << std::endl;
+                disp(v);
+                //std::cout << "attn=" << attn_mask << std::endl;
+                std::cout << "out=" << std::endl;
+                {
+                    auto H = q.size(1);
+                    auto L1 = q.size(0);
+                    for (auto h = 0ul; h < H; h++) {
+                        std::cout << "layer=" << x << " h=" << h << std::endl;
+                        for (auto l = 0ul; l < L1; l++) {
+                            for (auto s = 0ul; s < S; s++) {
+                                std::cout << output_emb.at<DATA_TYPE>({l, 0, h * S + s}) << " ";
+                            }
+                            std::cout << std::endl;
+                        }
+                    }
+                }
+            }
+            x++;
+
+            // static int x = 0;
+            // if (x % 32 == 0) {
+            //     std::cout << "layer=" << x << std::endl;
+            //     std::cout << "q=" << q << std::endl;
+            //     std::cout << "k=" << k << std::endl;
+            //     std::cout << "v=" << v << std::endl;
+            //     std::cout << "attn=" << "attn_mask" << std::endl;
+            //     std::cout << "out=" << output_emb << std::endl;
+            // }
+            // x++;
+        }
     }
 };
 #endif

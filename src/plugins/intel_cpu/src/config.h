@@ -57,7 +57,7 @@ struct Config {
     bool aclFastMath = false;
 #endif
 #if defined(OPENVINO_ARCH_X86_64)
-    ov::element::Type kvCachePrecision = ov::element::u8;
+    ov::element::Type kvCachePrecision = ov::element::f16;
     size_t rtCacheCapacity = 5000ul;
 #else
     ov::element::Type kvCachePrecision = ov::element::f16;

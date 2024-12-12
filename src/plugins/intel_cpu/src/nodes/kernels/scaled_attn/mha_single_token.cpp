@@ -415,38 +415,38 @@ static float dot_product(TA* a, TB* b, size_t n, float* scale, float* zp, float*
     auto vsum1 = _mm512_setzero_ps();
     auto vsum2 = _mm512_setzero_ps();
     auto vsum3 = _mm512_setzero_ps();
-    for (; i + 4 * vec_len_f32_avx512 <= n; i += 4 * vec_len_f32_avx512) {
+    // for (; i + 4 * vec_len_f32_avx512 <= n; i += 4 * vec_len_f32_avx512) {
+    //     auto va0 = mm512_uni_loadu_ps(a + i);
+    //     auto va1 = mm512_uni_loadu_ps(a + i + vec_len_f32_avx512);
+    //     auto va2 = mm512_uni_loadu_ps(a + i + vec_len_f32_avx512 * 2);
+    //     auto va3 = mm512_uni_loadu_ps(a + i + vec_len_f32_avx512 * 3);
+
+    //     auto vb0 = mm512_uni_loadu_ps(b + i);
+    //     auto vb1 = mm512_uni_loadu_ps(b + i + vec_len_f32_avx512);
+    //     auto vb2 = mm512_uni_loadu_ps(b + i + vec_len_f32_avx512 * 2);
+    //     auto vb3 = mm512_uni_loadu_ps(b + i + vec_len_f32_avx512 * 3);
+
+    //     vsum0 = _mm512_fmadd_ps(va0, vb0, vsum0);
+    //     vsum1 = _mm512_fmadd_ps(va1, vb1, vsum1);
+    //     vsum2 = _mm512_fmadd_ps(va2, vb2, vsum2);
+    //     vsum3 = _mm512_fmadd_ps(va3, vb3, vsum3);
+    // }
+    // if (i + 2 * vec_len_f32_avx512 <= n) {
+    //     auto va0 = mm512_uni_loadu_ps(a + i);
+    //     auto va1 = mm512_uni_loadu_ps(a + i + vec_len_f32_avx512);
+
+    //     auto vb0 = mm512_uni_loadu_ps(b + i);
+    //     auto vb1 = mm512_uni_loadu_ps(b + i + vec_len_f32_avx512);
+
+    //     vsum0 = _mm512_fmadd_ps(va0, vb0, vsum0);
+    //     vsum1 = _mm512_fmadd_ps(va1, vb1, vsum1);
+    //     i += 2 * vec_len_f32_avx512;
+    // }
+    // ACC: avoid splitting the loop
+    for (; i + 1 * vec_len_f32_avx512 <= n; i += 1 * vec_len_f32_avx512) {
         auto va0 = mm512_uni_loadu_ps(a + i);
-        auto va1 = mm512_uni_loadu_ps(a + i + vec_len_f32_avx512);
-        auto va2 = mm512_uni_loadu_ps(a + i + vec_len_f32_avx512 * 2);
-        auto va3 = mm512_uni_loadu_ps(a + i + vec_len_f32_avx512 * 3);
-
-        auto vb0 = mm512_uni_loadu_ps(b + i);
-        auto vb1 = mm512_uni_loadu_ps(b + i + vec_len_f32_avx512);
-        auto vb2 = mm512_uni_loadu_ps(b + i + vec_len_f32_avx512 * 2);
-        auto vb3 = mm512_uni_loadu_ps(b + i + vec_len_f32_avx512 * 3);
-
-        vsum0 = _mm512_fmadd_ps(va0, vb0, vsum0);
-        vsum1 = _mm512_fmadd_ps(va1, vb1, vsum1);
-        vsum2 = _mm512_fmadd_ps(va2, vb2, vsum2);
-        vsum3 = _mm512_fmadd_ps(va3, vb3, vsum3);
-    }
-    if (i + 2 * vec_len_f32_avx512 <= n) {
-        auto va0 = mm512_uni_loadu_ps(a + i);
-        auto va1 = mm512_uni_loadu_ps(a + i + vec_len_f32_avx512);
-
-        auto vb0 = mm512_uni_loadu_ps(b + i);
-        auto vb1 = mm512_uni_loadu_ps(b + i + vec_len_f32_avx512);
-
-        vsum0 = _mm512_fmadd_ps(va0, vb0, vsum0);
-        vsum1 = _mm512_fmadd_ps(va1, vb1, vsum1);
-        i += 2 * vec_len_f32_avx512;
-    }
-    if (i + vec_len_f32_avx512 <= n) {
-        auto va0 = mm512_uni_loadu_ps(a + i);
         auto vb0 = mm512_uni_loadu_ps(b + i);
         vsum0 = _mm512_fmadd_ps(va0, vb0, vsum0);
-        i += vec_len_f32_avx512;
     }
     vsum0 = _mm512_add_ps(vsum0, vsum1);
     vsum2 = _mm512_add_ps(vsum2, vsum3);
@@ -991,7 +991,8 @@ static void mha_single_token_kernel(const ov::intel_cpu::PlainTensor& query,
 
     // attn_w * V
     // Fast Path if there are enough works for each thread
-    if (B >= static_cast<size_t>(nthr)) {
+    // ACC: force second token to execute in the following path which will not split in the kv_len dimension
+    if (1 || B >= static_cast<size_t>(nthr)) {
         buf_attn_score.resize<T3>({static_cast<size_t>(nthr), q_len, h_each_group_len, SV});
         parallel_for2d(B, h_group_num, [&](size_t b, size_t h_group) {
             auto ithr = parallel_get_thread_num();

@@ -1004,6 +1004,49 @@ struct ScaledDotProductAttention::AttentionExecutor : public ScaledDotProductAtt
             kernel_single_token(q_input, present_key, present_value, {}, use_attn_mask ? attn_mask : PlainTensor(),
                 output_emb, beam_table, has_out_transpose, auto_causal, scale_input, k_scale_zp, v_scale_zp);
         }
+        {
+            static int x = 0;
+            if (0 && (x % 1 == 0)) {
+                //std::cout << "q=" << q_input << std::endl;
+                auto L1 = q_input.size(2);
+                auto S = q_input.size(3);
+                auto disp = [L1, S] (const PlainTensor& t) {
+                    auto H = t.size(1);
+                    for (auto h = 0ul; h < H; h++) {
+                        std::cout << "layer=" << x << " h=" << h << std::endl;
+                        for (auto l = 0ul; l < L1; l++) {
+                            for (auto s = 0ul; s < S; s++) {
+                                std::cout << t.at<T>({0, h, l, s}) << " ";
+                            }
+                            std::cout << std::endl;
+                        }
+                    }
+                };
+                auto disp_kv = [S] (const PlainTensor& t) {
+                    auto H = t.size(1);
+                    auto L1 = t.size(2);
+                    for (auto h = x>=40?H-1:0ul; h < H; h++) {
+                        std::cout << "layer=" << x << " h=" << h << std::endl;
+                        for (auto l = x>=40?L1-1:0ul; l < L1; l++) {
+                            for (auto s = 0ul; s < S; s++) {
+                                std::cout << t.at<T>({0, h, l, s}) << " ";
+                            }
+                            std::cout << std::endl;
+                        }
+                    }
+                };
+                std::cout << "q=" << std::endl;
+                disp(q_input);
+                std::cout << "k=" << std::endl;
+                disp_kv(k_input);
+                std::cout << "v=" << std::endl;
+                disp_kv(v_input);
+                std::cout << "attn=" << attn_mask << std::endl;
+                std::cout << "out=" << std::endl;
+                disp(output_emb);
+            }
+            x++;
+        }
     }
 };
 
