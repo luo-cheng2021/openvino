@@ -650,6 +650,19 @@ void Transformations::PreLpt(const std::vector<ov::element::Type>& defaultPrecis
     CPU_SET_CALLBACK_COMMON(manager, nmsCallback, ov::pass::ConvertNMS9ToNMSIEInternal);
     CPU_SET_CALLBACK_COMMON(manager, nmsCallback, ov::pass::ConvertMulticlassNmsToMulticlassNmsIE);
     CPU_SET_CALLBACK_COMMON(manager, nmsCallback, ov::pass::ConvertMatrixNmsToMatrixNmsIE);
+    auto p = std::getenv("USE_OLD");
+    if (p && p[0] == '1') {
+        CPU_SET_CALLBACK_COMMON(
+            manager,
+            [this](const_node_ptr& node) -> bool {
+                std::string errorMsg;
+                // Current SDPA impl is optimized only for LLM models, so we decompose it for others to avoid perf
+                // regression. Matching the pattern is a little complicated, so we just check if there is any state nodes.
+                return node::ScaledDotProductAttention::isSupportedOperation(node, errorMsg) &&
+                    model->get_variables().size() > 0;
+            },
+            ov::pass::ScaledDotProductAttentionDecomposition);
+    }
 
     // List of enabled/disabled transformations
 
@@ -683,7 +696,9 @@ void Transformations::PreLpt(const std::vector<ov::element::Type>& defaultPrecis
     CPU_DISABLE_PASS_COMMON(manager, ov::pass::MatMulConstTransposesExtraction);
     CPU_DISABLE_PASS_COMMON(manager, ov::pass::ConvertScatterNDUpdate15ToScatterNDUpdate3);
     CPU_DISABLE_PASS_COMMON(manager, ov::pass::ConvertSliceScatter);
-    CPU_DISABLE_PASS_COMMON(manager, ov::pass::ScaledDotProductAttentionDecomposition);
+    if (!(p && p[0] == '1')) {
+        CPU_DISABLE_PASS_COMMON(manager, ov::pass::ScaledDotProductAttentionDecomposition);
+    }
     CPU_DISABLE_PASS_X64(manager, ov::pass::HSigmoidDecomposition);
 
     CPU_DISABLE_PASS_X64(manager, ov::pass::ReduceL1Decomposition);
@@ -936,29 +951,32 @@ void Transformations::PostLpt() {
 
     // If the SDPA patterns haven't been fused into the special CPU optimized SDPA nodes, we have to decompose
     // these layers and run some auxilary transformation passes to let the snippets handle SDPA ops
-
-    if (!one_of(config.inferencePrecision, element::bf16, element::f16)) {  // So far Snippets don't support AMX MHA
-        CPU_REGISTER_PASS_COMMON(postLPTPassManager, ov::pass::ScaledDotProductAttentionDecomposition);
-        CPU_SET_CALLBACK_COMMON(
-            postLPTPassManager,
-            [](const_node_ptr& node) {
-                // So far Snippets don't support AMX MHA
-                constexpr size_t QKV_inpt_number = 3ul;
-                for (size_t i = 0; i < QKV_inpt_number; ++i) {
-                    if (one_of(node->get_input_element_type(i), element::bf16, element::f16)) {
-                        return true;
+    auto p = std::getenv("USE_OLD");
+    if (p && p[0] == '1') {
+    } else {
+        if (!one_of(config.inferencePrecision, element::bf16, element::f16)) {  // So far Snippets don't support AMX MHA
+            CPU_REGISTER_PASS_COMMON(postLPTPassManager, ov::pass::ScaledDotProductAttentionDecomposition);
+            CPU_SET_CALLBACK_COMMON(
+                postLPTPassManager,
+                [](const_node_ptr& node) {
+                    // So far Snippets don't support AMX MHA
+                    constexpr size_t QKV_inpt_number = 3ul;
+                    for (size_t i = 0; i < QKV_inpt_number; ++i) {
+                        if (one_of(node->get_input_element_type(i), element::bf16, element::f16)) {
+                            return true;
+                        }
                     }
-                }
-                return false;
-            },
-            ov::pass::ScaledDotProductAttentionDecomposition);
+                    return false;
+                },
+                ov::pass::ScaledDotProductAttentionDecomposition);
 
-        CPU_REGISTER_PASS_COMMON(postLPTPassManager, ov::pass::ConvertConvertLike);
-        CPU_REGISTER_PASS_COMMON(postLPTPassManager, ov::pass::ConstantFolding);
-        CPU_REGISTER_PASS_COMMON(postLPTPassManager,
-                                 ov::pass::MoveEltwiseUpThroughDataMovScalar,
-                                 std::vector<DiscreteTypeInfo>{ov::op::v1::Transpose::get_type_info_static()});
-        CPU_REGISTER_PASS_COMMON(postLPTPassManager, ov::pass::TransposeMatMul);
+            CPU_REGISTER_PASS_COMMON(postLPTPassManager, ov::pass::ConvertConvertLike);
+            CPU_REGISTER_PASS_COMMON(postLPTPassManager, ov::pass::ConstantFolding);
+            CPU_REGISTER_PASS_COMMON(postLPTPassManager,
+                                    ov::pass::MoveEltwiseUpThroughDataMovScalar,
+                                    std::vector<DiscreteTypeInfo>{ov::op::v1::Transpose::get_type_info_static()});
+            CPU_REGISTER_PASS_COMMON(postLPTPassManager, ov::pass::TransposeMatMul);
+        }
     }
     CPU_REGISTER_PASS_X64(postLPTPassManager, ov::intel_cpu::SDPAFuseTransposeReshape);
 
