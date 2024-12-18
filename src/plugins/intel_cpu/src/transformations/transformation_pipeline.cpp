@@ -663,6 +663,26 @@ void Transformations::PreLpt(const std::vector<ov::element::Type>& defaultPrecis
             },
             ov::pass::ScaledDotProductAttentionDecomposition);
     }
+    auto p1 = std::getenv("CHECK_SDPA");
+    if (p1 && p1[0] == '1') {
+        CPU_SET_CALLBACK_COMMON(
+            manager,
+            [this](const_node_ptr& node) -> bool {
+                std::string errorMsg;
+                auto use_sdpa = node::ScaledDotProductAttention::isSupportedOperation(node, errorMsg) &&
+                    model->get_variables().size() > 0;
+                if (!use_sdpa) {
+                    static bool flag;
+                    if (!flag) {
+                        std::cout << "CHECK_SDPA1: old path will decompose" << std::endl;
+                        putenv("CHECK_SDPA1=1");
+                        flag = true;
+                    }
+                }
+                return use_sdpa;
+            },
+            ov::pass::ScaledDotProductAttentionDecomposition);
+    }
 
     // List of enabled/disabled transformations
 
@@ -696,8 +716,11 @@ void Transformations::PreLpt(const std::vector<ov::element::Type>& defaultPrecis
     CPU_DISABLE_PASS_COMMON(manager, ov::pass::MatMulConstTransposesExtraction);
     CPU_DISABLE_PASS_COMMON(manager, ov::pass::ConvertScatterNDUpdate15ToScatterNDUpdate3);
     CPU_DISABLE_PASS_COMMON(manager, ov::pass::ConvertSliceScatter);
+    // new path, not decompose sdpa here
     if (!(p && p[0] == '1')) {
-        CPU_DISABLE_PASS_COMMON(manager, ov::pass::ScaledDotProductAttentionDecomposition);
+        auto p1 = std::getenv("CHECK_SDPA");
+        if (!(p1 && p1[0] == '1'))
+            CPU_DISABLE_PASS_COMMON(manager, ov::pass::ScaledDotProductAttentionDecomposition);
     }
     CPU_DISABLE_PASS_X64(manager, ov::pass::HSigmoidDecomposition);
 
@@ -966,6 +989,17 @@ void Transformations::PostLpt() {
                             return true;
                         }
                     }
+
+                    auto p1 = std::getenv("CHECK_SDPA");
+                    if (p1 && p1[0] == '1') {
+                        static bool flag;
+                        if (!flag) {
+                            std::cout << "CHECK_SDPA2: old path will skip decomposition" << std::endl;
+                            putenv("CHECK_SDPA2=1");
+                            flag = true;
+                        }
+                    }
+
                     return false;
                 },
                 ov::pass::ScaledDotProductAttentionDecomposition);
