@@ -1977,7 +1977,7 @@ struct MHA {
 
         // packed k, v
         {auto perf1 = LinuxPerf::Profile("trans");
-        parallel_for2d_dynamic(reorder_work_count, Hk, [&](size_t w, size_t hk) {
+        parallel_for2d(Hk, reorder_work_count, [&](size_t hk, size_t w) {
             const auto& item = _workitems.get_reorder_work_item(w);
             const auto batch_in_seq = item.batch_in_seq;
             const auto batch_in_reorder = item.batch_in_reorder;
@@ -2043,7 +2043,7 @@ struct MHA {
                            ? false
                            : true;  // or less than 2 work items per thread, loop H
 
-        parallel_for2d_dynamic(attn_work_count, loop_hk ? Hk : _helper._H, [&](size_t w, size_t hx) {
+        parallel_for2d(loop_hk ? Hk : _helper._H, attn_work_count, [&](size_t hx, size_t w) {
             size_t hk, hq_beg, hq_end;
             if (loop_hk) {
                 hk = hx;
@@ -2060,6 +2060,8 @@ struct MHA {
             const auto batch_in_token = subsequence_begins.ptr<int32_t>()[batch_in_seq];
             const auto q_len = static_cast<size_t>(item.q_len);
             size_t ithr = parallel_get_thread_num();
+            PlainTensor output;
+            output.resize({q_len, _helper._H * _helper._SV}, output_emb.ptr<DATA_TYPE>(batch_in_token));
 
             if (q_len == 1) {
                 const auto cur_kv_len = static_cast<size_t>(past_lens.ptr<int32_t>()[batch_in_seq]) + 1;
@@ -2069,11 +2071,13 @@ struct MHA {
                     score_output = _helper._score_output.template ptr<float>() + score_offset * _helper._H;
                 }
 
+                PlainTensor sub_query;
+                sub_query.resize({_helper._H, size_t{1}, _helper._S}, q.ptr<DATA_TYPE>(batch_in_token));
                 _helper.exec_kernel_one_bh(
-                    q.slice(0, batch_in_token, batch_in_token),
+                    sub_query,
                     k_cache,
                     v_cache,
-                    output_emb.slice(0, batch_in_token, batch_in_token),
+                    output,
                     block_indices.ptr<int32_t>() + block_indices_begins.ptr<int32_t>()[batch_in_seq],
                     ithr,
                     hq_beg,
@@ -2101,13 +2105,17 @@ struct MHA {
                 PlainTensor sub_query;
                 sub_query.resize({q_len, _helper._H, _helper._S}, q.ptr<DATA_TYPE>(batch_in_token));
                 sub_query = sub_query.permute({1, 0, 2});
+                PlainTensor qk_scratch, wv_scratch;
+                qk_scratch.resize({_helper._qk_scratch_b.m_dims[1], _helper._qk_scratch_b.m_dims[2], _helper._qk_scratch_b.m_dims[3]},
+                    _helper._qk_scratch_b.template ptr<DATA_TYPE>(batch_in_reorder));
+                wv_scratch.resize({_helper._wv_scratch_b.m_dims[1], _helper._wv_scratch_b.m_dims[2], _helper._wv_scratch_b.m_dims[3]},
+                    _helper._wv_scratch_b.template ptr<DATA_TYPE>(batch_in_reorder));
                 _helper.exec_kernel_multiple(
                     sub_query,
                     v_cache,
-                    output_emb.slice(0, batch_in_token, batch_in_token + q_len)
-                        .reshape({q_len, _helper._H * _helper._SV}),
-                    _helper._qk_scratch_b.slice(0, batch_in_reorder, batch_in_reorder),
-                    _helper._wv_scratch_b.slice(0, batch_in_reorder, batch_in_reorder),
+                    output,
+                    qk_scratch,
+                    wv_scratch,
                     block_indices.ptr<int32_t>() + block_indices_begins.ptr<int32_t>()[batch_in_seq],
                     ithr,
                     q_blk,
