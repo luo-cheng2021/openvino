@@ -4,6 +4,7 @@
 
 #include "primitive_base.hpp"
 
+#include "rms.hpp"
 #include "rms_inst.h"
 #include "rms/rms_kernel_selector.h"
 #include "rms/rms_kernel_ref.h"
@@ -81,8 +82,13 @@ attach_rms_impl::attach_rms_impl() {
                                  types,
                                  formats);
 }
-
 }  // namespace detail
+
+std::unique_ptr<primitive_impl> RMSImplementationManager::create_impl(const program_node& node, const kernel_impl_params& params) const {
+    assert(node.is_type<rms>());
+    return typed_primitive_impl_ocl<rms>::create<rms_impl>(static_cast<const rms_node&>(node), params);
+}
+
 }  // namespace ocl
 }  // namespace cldnn
 
