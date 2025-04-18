@@ -217,6 +217,7 @@ public:
 // for caching functor/callable.
 template <class T, typename... CArgs>
 std::shared_ptr<const T> make_cacheable(dnnl::engine eng, CArgs... cargs) {
+    OV_ITT_SCOPED_TASK(ov::intel_gpu::itt::domains::intel_gpu_plugin, openvino::itt::handle("make_cacheable"));
     std::shared_ptr<const T> sptr;
     auto key = std::make_tuple(cargs...);
     static std::unordered_map<decltype(key), std::weak_ptr<const T>, tuple_hasher<CArgs...>> cache;
@@ -236,6 +237,59 @@ std::shared_ptr<const T> make_cacheable(dnnl::engine eng, CArgs... cargs) {
         // ECOUT("make_cacheable constructed: ", typeid(T).name(), "(", cargs..., ")");
         cache.emplace(std::make_pair(key, std::weak_ptr<const T>(sptr)));
     }
+    // std::cout << " kernel cache size = " << cache.size() << std::endl;
+    return sptr;
+}
+
+template <class T, typename... CArgs>
+std::shared_ptr<const T> make_lru_cacheable(dnnl::engine eng, CArgs... cargs) {
+    OV_ITT_SCOPED_TASK(ov::intel_gpu::itt::domains::intel_gpu_plugin, openvino::itt::handle("make_lru_cacheable"));
+    constexpr size_t MAX_CACHE_SIZE = 100;
+    std::shared_ptr<const T> sptr;
+    using KeyType = std::tuple<CArgs...>;
+    static std::unordered_map<KeyType, std::pair<std::weak_ptr<const T>, typename std::list<KeyType>::iterator>, tuple_hasher<CArgs...>> cache;
+    static std::list<KeyType> lru_list;
+    static std::mutex mutex;
+    auto key = std::make_tuple(cargs...);
+
+    // query the cache
+    {
+        std::lock_guard<std::mutex> guard(mutex);
+        auto it = cache.find(key);
+        if (it != cache.end()) {
+            auto& [wptr, lru_it] = it->second;
+            auto sptr = wptr.lock();
+            if (sptr) {
+                // If cache hit and object is valid, move it to the front of the LRU list
+                lru_list.splice(lru_list.begin(), lru_list, lru_it);
+                return sptr;
+            } else {
+                // If cache hit but object is expired, remove it from the cache
+                lru_list.erase(lru_it);
+                cache.erase(it);
+            }
+        }
+    }
+
+    // If cache miss, create a new object
+    {
+        OV_ITT_SCOPED_TASK(ov::intel_gpu::itt::domains::intel_gpu_plugin, openvino::itt::handle("make_gemm"));
+        sptr = std::make_shared<T>(eng, cargs...);
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(mutex);
+        lru_list.push_front(key);
+        cache[key] = {sptr, lru_list.begin()};
+
+        // If the cache size exceeds the limit, remove the least recently used key
+        if (cache.size() > MAX_CACHE_SIZE) {
+            auto last = lru_list.back();
+            lru_list.pop_back();
+            cache.erase(last);
+        }
+    }
+
     return sptr;
 }
 
@@ -258,7 +312,13 @@ struct onednn_linear {
               dnnl::memory scale,
               dnnl::memory zp) {
         OV_ITT_SCOPED_TASK(ov::intel_gpu::itt::domains::intel_gpu_plugin, openvino::itt::handle("onednn_linear::create()"));
-        auto mm = make_cacheable<onednn_matmul>(eng, act_dtype, weight_dtype, batch, ic, oc, ic_group_size, t);
+
+        std::shared_ptr<const onednn_matmul> mm;
+        if (batch == 1)
+            mm = make_cacheable<onednn_matmul>(eng, act_dtype, weight_dtype, batch, ic, oc, ic_group_size, t);
+        else
+            mm = make_lru_cacheable<onednn_matmul>(eng, act_dtype, weight_dtype, batch, ic, oc, ic_group_size, t);
+
         onednn_linear linear;
         linear.mm = mm;
         linear.bin_post_id = mm->bin_post_id;
