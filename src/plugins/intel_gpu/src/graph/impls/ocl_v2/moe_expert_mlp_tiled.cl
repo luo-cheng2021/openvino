@@ -49,9 +49,9 @@ inline tile_gemv(
     // global:[X, N, 16]
     // local: [1, SUBGROUP_SIZE, 16]
     int n = get_global_id(1);              // N
-    int thr_id = get_local_id(2);          // 0~15
-    int thr_num = get_local_size(2);       // 16
-    int wi_id = get_sub_group_local_id();  // 0~15
+    int thr_id = get_local_id(2);          // 0~thr_num-1
+    int thr_num = get_local_size(2);       // 32
+    int wi_id = get_sub_group_local_id();  // 0~31
 
     int gk0, gk1;
     int group_num = K / GROUP_SIZE;
@@ -79,7 +79,7 @@ inline tile_gemv(
         half zpx16 = (half)(zps[gk * N]);
 
         __attribute__((opencl_unroll_hint(4))) for (int g = 0; g < GROUP_SIZE; g += 32, B += 16 * SUBGROUP_SIZE) {
-            ushort2 input_value = intel_sub_group_block_read_us2((const __global ushort*)(A + g));
+            ushort input_value = intel_sub_group_block_read_us((const __global ushort*)(A + g));
             char16 bx16 = as_char16(intel_sub_group_block_read_uc16(B));
 
 #    if WEI_UINT4
@@ -94,45 +94,46 @@ inline tile_gemv(
             half16 i4x16_odd = convert_half16(i4x16_odd_c16) - zpx16;
 #    endif
 
-            sum[0] += as_half(sub_group_broadcast(input_value.s0, 0)) * i4x16_even.s0 +
-                      as_half(sub_group_broadcast(input_value.s0, 4)) * i4x16_even.s2 +
-                      as_half(sub_group_broadcast(input_value.s0, 8)) * i4x16_even.s4 +
-                      as_half(sub_group_broadcast(input_value.s0, 12)) * i4x16_even.s6;
-            sum[1] += as_half(sub_group_broadcast(input_value.s0, 1)) * i4x16_odd.s0 +
-                      as_half(sub_group_broadcast(input_value.s0, 5)) * i4x16_odd.s2 +
-                      as_half(sub_group_broadcast(input_value.s0, 9)) * i4x16_odd.s4 +
-                      as_half(sub_group_broadcast(input_value.s0, 13)) * i4x16_odd.s6;
+            sum[0] += as_half(sub_group_broadcast(input_value, 0)) * i4x16_even.s0 +
+                      as_half(sub_group_broadcast(input_value, 4)) * i4x16_even.s2 +
+                      as_half(sub_group_broadcast(input_value, 8)) * i4x16_even.s4 +
+                      as_half(sub_group_broadcast(input_value, 12)) * i4x16_even.s6;
+            sum[1] += as_half(sub_group_broadcast(input_value, 1)) * i4x16_odd.s0 +
+                      as_half(sub_group_broadcast(input_value, 5)) * i4x16_odd.s2 +
+                      as_half(sub_group_broadcast(input_value, 9)) * i4x16_odd.s4 +
+                      as_half(sub_group_broadcast(input_value, 13)) * i4x16_odd.s6;
 
-            sum[2] += as_half(sub_group_broadcast(input_value.s0, 2)) * i4x16_even.s1 +
-                      as_half(sub_group_broadcast(input_value.s0, 6)) * i4x16_even.s3 +
-                      as_half(sub_group_broadcast(input_value.s0, 10)) * i4x16_even.s5 +
-                      as_half(sub_group_broadcast(input_value.s0, 14)) * i4x16_even.s7;
-            sum[3] += as_half(sub_group_broadcast(input_value.s0, 3)) * i4x16_odd.s1 +
-                      as_half(sub_group_broadcast(input_value.s0, 7)) * i4x16_odd.s3 +
-                      as_half(sub_group_broadcast(input_value.s0, 11)) * i4x16_odd.s5 +
-                      as_half(sub_group_broadcast(input_value.s0, 15)) * i4x16_odd.s7;
+            sum[2] += as_half(sub_group_broadcast(input_value, 2)) * i4x16_even.s1 +
+                      as_half(sub_group_broadcast(input_value, 6)) * i4x16_even.s3 +
+                      as_half(sub_group_broadcast(input_value, 10)) * i4x16_even.s5 +
+                      as_half(sub_group_broadcast(input_value, 14)) * i4x16_even.s7;
+            sum[3] += as_half(sub_group_broadcast(input_value, 3)) * i4x16_odd.s1 +
+                      as_half(sub_group_broadcast(input_value, 7)) * i4x16_odd.s3 +
+                      as_half(sub_group_broadcast(input_value, 11)) * i4x16_odd.s5 +
+                      as_half(sub_group_broadcast(input_value, 15)) * i4x16_odd.s7;
 
-            sum[4] += as_half(sub_group_broadcast(input_value.s1, 0)) * i4x16_even.s8 +
-                      as_half(sub_group_broadcast(input_value.s1, 4)) * i4x16_even.sa +
-                      as_half(sub_group_broadcast(input_value.s1, 8)) * i4x16_even.sc +
-                      as_half(sub_group_broadcast(input_value.s1, 12)) * i4x16_even.se;
-            sum[5] += as_half(sub_group_broadcast(input_value.s1, 1)) * i4x16_odd.s8 +
-                      as_half(sub_group_broadcast(input_value.s1, 5)) * i4x16_odd.sa +
-                      as_half(sub_group_broadcast(input_value.s1, 9)) * i4x16_odd.sc +
-                      as_half(sub_group_broadcast(input_value.s1, 13)) * i4x16_odd.se;
+            sum[4] += as_half(sub_group_broadcast(input_value, 16)) * i4x16_even.s8 +
+                      as_half(sub_group_broadcast(input_value, 20)) * i4x16_even.sa +
+                      as_half(sub_group_broadcast(input_value, 24)) * i4x16_even.sc +
+                      as_half(sub_group_broadcast(input_value, 28)) * i4x16_even.se;
+            sum[5] += as_half(sub_group_broadcast(input_value, 17)) * i4x16_odd.s8 +
+                      as_half(sub_group_broadcast(input_value, 21)) * i4x16_odd.sa +
+                      as_half(sub_group_broadcast(input_value, 25)) * i4x16_odd.sc +
+                      as_half(sub_group_broadcast(input_value, 29)) * i4x16_odd.se;
 
-            sum[6] += as_half(sub_group_broadcast(input_value.s1, 2)) * i4x16_even.s9 +
-                      as_half(sub_group_broadcast(input_value.s1, 6)) * i4x16_even.sb +
-                      as_half(sub_group_broadcast(input_value.s1, 10)) * i4x16_even.sd +
-                      as_half(sub_group_broadcast(input_value.s1, 14)) * i4x16_even.sf;
-            sum[7] += as_half(sub_group_broadcast(input_value.s1, 3)) * i4x16_odd.s9 +
-                      as_half(sub_group_broadcast(input_value.s1, 7)) * i4x16_odd.sb +
-                      as_half(sub_group_broadcast(input_value.s1, 11)) * i4x16_odd.sd +
-                      as_half(sub_group_broadcast(input_value.s1, 15)) * i4x16_odd.sf;
+            sum[6] += as_half(sub_group_broadcast(input_value, 18)) * i4x16_even.s9 +
+                      as_half(sub_group_broadcast(input_value, 22)) * i4x16_even.sb +
+                      as_half(sub_group_broadcast(input_value, 26)) * i4x16_even.sd +
+                      as_half(sub_group_broadcast(input_value, 30)) * i4x16_even.sf;
+            sum[7] += as_half(sub_group_broadcast(input_value, 19)) * i4x16_odd.s9 +
+                      as_half(sub_group_broadcast(input_value, 23)) * i4x16_odd.sb +
+                      as_half(sub_group_broadcast(input_value, 27)) * i4x16_odd.sd +
+                      as_half(sub_group_broadcast(input_value, 31)) * i4x16_odd.sf;
         }
 
         sum_all += (sum[0] + sum[1] + sum[2] + sum[3] + sum[4] + sum[5] + sum[6] + sum[7]) * scale_1;
     }
+
 
     *(all_sum_even + thr_num*wi_id + thr_id) = sum_all;
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -216,9 +217,9 @@ inline tile_gemv_down(
     // global:[X, N, 16]
     // local: [1, SUBGROUP_SIZE, 16]
     int n = get_global_id(1);              // N
-    int thr_id = get_local_id(2);          // 0~15
-    int thr_num = get_local_size(2);       // 16
-    int wi_id = get_sub_group_local_id();  // 0~15
+    int thr_id = get_local_id(2);          // 0~thr_num-1
+    int thr_num = get_local_size(2);       // 32
+    int wi_id = get_sub_group_local_id();  // 0~31
 
     int gk0, gk1;
     int group_num = K / GROUP_SIZE;
@@ -239,7 +240,7 @@ inline tile_gemv_down(
         half zpx16 = (half)(zps[gk * N]);
 
         __attribute__((opencl_unroll_hint(4))) for (int g = 0; g < GROUP_SIZE; g += 32, B += 16 * SUBGROUP_SIZE) {
-            ushort2 input_value = intel_sub_group_block_read_us2((const __global ushort*)(A + g));
+            ushort input_value = intel_sub_group_block_read_us((const __global ushort*)(A + g));
             char16 bx16 = as_char16(intel_sub_group_block_read_uc16(B));
 
 #    if WEI_UINT4
@@ -254,45 +255,46 @@ inline tile_gemv_down(
             half16 i4x16_odd = convert_half16(i4x16_odd_c16) - zpx16;
 #    endif
 
-            sum[0] += as_half(sub_group_broadcast(input_value.s0, 0)) * i4x16_even.s0 +
-                      as_half(sub_group_broadcast(input_value.s0, 4)) * i4x16_even.s2 +
-                      as_half(sub_group_broadcast(input_value.s0, 8)) * i4x16_even.s4 +
-                      as_half(sub_group_broadcast(input_value.s0, 12)) * i4x16_even.s6;
-            sum[1] += as_half(sub_group_broadcast(input_value.s0, 1)) * i4x16_odd.s0 +
-                      as_half(sub_group_broadcast(input_value.s0, 5)) * i4x16_odd.s2 +
-                      as_half(sub_group_broadcast(input_value.s0, 9)) * i4x16_odd.s4 +
-                      as_half(sub_group_broadcast(input_value.s0, 13)) * i4x16_odd.s6;
+            sum[0] += as_half(sub_group_broadcast(input_value, 0)) * i4x16_even.s0 +
+                      as_half(sub_group_broadcast(input_value, 4)) * i4x16_even.s2 +
+                      as_half(sub_group_broadcast(input_value, 8)) * i4x16_even.s4 +
+                      as_half(sub_group_broadcast(input_value, 12)) * i4x16_even.s6;
+            sum[1] += as_half(sub_group_broadcast(input_value, 1)) * i4x16_odd.s0 +
+                      as_half(sub_group_broadcast(input_value, 5)) * i4x16_odd.s2 +
+                      as_half(sub_group_broadcast(input_value, 9)) * i4x16_odd.s4 +
+                      as_half(sub_group_broadcast(input_value, 13)) * i4x16_odd.s6;
 
-            sum[2] += as_half(sub_group_broadcast(input_value.s0, 2)) * i4x16_even.s1 +
-                      as_half(sub_group_broadcast(input_value.s0, 6)) * i4x16_even.s3 +
-                      as_half(sub_group_broadcast(input_value.s0, 10)) * i4x16_even.s5 +
-                      as_half(sub_group_broadcast(input_value.s0, 14)) * i4x16_even.s7;
-            sum[3] += as_half(sub_group_broadcast(input_value.s0, 3)) * i4x16_odd.s1 +
-                      as_half(sub_group_broadcast(input_value.s0, 7)) * i4x16_odd.s3 +
-                      as_half(sub_group_broadcast(input_value.s0, 11)) * i4x16_odd.s5 +
-                      as_half(sub_group_broadcast(input_value.s0, 15)) * i4x16_odd.s7;
+            sum[2] += as_half(sub_group_broadcast(input_value, 2)) * i4x16_even.s1 +
+                      as_half(sub_group_broadcast(input_value, 6)) * i4x16_even.s3 +
+                      as_half(sub_group_broadcast(input_value, 10)) * i4x16_even.s5 +
+                      as_half(sub_group_broadcast(input_value, 14)) * i4x16_even.s7;
+            sum[3] += as_half(sub_group_broadcast(input_value, 3)) * i4x16_odd.s1 +
+                      as_half(sub_group_broadcast(input_value, 7)) * i4x16_odd.s3 +
+                      as_half(sub_group_broadcast(input_value, 11)) * i4x16_odd.s5 +
+                      as_half(sub_group_broadcast(input_value, 15)) * i4x16_odd.s7;
 
-            sum[4] += as_half(sub_group_broadcast(input_value.s1, 0)) * i4x16_even.s8 +
-                      as_half(sub_group_broadcast(input_value.s1, 4)) * i4x16_even.sa +
-                      as_half(sub_group_broadcast(input_value.s1, 8)) * i4x16_even.sc +
-                      as_half(sub_group_broadcast(input_value.s1, 12)) * i4x16_even.se;
-            sum[5] += as_half(sub_group_broadcast(input_value.s1, 1)) * i4x16_odd.s8 +
-                      as_half(sub_group_broadcast(input_value.s1, 5)) * i4x16_odd.sa +
-                      as_half(sub_group_broadcast(input_value.s1, 9)) * i4x16_odd.sc +
-                      as_half(sub_group_broadcast(input_value.s1, 13)) * i4x16_odd.se;
+            sum[4] += as_half(sub_group_broadcast(input_value, 16)) * i4x16_even.s8 +
+                      as_half(sub_group_broadcast(input_value, 20)) * i4x16_even.sa +
+                      as_half(sub_group_broadcast(input_value, 24)) * i4x16_even.sc +
+                      as_half(sub_group_broadcast(input_value, 28)) * i4x16_even.se;
+            sum[5] += as_half(sub_group_broadcast(input_value, 17)) * i4x16_odd.s8 +
+                      as_half(sub_group_broadcast(input_value, 21)) * i4x16_odd.sa +
+                      as_half(sub_group_broadcast(input_value, 25)) * i4x16_odd.sc +
+                      as_half(sub_group_broadcast(input_value, 29)) * i4x16_odd.se;
 
-            sum[6] += as_half(sub_group_broadcast(input_value.s1, 2)) * i4x16_even.s9 +
-                      as_half(sub_group_broadcast(input_value.s1, 6)) * i4x16_even.sb +
-                      as_half(sub_group_broadcast(input_value.s1, 10)) * i4x16_even.sd +
-                      as_half(sub_group_broadcast(input_value.s1, 14)) * i4x16_even.sf;
-            sum[7] += as_half(sub_group_broadcast(input_value.s1, 3)) * i4x16_odd.s9 +
-                      as_half(sub_group_broadcast(input_value.s1, 7)) * i4x16_odd.sb +
-                      as_half(sub_group_broadcast(input_value.s1, 11)) * i4x16_odd.sd +
-                      as_half(sub_group_broadcast(input_value.s1, 15)) * i4x16_odd.sf;
+            sum[6] += as_half(sub_group_broadcast(input_value, 18)) * i4x16_even.s9 +
+                      as_half(sub_group_broadcast(input_value, 22)) * i4x16_even.sb +
+                      as_half(sub_group_broadcast(input_value, 26)) * i4x16_even.sd +
+                      as_half(sub_group_broadcast(input_value, 30)) * i4x16_even.sf;
+            sum[7] += as_half(sub_group_broadcast(input_value, 19)) * i4x16_odd.s9 +
+                      as_half(sub_group_broadcast(input_value, 23)) * i4x16_odd.sb +
+                      as_half(sub_group_broadcast(input_value, 27)) * i4x16_odd.sd +
+                      as_half(sub_group_broadcast(input_value, 31)) * i4x16_odd.sf;
         }
 
         sum_all += (sum[0] + sum[1] + sum[2] + sum[3] + sum[4] + sum[5] + sum[6] + sum[7]) * scale_1;
     }
+
 
     *(all_sum_even + thr_num * wi_id + thr_id) = sum_all;
     barrier(CLK_LOCAL_MEM_FENCE);
