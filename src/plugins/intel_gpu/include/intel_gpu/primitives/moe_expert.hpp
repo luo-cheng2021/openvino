@@ -29,6 +29,15 @@ struct moe_expert : public primitive_base<moe_expert> {
                 return weight == rhs.weight && bias == rhs.bias && scale == rhs.scale && zp == rhs.zp;
             }
         } param[3];
+        bool is_tiled_layout = false;
+
+        bool is_tiled() const {
+            return is_tiled_layout;
+        }
+
+        void set_tiled(bool to_tiled) {
+            is_tiled_layout = to_tiled;
+        }
 
         bool operator==(const mlp_params& rhs) const {
             return param[0] == rhs.param[0] && param[1] == rhs.param[1] && param[2] == rhs.param[2];

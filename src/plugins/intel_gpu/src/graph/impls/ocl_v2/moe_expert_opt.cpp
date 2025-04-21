@@ -434,6 +434,8 @@ protected:
 
 #define N_BLOCK 4
 #define SUBGROUP_NUM 8
+#define MLP_GATE_UP_THR_NUM 4
+#define MLP_DOWN_THR_NUM 2
 
 static void add_common_consts(const RuntimeParams& params, JitConstants& jit, bool gen_weights_ptr = true) {
     auto desc = params.typed_desc<moe_expert>();
@@ -499,7 +501,7 @@ static void add_common_consts(const RuntimeParams& params, JitConstants& jit, bo
 
 class MoeExpertOptMLPGateUp : public KernelGenerator {
 public:
-    MoeExpertOptMLPGateUp() : KernelGenerator("moe_expert_mlp", "gate_up") {}
+    MoeExpertOptMLPGateUp() : KernelGenerator("moe_expert_mlp_tiled", "gate_up") {}
 
 protected:
     [[nodiscard]] JitConstants get_jit_constants(const RuntimeParams& params) const override {
@@ -507,6 +509,7 @@ protected:
         auto desc = params.typed_desc<moe_expert>();
         add_common_consts(params, jit);
         jit.make("GATE_UP_ENABLE", 1);
+        jit.make("THR_NUM", MLP_GATE_UP_THR_NUM);
         return jit;
     }
 
@@ -524,7 +527,7 @@ protected:
 
 class MoeExpertOptMLPDown : public KernelGenerator {
 public:
-    MoeExpertOptMLPDown() : KernelGenerator("moe_expert_mlp", "down") {}
+    MoeExpertOptMLPDown() : KernelGenerator("moe_expert_mlp_tiled", "down") {}
 
 protected:
     [[nodiscard]] JitConstants get_jit_constants(const RuntimeParams& params) const override {
@@ -532,6 +535,7 @@ protected:
         auto desc = params.typed_desc<moe_expert>();
         add_common_consts(params, jit);
         jit.make("DOWN_ENABLE", 1);
+        jit.make("THR_NUM", MLP_DOWN_THR_NUM);
         return jit;
     }
 
@@ -549,7 +553,7 @@ protected:
 
 class MoeExpertOptMLPReduce : public KernelGenerator {
 public:
-    MoeExpertOptMLPReduce() : KernelGenerator("moe_expert_mlp", "reduce") {}
+    MoeExpertOptMLPReduce() : KernelGenerator("moe_expert_mlp_tiled", "reduce") {}
 
 protected:
     [[nodiscard]] JitConstants get_jit_constants(const RuntimeParams& params) const override {
@@ -572,6 +576,58 @@ protected:
     }
 };
 
+
+class MoeExpertReoderLinear2Tiled : public KernelGenerator {
+    public:
+    MoeExpertReoderLinear2Tiled() : KernelGenerator("moe_expert_reorder", "linear_to_tiled") {}
+
+    protected:
+        [[nodiscard]] JitConstants get_jit_constants(const RuntimeParams& params) const override {
+            auto jit = KernelGenerator::get_jit_constants(params);
+            auto desc = params.typed_desc<moe_expert>();
+            add_common_consts(params, jit);
+            jit.make("TO_TILED", 1);
+            return jit;
+        }
+
+        [[nodiscard]] Arguments get_arguments_desc(const RuntimeParams& params) const override {
+            Arguments args;
+            args.push_back({ArgumentDescriptor::Types::INTERNAL_BUFFER, 0});
+            args.push_back({ArgumentDescriptor::Types::INTERNAL_BUFFER, 1});
+            return args;
+        }
+
+        [[nodiscard]] DispatchDataFunc get_dispatch_data_func() const override {
+            return DispatchDataFunc{[](const RuntimeParams& params, KernelData& kd, ImplRuntimeParams* rt_params) {}};
+        }
+};
+
+class MoeExpertReoderTiled2Linear : public KernelGenerator {
+    public:
+    MoeExpertReoderTiled2Linear() : KernelGenerator("moe_expert_reorder", "tiled_to_linear") {}
+
+    protected:
+        [[nodiscard]] JitConstants get_jit_constants(const RuntimeParams& params) const override {
+            auto jit = KernelGenerator::get_jit_constants(params);
+            auto desc = params.typed_desc<moe_expert>();
+            add_common_consts(params, jit);
+            jit.make("TO_TILED", 0);
+            return jit;
+        }
+
+        [[nodiscard]] Arguments get_arguments_desc(const RuntimeParams& params) const override {
+            Arguments args;
+            args.push_back({ArgumentDescriptor::Types::INTERNAL_BUFFER, 0});
+            args.push_back({ArgumentDescriptor::Types::INTERNAL_BUFFER, 1});
+            return args;
+        }
+
+        [[nodiscard]] DispatchDataFunc get_dispatch_data_func() const override {
+            return DispatchDataFunc{[](const RuntimeParams& params, KernelData& kd, ImplRuntimeParams* rt_params) {}};
+        }
+};
+
+
 dnnl::memory convert2dnnl(const memory::ptr& ptr, const std::vector<int64_t>& dim, dnnl::memory::format_tag tag, int offset = 0) {
     OV_ITT_SCOPED_TASK(ov::intel_gpu::itt::domains::intel_gpu_plugin, openvino::itt::handle("convert2dnnl"));
     return ptr->get_onednn_memory(dnnl::memory::desc(dnnl::memory::dims(dim), convert_data_type(ptr->get_layout().data_type), tag), offset);
@@ -586,6 +642,9 @@ public:
     Stage::Ptr mlp_down = make_stage<MoeExpertOptMLPDown>();
     Stage::Ptr mlp_reduce = make_stage<MoeExpertOptMLPReduce>();
 
+    Stage::Ptr reorder_to_linear = make_stage<MoeExpertReoderTiled2Linear>();
+    Stage::Ptr reorder_to_tiled = make_stage<MoeExpertReoderLinear2Tiled>();
+
     struct dnnl_weights {
         dnnl::memory weight;
         dnnl::memory scale;
@@ -596,6 +655,8 @@ public:
     int _hidden_size;
     int _intermediate_size;
     int _group_size;
+
+    cldnn::memory::ptr reoder_temp_mem;
 
     MoeExpertOptImpl() : PrimitiveImplOCL(MoeExpertOpt::get_type_info_static()) {}
     MoeExpertOptImpl(const program_node& node, const RuntimeParams& params) : MoeExpertOptImpl() {
@@ -642,6 +703,9 @@ public:
         add_stage(mlp_gate_up, params);
         add_stage(mlp_down, params);
         add_stage(mlp_reduce, params);
+
+        add_stage(reorder_to_linear, params);
+        add_stage(reorder_to_tiled, params);
     }
 
     [[nodiscard]] std::unique_ptr<primitive_impl> clone() const override {
@@ -708,6 +772,55 @@ public:
         return std::make_tuple(mem, layout);
     }
 
+    void reorder_weights_data(typed_primitive_inst<moe_expert>& instance, const cldnn::moe_expert::mlp_params& mlp_params, bool to_tiled) {
+        static size_t cnt_1 = 0, cnt_2 = 0;
+        if(mlp_params.is_tiled() == to_tiled)
+            return;
+        auto moe = instance.get_typed_desc<moe_expert>();
+        // auto& _eng = instance.get_network().get_engine();
+        auto get_shape_k = [](cldnn::memory::ptr weight) {
+            auto shape = weight->get_layout().get_shape();
+            if (shape.size() == 3) {
+                return shape[1] * shape[2];
+            }
+            return shape[1];
+        };
+        auto get_shape_n = [](cldnn::memory::ptr weight) {
+            auto shape = weight->get_layout().get_shape();
+            return shape[0];
+        };
+
+        if(reoder_temp_mem == nullptr) {
+            auto& pool = instance.get_network().get_memory_pool();
+            reoder_temp_mem = pool.get_memory(mlp_params.param[0].weight->get_layout(), cldnn::allocation_type::usm_device, false);
+        }
+        auto& stream = instance.get_network().get_stream();
+        Stage::Ptr& reorder_stage = (to_tiled == true) ? reorder_to_tiled : reorder_to_linear;
+
+        if(to_tiled == true) {
+            cnt_1++;
+        } else {
+            cnt_2++;
+        }
+        std::cout << "\treorder weights to " << (to_tiled ? "tiled" : "linear") <<  "cnt = " << (to_tiled ? cnt_1 : cnt_2) << std::endl;
+        for (int i = 0; i < 3; i++) {
+            auto& weight = mlp_params.param[i].weight;
+            reoder_temp_mem->copy_from(stream, weight->buffer_ptr(), 0, 0, weight->get_layout().bytes_count(), true);
+            // convert to tiled layout
+            auto ret = execute_stage(
+                {},
+                instance,
+                *reorder_stage,
+                {reoder_temp_mem},
+                {weight},
+                {get_shape_k(weight)/2, get_shape_n(weight)},
+                {1, 16}, true);
+            ret->wait();
+        }
+
+        const_cast<cldnn::moe_expert::mlp_params&>(mlp_params).set_tiled(to_tiled);
+    }
+
     cldnn::event::ptr exec_batch1(typed_primitive_inst<moe_expert>& instance, expert_mask_tmp_scratch& scratch) {
         int max_topk = static_cast<int>(instance.get_config().topk);
         auto moe = instance.get_typed_desc<moe_expert>();
@@ -721,6 +834,11 @@ public:
         _intermediate_size = static_cast<int>(moe->get_intermediate_size());
         instance.get_tmp_memory(hidden_states_layout.data_type, max_topk, _hidden_size, _intermediate_size, max_topk, scratch);
 
+    
+        for (size_t expert_no = 0; expert_no < instance.get_config().expert_num; expert_no++) {
+            reorder_weights_data(instance, moe->_mlp_params[expert_no], false);
+        }
+
         const size_t subgroup_size = instance.get_impl_params()->get_device_info().arch >= gpu_arch::xe2 ? 32 : 16;
         // scratch.up = up(x) * silu(gate(x))
         execute_stage({},
@@ -728,16 +846,16 @@ public:
                       *mlp_gate_up,
                       {batch_mem_ptr, hidden_states_mem_ptr},
                       {scratch.up},
-                      {static_cast<size_t>(max_topk), subgroup_size, static_cast<size_t>(_intermediate_size / N_BLOCK)},
-                      {1, subgroup_size, SUBGROUP_NUM});
+                      {static_cast<size_t>(max_topk), static_cast<size_t>(_intermediate_size), MLP_GATE_UP_THR_NUM},
+                      {1, subgroup_size, MLP_GATE_UP_THR_NUM});
         // scratch.y = down(scratch.up) * weight[expert_no]
         execute_stage({},
                       instance,
                       *mlp_down,
                       {batch_mem_ptr, scratch.up, routing_mem_ptr},
                       {scratch.y},
-                      {static_cast<size_t>(max_topk), subgroup_size, static_cast<size_t>(_hidden_size / N_BLOCK)},
-                      {1, subgroup_size, SUBGROUP_NUM});
+                      {static_cast<size_t>(max_topk), static_cast<size_t>(_hidden_size), MLP_DOWN_THR_NUM},
+                      {1, subgroup_size, MLP_DOWN_THR_NUM});
         // final = sum(scratch.y)
         return execute_stage({},
                              instance,
@@ -754,6 +872,7 @@ public:
         onednn_linear gate;
         onednn_linear down;
         onednn_linear down_batch1;
+        bool is_tiled_layout = false;
     };
     struct PairHash {
         template <class T1, class T2>
@@ -934,6 +1053,11 @@ public:
             instance.get_tmp_memory(hidden_states_layout.data_type, n_token, _hidden_size, _intermediate_size, max_topk, scratch);
             onednn_kernel& kernel = get_kernel(batch == 1 ? 1 : n_token, static_cast<int>(expert_no), instance);
             memory::ptr& x = batch == 1 ? hidden_states_mem_ptr : scratch.x;
+
+            if(moe->_mlp_params[expert_no].is_tiled_layout && batch != 1) {
+                // Convert to linear layout
+                reorder_weights_data(instance, moe->_mlp_params[expert_no], false);
+            }
 
             // gather
             if (batch != 1) {
