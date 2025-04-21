@@ -725,7 +725,7 @@ public:
     }
 
     void reorder_weights_data(typed_primitive_inst<moe_expert>& instance, const cldnn::moe_expert::mlp_params& mlp_params, bool to_tiled) {
-        static size_t cnt_1 = 0, cnt_2 = 0;
+        // static size_t cnt_1 = 0, cnt_2 = 0;
         if(mlp_params.is_tiled() == to_tiled)
             return;
         auto moe = instance.get_typed_desc<moe_expert>();
@@ -749,12 +749,12 @@ public:
         auto& stream = instance.get_network().get_stream();
         Stage::Ptr& reorder_stage = (to_tiled == true) ? reorder_to_tiled : reorder_to_linear;
 
-        if(to_tiled == true) {
-            cnt_1++;
-        } else {
-            cnt_2++;
-        }
-        std::cout << "\treorder weights to " << (to_tiled ? "tiled" : "linear") <<  "cnt = " << (to_tiled ? cnt_1 : cnt_2) << std::endl;
+        // if(to_tiled == true) {
+        //     cnt_1++;
+        // } else {
+        //     cnt_2++;
+        // }
+        // std::cout << "\treorder weights to " << (to_tiled ? "tiled" : "linear") <<  "cnt = " << (to_tiled ? cnt_1 : cnt_2) << std::endl;
         for (int i = 0; i < 3; i++) {
             auto& weight = mlp_params.param[i].weight;
             reoder_temp_mem->copy_from(stream, weight->buffer_ptr(), 0, 0, weight->get_layout().bytes_count(), true);
@@ -766,7 +766,7 @@ public:
                 {reoder_temp_mem},
                 {weight},
                 {get_shape_k(weight)/2, get_shape_n(weight)},
-                {1, 16}, true);
+                {1, 128}, true);
             ret->wait();
         }
 
