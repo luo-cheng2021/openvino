@@ -66,7 +66,7 @@ inline tile_gemv(
 
     // Scale layout is byfx
     scales += n;
-    zps += n;
+    zps += n/2;
 
     float sum_all = 0;
     for (int gk = gk0; gk < gk1; gk++) {
@@ -76,7 +76,8 @@ inline tile_gemv(
 
         float8 sum = 0;
         float scale_1 = convert_float(scales[gk * N]);
-        half zpx16 = (half)(zps[gk * N]);
+        uchar z = zps[gk * N/2];
+        half zpx16 = convert_half((n & 1) ? (z >> 4) : (z & 0xf));
 
         __attribute__((opencl_unroll_hint(4))) for (int g = 0; g < GROUP_SIZE; g += 32, B += 16 * SUBGROUP_SIZE) {
             ushort input_value = intel_sub_group_block_read_us((const __global ushort*)(A + g));
@@ -145,9 +146,10 @@ inline tile_gemv(
         }
 
         if (silu) {
-            sum_value = sum_value / (1 + exp(-sum_value));
+            output[n] *= sum_value / (1.0 + exp(-sum_value));
+        } else {
+            output[n] = sum_value;
         }
-        output[n] = sum_value;
     }
 }
 
@@ -227,7 +229,7 @@ inline tile_gemv_down(
 
     // Scale layout is byfx
     scales += n;
-    zps += n;
+    zps += n/2;
 
     float sum_all = 0;
     for (int gk = gk0; gk < gk1; gk++) {
@@ -237,7 +239,8 @@ inline tile_gemv_down(
 
         float8 sum = 0;
         float scale_1 = convert_float(scales[gk * N]);
-        half zpx16 = (half)(zps[gk * N]);
+        uchar z = zps[gk * N/2];
+        half zpx16 = convert_half((n & 1) ? (z >> 4) : (z & 0xf));
 
         __attribute__((opencl_unroll_hint(4))) for (int g = 0; g < GROUP_SIZE; g += 32, B += 16 * SUBGROUP_SIZE) {
             ushort input_value = intel_sub_group_block_read_us((const __global ushort*)(A + g));
@@ -298,6 +301,10 @@ inline tile_gemv_down(
 
     *(all_sum_even + thr_num * wi_id + thr_id) = sum_all;
     barrier(CLK_LOCAL_MEM_FENCE);
+
+    //if(get_global_id(1)==0 && get_global_id(2)==0) {
+    //    printf("down: token_idx = %d, routing_weights = %f\n", get_global_id(0), routing_weights);
+    //}
 
     if(thr_id==0) {
         float sum_value = 0.0;
