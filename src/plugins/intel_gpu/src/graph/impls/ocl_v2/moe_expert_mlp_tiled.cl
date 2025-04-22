@@ -11,8 +11,6 @@ typedef struct {
     __global void* weight[3];
     __global void* zp[3];
     __global void* scale[3];
-    int routing_offset;
-    int pad;
 } FUNC(expert_info);
 
 
@@ -66,7 +64,7 @@ inline tile_gemv(
 
     // Scale layout is byfx
     scales += n;
-    zps += n;
+    zps += n/2;
 
     float sum_all = 0;
     for (int gk = gk0; gk < gk1; gk++) {
@@ -76,7 +74,8 @@ inline tile_gemv(
 
         float8 sum = 0;
         float scale_1 = convert_float(scales[gk * N]);
-        half zpx16 = (half)(zps[gk * N]);
+        uchar z = zps[gk * N/2];
+        half zpx16 = convert_half((n & 1) ? (z >> 4) : (z & 0xf));
 
         __attribute__((opencl_unroll_hint(4))) for (int g = 0; g < GROUP_SIZE; g += 32, B += 16 * SUBGROUP_SIZE) {
             ushort input_value = intel_sub_group_block_read_us((const __global ushort*)(A + g));
@@ -145,22 +144,27 @@ inline tile_gemv(
         }
 
         if (silu) {
-            sum_value = sum_value / (1 + exp(-sum_value));
+            output[n] *= sum_value / (1.0 + exp(-sum_value));
+        } else {
+            output[n] = sum_value;
         }
-        output[n] = sum_value;
     }
 }
 
+__global FUNC(expert_info) FUNC(g_info_ptrs)[] = {
+WEIGHT_POINTERS
+};
+
 __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE)))
 KERNEL (mlp_gate_up)(
-    const __global FUNC(expert_info)* info_ptrs,
+    const __global int* expert_list,
     __global TYPE* x,                        // [1, HIDDEN_SIZE]
     __global TYPE* y) {                      // [MAX_TOPK, INTERMEDIATE_SIZE]
     // gws: [expert, N, THR_NUM(16)]
     // lws: [1, SUBGROUP_SIZE, THR_NUM(16)]
     int expert_no = get_global_id(0);
     y += expert_no * INTERMEDIATE_SIZE;
-    const __global FUNC(expert_info)* info_ptr = info_ptrs + expert_no;
+    __global FUNC(expert_info)* info_ptr = &(FUNC(g_info_ptrs)[expert_list[expert_no]]);
     // up, [HIDDEN_SIZE, INTERMEDIATE_SIZE]
     __global uchar* up_weight = (__global uchar*)info_ptr->weight[1];
     __global half* up_scale = (__global half*)info_ptr->scale[1];
@@ -170,14 +174,8 @@ KERNEL (mlp_gate_up)(
     __global half* gate_scale = (__global half*)info_ptr->scale[0];
     __global uchar* gate_zp = (__global uchar*)info_ptr->zp[0];
 
-    //__local float all_sum_even[SUBGROUP_SIZE][16];  // [wi_id, thr_id]
+    //__local float all_sum_even[SUBGROUP_SIZE][thr_num];  // [wi_id, thr_id]
     __local float all_sum_even[SUBGROUP_SIZE * THR_NUM];
-
-    //if(get_global_id(0)==0 && get_global_id(1)==0 && get_global_id(2)==0) {
-    //    printf("gate:gws = (%d, %d,%d), ", get_global_size(0), get_global_size(1), get_global_size(2));
-    //    printf("lws = (%d, %d,%d), ", get_local_size(0), get_local_size(1), get_local_size(2));
-    //    printf("K = %d, N = %d, SUBGROUP_SIZE = %d, THR_NUM=%d\n", HIDDEN_SIZE,INTERMEDIATE_SIZE, SUBGROUP_SIZE, THR_NUM);
-    //}
 
     tile_gemv(up_weight, up_scale, up_zp, x, y, INTERMEDIATE_SIZE, HIDDEN_SIZE, all_sum_even, false);
     tile_gemv(gate_weight, gate_scale, gate_zp, x, y, INTERMEDIATE_SIZE, HIDDEN_SIZE, all_sum_even, true);
@@ -227,7 +225,7 @@ inline tile_gemv_down(
 
     // Scale layout is byfx
     scales += n;
-    zps += n;
+    zps += n/2;
 
     float sum_all = 0;
     for (int gk = gk0; gk < gk1; gk++) {
@@ -237,7 +235,8 @@ inline tile_gemv_down(
 
         float8 sum = 0;
         float scale_1 = convert_float(scales[gk * N]);
-        half zpx16 = (half)(zps[gk * N]);
+        uchar z = zps[gk * N/2];
+        half zpx16 = convert_half((n & 1) ? (z >> 4) : (z & 0xf));
 
         __attribute__((opencl_unroll_hint(4))) for (int g = 0; g < GROUP_SIZE; g += 32, B += 16 * SUBGROUP_SIZE) {
             ushort input_value = intel_sub_group_block_read_us((const __global ushort*)(A + g));
@@ -309,9 +308,13 @@ inline tile_gemv_down(
 
 }
 
+__global FUNC(expert_info) FUNC(g_info_ptrs)[] = {
+WEIGHT_POINTERS
+};
+
 __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE)))
 KERNEL (mlp_down)(
-    const __global FUNC(expert_info)* info_ptrs,
+    const __global int* expert_list,
     const __global TYPE* x,                               // [MAX_TOPK, INTERMEDIATE_SIZE]
     __global TYPE* routing_weights,                       // [MAX_TOPK]
     __global TYPE* y) {                                   // [MAX_TOPK, HIDDEN_SIZE]
@@ -320,20 +323,15 @@ KERNEL (mlp_down)(
     int expert_no = get_global_id(0);
     x += expert_no * INTERMEDIATE_SIZE;
     y += expert_no * HIDDEN_SIZE;
-    const __global FUNC(expert_info)* info_ptr = info_ptrs + expert_no;
+
+    __global FUNC(expert_info)* info_ptr = &(FUNC(g_info_ptrs)[expert_list[expert_no]]);
     // down, [INTERMEDIATE_SIZE, HIDDEN_SIZE]
-    __global uchar* down_weight = (__global uchar*)info_ptr->weight[2];
-    __global half* down_scale = (__global half*)info_ptr->scale[2];
-    __global uchar* down_zp = (__global uchar*)info_ptr->zp[2];
+    __global uchar* weight = (__global uchar*)info_ptr->weight[2];
+    __global half* scales = (__global half*)info_ptr->scale[2];
+    __global uchar* zps = (__global uchar*)info_ptr->zp[2];
+
     __local float all_sum_even[SUBGROUP_SIZE * THR_NUM];
-
-    //if(get_global_id(0)==0 && get_global_id(1)==0 && get_global_id(2)==0) {
-    //    printf("down:gws = (%d, %d,%d), ", get_global_size(0), get_global_size(1), get_global_size(2));
-    //    printf("lws = (%d, %d,%d), ", get_local_size(0), get_local_size(1), get_local_size(2));
-    //    printf("K = %d, N = %d, SUBGROUP_SIZE = %d, THR_NUM = %d\n",INTERMEDIATE_SIZE, HIDDEN_SIZE, SUBGROUP_SIZE,THR_NUM);
-    //}
-
-    tile_gemv_down(down_weight, down_scale, down_zp, x, y, HIDDEN_SIZE, INTERMEDIATE_SIZE, all_sum_even, routing_weights[info_ptr->routing_offset]);
+    tile_gemv_down(weight, scales, zps, x, y, HIDDEN_SIZE, INTERMEDIATE_SIZE, all_sum_even, routing_weights[expert_no]);
 }
 
 #else
