@@ -20,12 +20,125 @@
 #include "primitive_inst.h"
 #include "primitive_ocl_base.hpp"
 #include "utils/kernel_generator.hpp"
+#include "to_string_utils.h"
 
 namespace ov::intel_gpu::ocl {
 
 namespace {
 
 using namespace ov::intel_gpu::ocl;
+
+
+float convert_element(int64_t i) { return static_cast<float>(i); }
+float convert_element(int32_t i) { return static_cast<float>(i); }
+
+float convert_element(float f) { return f; }
+
+float convert_element(ov::float16 h) { return static_cast<float>(h); }
+
+size_t get_x_pitch(const layout& layout) {
+    try {
+        auto tensor_x0 = tensor(batch(0), feature(0), spatial(0, 0, 0, 0));
+        auto tensor_x1 = tensor(batch(0), feature(0), spatial(1, 0, 0, 0));
+        auto x0 = layout.get_linear_offset(tensor_x0);
+        auto x1 = layout.get_linear_offset(tensor_x1);
+        return (x1 - x0);
+    } catch (...) {
+        // When spatial size of x=0, x_pitch is meaningless
+        return 0;
+    }
+}
+
+template <class T>
+static void dump(memory::ptr mem, stream& stream, std::ofstream& file_stream, bool dump_raw) {
+    auto&& size = mem->get_layout().get_tensor();
+
+    auto batch_size = std::max(std::min(ExecutionConfig::get_dump_batch_limit(), size.batch[0]), 1);
+    tensor tmp_size(size);
+    tmp_size.batch[0] = batch_size;
+    if (tmp_size == size) {
+        file_stream << "shape: " << size.to_string() << " ";
+        file_stream << "(count: " << size.count()
+                    << ", addr: " << mem->buffer_ptr()
+                    << ", original format: " << cldnn::fmt_to_str(mem->get_layout().format) << ")"
+                    << (dump_raw ? " raw data" : "") << std::endl;
+    } else {
+        file_stream << "shape: " << tmp_size.to_string() << " ";
+        file_stream << "(count: " << tmp_size.count()
+                    << ", addr: " << mem->buffer_ptr()
+                    << ", original format: " << cldnn::fmt_to_str(mem->get_layout().format)
+                    << ", original shape: " << size.to_string() << ")"
+                    << (dump_raw ? " raw data" : "") << std::endl;
+    }
+
+    if (size.count() == 0) {
+        file_stream << "Empty buffer" << std::endl;
+        return;
+    }
+
+    mem_lock<T, mem_lock_type::read> lock(mem, stream);
+    auto mem_ptr = lock.data();
+    auto x_pitch = get_x_pitch(mem->get_layout());
+    std::stringstream buffer;
+
+    if (!dump_raw) {
+        for (cldnn::tensor::value_type g = 0; g < size.group[0]; ++g) {
+            for (cldnn::tensor::value_type b = 0; b < batch_size; ++b) {
+                for (cldnn::tensor::value_type f = 0; f < size.feature[0]; ++f) {
+                    for (cldnn::tensor::value_type w = 0; w < size.spatial[3]; ++w) {
+                        for (cldnn::tensor::value_type z = 0; z < size.spatial[2]; ++z) {
+                            for (cldnn::tensor::value_type y = 0; y < size.spatial[1]; ++y) {
+                                cldnn::tensor t(cldnn::group(g), cldnn::batch(b), cldnn::feature(f), cldnn::spatial(0, y, z, w));
+                                size_t input_it = mem->get_layout().get_linear_offset(t);
+
+                                for (cldnn::tensor::value_type x = 0; x < size.spatial[0]; ++x, input_it += x_pitch) {
+                                    buffer << std::fixed << std::setprecision(6) << convert_element(mem_ptr[input_it]) << std::endl;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        for (size_t i = 0; i < lock.size(); ++i) {
+            buffer << std::fixed << std::setprecision(6) << convert_element(mem_ptr[i]) << std::endl;
+        }
+    }
+    file_stream << buffer.str();
+}
+static void log_memory_to_file(memory::ptr mem, layout data_layout, stream& stream, std::string filename, bool dump_raw) {
+    //std::cout << "log_memory_to_file: " << filename << std::endl;
+    return;
+    std::ofstream file_stream(filename);
+    if (!mem) {
+        file_stream << "Empty" << std::endl;
+        return;
+    }
+
+    // Reinterpret buffer to represent actual data layout
+    auto actual_mem = mem->get_engine()->reinterpret_buffer(*mem, data_layout);
+
+    auto mem_dt = actual_mem->get_layout().data_type;
+    file_stream << "dt:" << mem_dt << "\n";
+    if (mem_dt == cldnn::data_types::f32)
+        dump<float>(actual_mem, stream, file_stream, dump_raw);
+    else if (mem_dt == cldnn::data_types::f16)
+        dump<ov::float16>(actual_mem, stream, file_stream, dump_raw);
+    else if (mem_dt == cldnn::data_types::i64)
+        dump<int64_t>(actual_mem, stream, file_stream, dump_raw);
+    else if (mem_dt == cldnn::data_types::i32)
+        dump<int32_t>(actual_mem, stream, file_stream, dump_raw);
+    else if (mem_dt == cldnn::data_types::i8)
+        dump<int8_t>(actual_mem, stream, file_stream, dump_raw);
+    else if (mem_dt == cldnn::data_types::u8)
+        dump<uint8_t>(actual_mem, stream, file_stream, dump_raw);
+    else if (mem_dt == cldnn::data_types::u4)
+        dump<uint8_t>(actual_mem, stream, file_stream, dump_raw);
+    else
+        std::cout << "Dump for this data type is not supported: "  << std::endl;
+}
+
 
 dnnl::memory::data_type convert_data_type(cldnn::data_types dt) {
     switch (dt) {
@@ -790,6 +903,9 @@ public:
         instance.get_tmp_memory(hidden_states_layout.data_type, max_topk, _hidden_size, _intermediate_size, max_topk, scratch);
         _expert_weight_pointers.resize(max_topk);
 
+        static int index = 0;
+        index++;
+
         for (size_t expert_no = 0, valid_expert_no = 0; expert_no < instance.get_config().expert_num; expert_no++) {
             OPENVINO_ASSERT(expert_no < expert_mask.pred_flag.size());
             auto can_skip_subgraph = !expert_mask.pred_flag[expert_no];
@@ -798,6 +914,17 @@ public:
             }
             const auto& param = moe_mlp_params[expert_no];
             _expert_weight_pointers[valid_expert_no].routing_offset = expert_mask.topk[expert_no][0];
+
+            // for (int i = 0; i < 3; i++) {
+            //     //layout(data_types data_type, cldnn::format fmt, tensor size, padding apadding = padding())
+            //     log_memory_to_file(
+            //         param.param[i].weight,
+            //         param.param[i].weight->get_layout(),
+            //         stream,
+            //         std::to_string(index) + "_" + std::to_string(valid_expert_no) + "_" + std::to_string(i) + "_weight_gate_up_weight_linear.bin",
+            //         true);
+            // }
+
             if(param.is_tiled_layout == false) {
                 // convert linear to tiled layout
                 reorder_weights_data(instance, moe->_mlp_params[expert_no], true);
@@ -805,6 +932,11 @@ public:
             }
             for (int i = 0; i < 3; i++) {
                 _expert_weight_pointers[valid_expert_no].weight[i] = param.param[i].weight->buffer_ptr();
+                // log_memory_to_file(param.param[i].weight,
+                //                    param.param[i].weight->get_layout(),
+                //                    stream,
+                //                    std::to_string(index) + "_" + std::to_string(valid_expert_no) + "_" + std::to_string(i) + "_weight_gate_up_weight_tiled.bin",
+                //                    true);
                 _expert_weight_pointers[valid_expert_no].zp[i] = param.param[i].zp->buffer_ptr();
                 _expert_weight_pointers[valid_expert_no].scale[i] = param.param[i].scale->buffer_ptr();
             }
@@ -826,6 +958,9 @@ public:
                       {scratch.up},
                       {static_cast<size_t>(max_topk), static_cast<size_t>(_intermediate_size), MLP_GATE_UP_THR_NUM},
                       {1, subgroup_size, MLP_GATE_UP_THR_NUM});
+        //stream.finish();
+        log_memory_to_file(hidden_states_mem_ptr, hidden_states_mem_ptr->get_layout(), stream, std::to_string(index) + "_scratch_up_input.bin", true);
+        log_memory_to_file(scratch.up, scratch.up->get_layout(), stream, std::to_string(index) + "_scratch_up_output.bin", true);
         // scratch.y = down(scratch.up) * weight[expert_no]
         execute_stage({},
                       instance,
@@ -834,8 +969,10 @@ public:
                       {scratch.y},
                       {static_cast<size_t>(max_topk), static_cast<size_t>(_hidden_size), MLP_DOWN_THR_NUM},
                       {1, subgroup_size, MLP_DOWN_THR_NUM});
+        //stream.finish();
+        log_memory_to_file(scratch.y, scratch.y->get_layout(), stream, std::to_string(index) + "_scratch_down_output.bin", true);
         // final = sum(scratch.y)
-        return execute_stage({},
+        auto ret = execute_stage({},
                              instance,
                              *mlp_reduce,
                              {scratch.y},
@@ -843,6 +980,9 @@ public:
                              {static_cast<size_t>(1), static_cast<size_t>(_hidden_size)},
                              {1, 128},
                              instance.needs_completion_event());
+        //stream.finish();
+        log_memory_to_file(final_hidden_states_mem_ptr, final_hidden_states_mem_ptr->get_layout(), stream, std::to_string(index) + "_scratch_reduce_output.bin", true);
+        return ret;
     }
 
     struct onednn_kernel {
