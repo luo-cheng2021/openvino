@@ -1,10 +1,9 @@
 #pragma once
 
 #ifndef WIN32
-#define ENABLE_LINUX_PERF
+//#define ENABLE_LINUX_PERF
 #endif
 
-#define ENABLE_LINUX_PERF
 #ifdef ENABLE_LINUX_PERF
 #include <linux/perf_event.h>
 #include <time.h>
