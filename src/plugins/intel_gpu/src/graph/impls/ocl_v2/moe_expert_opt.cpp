@@ -29,7 +29,7 @@ namespace {
 
 using namespace ov::intel_gpu::ocl;
 
-#define LAYOUT_TILED 1
+#define LAYOUT_TILED 0
 static bool g_do_reoder = false;
 
 dnnl::memory::data_type convert_data_type(cldnn::data_types dt) {
