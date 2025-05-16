@@ -710,7 +710,7 @@ public:
             mask = std::atoi(p);
         }
         // TODO(moe): enable cm support
-        mask = 0;
+        //mask = 0;
         _up_use_cl = !(mask & 1);
         _down_use_cl = !(mask & 2);
     }
@@ -924,13 +924,13 @@ public:
                               {static_cast<size_t>(max_topk), subgroup_size, static_cast<size_t>(_intermediate_size / N_BLOCK)},
                               {1, subgroup_size, SUBGROUP_NUM});
             } else {
-                // execute_stage({},
-                //               instance,
-                //               *cm_mlp_up,
-                //               {hidden_states_mem_ptr, batch_mem_ptr, mlp_weight_mem.weights_base, scale_zps.gate_up_addrs},
-                //               {scratch.up},
-                //               {static_cast<size_t>(max_topk), static_cast<size_t>(_intermediate_size / 2 * 4)},
-                //               {1, 4});
+                execute_stage({},
+                              instance,
+                              *cm_mlp_up,
+                              {hidden_states_mem_ptr, batch_mem_ptr, mlp_weight_mem.weights_base, mlp_weight_mem.weights_offset},
+                              {scratch.up},
+                              {static_cast<size_t>(max_topk), static_cast<size_t>(_intermediate_size / 2 * 4)},
+                              {1, 4});
             }
             // scratch.y = down(scratch.up) * weight[expert_no]
             if (_down_use_cl) {
@@ -942,19 +942,17 @@ public:
                               {static_cast<size_t>(max_topk), subgroup_size, static_cast<size_t>(_hidden_size / N_BLOCK)},
                               {1, subgroup_size, SUBGROUP_NUM});
             } else {
-                // execute_stage({},
-                //               instance,
-                //               *cm_mlp_down,
-                //               {scratch.up,
-                //                batch_mem_ptr,
-                //                routing_mem_ptr,
-                //                mlp_weight_mem.weights_base,
-                //                scale_zps.down_addrs,
-                //                scale_zps.down_scales_addrs,
-                //                scale_zps.down_zp_addrs},
-                //               {scratch.y},
-                //               {static_cast<size_t>(max_topk), static_cast<size_t>(_hidden_size / 4 * 4)},
-                //               {1, 4});
+                execute_stage({},
+                              instance,
+                              *cm_mlp_down,
+                              {scratch.up,
+                               batch_mem_ptr,
+                               routing_mem_ptr,
+                               mlp_weight_mem.weights_base,
+                               mlp_weight_mem.weights_offset},  /*inputs*/
+                              {scratch.y},   /*outputs*/
+                              {static_cast<size_t>(max_topk), static_cast<size_t>(_hidden_size / 2 * 1)},
+                              {1, 1});
             }
             // final = sum(scratch.y)
             if (!_up_use_cl || !_down_use_cl) {

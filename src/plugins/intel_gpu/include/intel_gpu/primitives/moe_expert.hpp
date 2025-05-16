@@ -34,10 +34,8 @@ struct mlp_params {
 #define EACH_EXPERT_WEIGHTS_OFFSET_SIZE 64
 struct mlp_weights_mem {
     memory::ptr weights_base;
-    // weights/scale/zp offsets, each expert has 9*4 = 36 bytes
-    // gate_weight_offset, up_weight_offset, down_weight_offset
-    // gate_scale_offset, up_scale_offset, down_scale_offset
-    // gate_zp_offset, up_zp_offset, down_zp_offset
+    // weights/scale/zp offsets, each expert has 64 bytes, valid 9*4 = 36 bytes
+    // order: gate.weight, gate.scale, gate.zp, up.weight, up.scale, up.zp, down.weight, down.scale, down.zp, padding
     memory::ptr weights_offset;
 };
 
