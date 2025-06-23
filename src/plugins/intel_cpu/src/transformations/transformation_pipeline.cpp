@@ -182,8 +182,8 @@
 #include "transformations/cpu_opset/x64/pass/convert_to_interaction.hpp"
 #include "transformations/cpu_opset/x64/pass/mlp_fusion.hpp"
 #include "transformations/cpu_opset/x64/pass/qkv_proj_fusion.hpp"
-#include "utils/precision_support.h"
 #include "transformations/utils/print_model.hpp"
+#include "utils/precision_support.h"
 // Snippets
 #include "snippets/pass/collapse_subgraph.hpp"
 #include "snippets/pass/common_optimizations.hpp"
@@ -554,23 +554,18 @@ void Transformations::PreLpt(const std::vector<ov::element::Type>& defaultPrecis
     };
     CPU_REGISTER_PASS_COMMON(manager, ov::pass::ConvertPagedAttnInputs, cacheConfig, update_paged_attention_shape_func);
 
+    // TODO: remove env
     if (std::getenv("NO_MOE") == nullptr) {
         manager.register_pass<ov::pass::FuseMOE>();
         manager.register_pass<ov::pass::FuseMOERouter>();
         CPU_SET_CALLBACK_COMMON(
             manager,
             [](const_node_ptr& node) -> bool {
-                auto moe = as_type_ptr<const ov::op::internal::MOE>(node);
-                const auto& config = moe->get_config();
-                // TODO(MOE): support more cases
-                if (config.weight_type == ov::element::u4 && config.scale_type == ov::element::f16 && config.zp_type == ov::element::u4 &&
-                    config.group_size == 128) {
-                    return false;
-                }
-                return true;
+                // auto moe = as_type_ptr<const ov::op::internal::MOE>(node);
+                // const auto& config = moe->get_config();
+                return false;
             },
             ov::pass::FuseMOE);
-        manager.register_pass<ov::pass::PrintModel>("cpu.cpp");
     }
 
     CPU_REGISTER_PASS_COMMON(manager, ov::pass::CommonOptimizations);

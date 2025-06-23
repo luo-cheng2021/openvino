@@ -11,11 +11,11 @@ struct onednn_matmul;
 
 namespace ov::intel_cpu::node {
 
-class MOEExpert : public Node {
+class MOE : public Node {
 public:
     static bool isSupportedOperation(const std::shared_ptr<const ov::Node>& op, std::string& errorMessage) noexcept;
 
-    MOEExpert(const std::shared_ptr<ov::Node>& op, const GraphContext::CPtr& context);
+    MOE(const std::shared_ptr<ov::Node>& op, const GraphContext::CPtr& context);
 
     bool created() const override {
         return getType() == Type::MOE;
@@ -34,12 +34,12 @@ private:
     op::internal::MOE::Config m_config;
 
     struct Weight {
-        uint8_t* data;
-        uint8_t* scale;
-        uint8_t* zp;
-        int oc;
-        int ic;
-        int qg_size; // quantization group size
+        uint8_t* data = nullptr;
+        uint8_t* scale = nullptr;
+        uint8_t* zp = nullptr;
+        int oc = 0;
+        int ic = 0;
+        int qg_size = 0;  // quantization group size
         dnnl::memory::data_type raw_data_dtype;
         dnnl::memory::data_type raw_scale_dtype;
         dnnl::memory::data_type raw_zp_dtype;
@@ -56,8 +56,8 @@ private:
     std::vector<ExpertWeights> m_weights;
 
     struct ExecutorBase {
-        virtual void execute(const dnnl::stream&, MOEExpert*) = 0;
-        virtual void reorder_weights(const dnnl::engine&, ExpertWeights * pweight) = 0;
+        virtual void execute(const dnnl::stream&, MOE*) = 0;
+        virtual void reorder_weights(const dnnl::engine&, ExpertWeights* pweight) = 0;
         virtual ~ExecutorBase() = default;
     };
     struct Executor;
