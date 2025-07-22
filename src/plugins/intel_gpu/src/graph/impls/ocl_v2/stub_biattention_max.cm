@@ -1,0 +1,73 @@
+#include <cm/cm.h>
+#include <cm/cmtl.h>
+
+namespace KERNEL_NAME {
+
+#define MYMIN(x, y) (x) > (y) ? (y) : (x)
+
+extern "C" _GENX_MAIN_ void KERNEL_NAME(
+    int l_pic,
+    int l_pic_stride,
+    int l_text_stride,
+    SurfaceIndex attn [[type("buffer_t")]],
+    svmptr_t output [[type("svmptr_t")]]
+    ) {
+    // attn: [batch, l_text, l_picture]
+    // out : [batch, l_text, 1]
+    // global: [l_p/256, l_text, batch]
+    // local: [8, 1, 1]
+    int local_id = cm_local_id(0);
+    int l_pic_blk = cm_group_id(0) * 8 + local_id;
+    int cur_l_text = cm_group_id(1);
+    int cur_b = cm_group_id(2);
+    int l_text = cm_group_count(1);
+    int cur_l_pic_start = MYMIN(l_pic_blk * 256, l_pic);
+    int cur_l_pic_end = MYMIN(cur_l_pic_start + 256, l_pic);
+    int cur_l_pic_len = cur_l_pic_end - cur_l_pic_start;
+    uint src_offset = cur_b * l_pic_stride * l_text + cur_l_text * l_pic_stride + cur_l_pic_start;
+    uint dst_offset = cur_b * l_text_stride + cur_l_text;
+    cm_slm_init(8 * sizeof(half));
+    auto slm = cm_slm_alloc(8 * sizeof(half));
+    vector<ushort, 1> addr_slm;
+    vector<half, 1> max_in_sg;
+    addr_slm[0] = local_id;
+    vector<int, 32> seq;
+    cmtl::cm_vector_assign(seq.select_all(), 0, 1);
+    vector<uint, 32> offsets = src_offset + seq;
+    vector<half, 32> cur_max = -1e9;
+    if (cur_l_pic_len == 256) {
+        #pragma unroll
+        for (int cond = 0; cond < 256; cond += 32) {
+            vector<half, 32> data0;
+            data0 = cm_load<half>(attn, offsets * (uint)sizeof(half));
+            cur_max = cm_max<half>(cur_max, data0);
+            offsets += 32;
+        }
+        max_in_sg[0] = cm_reduced_max<half>(cur_max);
+    } else {
+        // tails
+        if (cur_l_pic_len > 0) {
+            SIMD_IF_BEGIN (offsets < src_offset + cur_l_pic_len) {
+                SIMD_DO_WHILE_BEGIN {
+                    auto data = cm_load<half>(attn, offsets * (uint)sizeof(half));
+                    cur_max = cm_max<half>(cur_max, data);
+                    offsets += 32;
+                } SIMD_DO_WHILE_END (offsets < src_offset + cur_l_pic_len);
+            } SIMD_IF_END;
+        }
+        max_in_sg[0] = cm_reduced_max<half>(cur_max);
+    }
+    cm_slm_write(slm, addr_slm, max_in_sg);
+    cm_slm_fence(CM_LOCAL_BARRIER);
+    cm_barrier();
+    vector<half, 8> data;
+    if (local_id == 0) {
+        cm_slm_block_read(slm, 0, data);
+        auto tmp = cm_reduced_max<half>(data);
+        vector<half, 1> tmp_v = tmp;
+        vector<uint, 1> dst_offsets = dst_offset * (uint)sizeof(half);
+        cm_ptr_atomic<AtomicOp::FMAX, half>((half*)output, dst_offsets, tmp_v);
+    }
+}
+
+}

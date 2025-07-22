@@ -115,7 +115,7 @@ static void CreateFullyConnectedOp(ProgramBuilder& p, const std::shared_ptr<op::
     auto rank_b = shape_b.rank().get_length();
 
     auto fcPrim = cldnn::fully_connected(layerName,
-                                         cldnn::input_info(input_name),
+                                         inputs[0],
                                          weights_name,
                                          bias_name,
                                          cldnn::element_type_to_data_type(op->get_output_element_type(0)),

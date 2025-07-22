@@ -1,0 +1,91 @@
+#include <cm/cm.h>
+#include <cm/cmtl.h>
+
+namespace KERNEL_NAME {
+
+#define MYMIN(x, y) (x) > (y) ? (y) : (x)
+
+template<typename T, int N>
+void show(const vector<T, N> mat) {
+    printf("Matrix [%d]:[\n", N);
+    for(int n = 0; n < N; n ++) {
+        printf("%8.4f,", mat[n]);
+    }
+    printf("]\n");
+}
+
+extern "C" _GENX_MAIN_ void KERNEL_NAME(
+    int l_pic,
+    int l_pic_stride,
+    int l_text_stride,
+    SurfaceIndex attn [[type("buffer_t")]],
+    svmptr_t max_buf [[type("svmptr_t")]],
+    svmptr_t output [[type("svmptr_t")]]
+    ) {
+    // attn: [batch, l_text, l_picture], half
+    // max_buf: [batch, l_text, 1], half
+    // out : [batch, l_text, 1], half
+    // global: [l_p/256, l_text, batch]
+    // local: [8, 1, 1]
+    int local_id = cm_local_id(0);
+    int l_pic_blk = cm_group_id(0) * 8 + local_id;
+    int cur_l_text = cm_group_id(1);
+    int cur_b = cm_group_id(2);
+    int l_text = cm_group_count(1);
+    int cur_l_pic_start = MYMIN(l_pic_blk * 256, l_pic);
+    int cur_l_pic_end = MYMIN(cur_l_pic_start + 256, l_pic);
+    int cur_l_pic_len = cur_l_pic_end - cur_l_pic_start;
+    uint src_offset = cur_b * l_pic_stride * l_text + cur_l_text * l_pic_stride + cur_l_pic_start;
+    uint max_buf_offset = cur_b * l_text_stride + cur_l_text;
+    uint dst_offset = cur_b * ((l_text + 31) / 32 * 32) + cur_l_text;
+    cm_slm_init(8 * sizeof(half));
+    auto slm = cm_slm_alloc(8 * sizeof(half));
+    vector<ushort, 1> addr_slm;
+    vector<half, 1> sum_in_sg;
+    addr_slm[0] = local_id;
+    vector<int, 32> seq;
+    cmtl::cm_vector_assign(seq.select_all(), 0, 1);
+    vector<uint, 32> offsets = src_offset + seq;
+    vector<half, 32> cur_sum = 0;
+    constexpr half log2e = 1.4426950408889634f;
+    auto max_val = ((half*)max_buf)[max_buf_offset];
+    if (cur_l_pic_len == 256) {
+        #pragma unroll
+        for (int cond = 0; cond < 256; cond += 32) {
+            vector<half, 32> data0;
+            data0 = cm_load<half>(attn, offsets * (uint)sizeof(half));
+            data0 = cm_exp((data0 - max_val) * log2e);
+            cm_store<half>(attn, offsets * (uint)sizeof(half), data0);
+            cur_sum += data0;
+            offsets += 32;
+        }
+        sum_in_sg[0] = cm_sum<half>(cur_sum);
+    } else {
+        // tails
+        if (cur_l_pic_len > 0) {
+            SIMD_IF_BEGIN (offsets < src_offset + cur_l_pic_len) {
+                SIMD_DO_WHILE_BEGIN {
+                    auto data = cm_load<half>(attn, offsets * (uint)sizeof(half));
+                    data = cm_exp((data - max_val) * log2e);
+                    cm_store<half>(attn, offsets * (uint)sizeof(half), data);
+                    cur_sum += data;
+                    offsets += 32;
+                } SIMD_DO_WHILE_END (offsets < src_offset + cur_l_pic_len);
+            } SIMD_IF_END;
+        }
+        sum_in_sg[0] = cm_sum<half>(cur_sum);
+    }
+    cm_slm_write(slm, addr_slm, sum_in_sg);
+    cm_slm_fence(CM_LOCAL_BARRIER);
+    cm_barrier();
+    vector<half, 8> data;
+    if (local_id == 0) {
+        cm_slm_block_read(slm, 0, data);
+        auto tmp = cm_sum<half>(data);
+        vector<half, 1> tmp_v = tmp;
+        vector<uint, 1> dst_offsets = dst_offset * (uint)sizeof(half);
+        cm_ptr_atomic<AtomicOp::FADD, half>((half*)output, dst_offsets, tmp_v);
+    }
+}
+
+}

@@ -339,6 +339,9 @@ void prepare_quantization::prepare_dequantize_merge(program& p, eltwise_node& el
         if (eltwise_dep.get_primitive()->mode != eltwise_node.get_primitive()->mode)
             continue;
 
+        if (eltwise_dep.get_dependencies()[0].second != eltwise_node.get_dependencies()[0].second)
+            continue;
+
         bool valid_scale_node = true;
         for (size_t i = 1; i < eltwise_dep.get_dependencies().size(); i++) {
             if (!eltwise_dep.get_dependency(i).is_type<data>()) {

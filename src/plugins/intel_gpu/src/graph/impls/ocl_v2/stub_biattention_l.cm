@@ -1,0 +1,132 @@
+#include <cm/cm.h>
+#include <cm/cmtl.h>
+
+namespace KERNEL_NAME {
+
+#define MYMIN(x, y) (x) > (y) ? (y) : (x)
+
+#define REG_K 16
+#define REG_M 8
+#define REG_N 16
+
+template<typename T, int M, int N>
+void show(const matrix<T, M, N> mat) {
+    printf("Matrix [%d, %d]:\n", M, N);
+    for(int m = 0; m < M; m ++) {
+        printf("\t[");
+        for(int n = 0; n < N; n ++) {
+            printf("%8.4f,", mat[m][n]);
+        }
+        printf("],\n");
+    }
+    printf("]\n");
+}
+
+template<typename T, int N>
+void show(const vector<T, N> mat) {
+    printf("[");
+    for(int n = 0; n < N; n ++) {
+        printf("%8.4f,", mat[n]);
+    }
+    printf("]\n");
+}
+
+extern "C" _GENX_MAIN_ void KERNEL_NAME(
+    int seqlen,                              // --> L_SEQ_LEN
+    int kv_seq_len,                          // --> v_seq_len
+    int attn_weights_stride,                 // unit is half
+    int sum_buf_stride,                      // unit is float
+    half* attn_weights [[type("svmptr_t")]], // [batch, HEAD_NUM, L_SEQ_LEN, v_seq_len'], v_seq_len' aligned to 64 bytes
+    half* value [[type("svmptr_t")]],        // [batch, v_seq_len, HEAD_NUM * HEAD_DIM], vison_values
+    half* sum_buf [[type("svmptr_t")]],     // [batch*HEAD_NUM, L_SEQ_LEN', 1], L_SEQ_LEN' aligned to 64 bytes
+    half* output [[type("svmptr_t")]]        // [batch, L_SEQ_LEN, HEAD_NUM * HEAD_DIM], it's outputs[1]
+    ) {
+    // global: [batch, head, kv_seq_len/512 * 4]
+    // local: [1, 1, 4]
+    int batch = cm_group_id(0);
+    int h = cm_group_id(1);
+    int kv = cm_group_id(2);
+    int k_start = MYMIN(kv * 512, kv_seq_len);
+    int k_end = MYMIN(k_start + 512, kv_seq_len);
+    int k_len = k_end - k_start;
+    int sg_id = cm_local_id(2);
+    int attn_offset = batch * NUM_HEADS * seqlen * attn_weights_stride + h * seqlen * attn_weights_stride + k_start;
+    int value_offset = batch * kv_seq_len * NUM_HEADS * HEAD_SIZE + k_start * NUM_HEADS * HEAD_SIZE + h * HEAD_SIZE + sg_id * 64;
+    int sum_offset = batch * NUM_HEADS * sum_buf_stride + h * sum_buf_stride;
+    int dst_offset = batch * seqlen * NUM_HEADS * HEAD_SIZE + h * HEAD_SIZE + sg_id * 64;
+
+    static_assert(HEAD_SIZE == 256, "head size must be 256");
+    if (k_len == 0) return;
+    lsc::block_2d_desc<half, 1, REG_M, REG_K> desc_attn(attn_weights + attn_offset, seqlen - 1, (k_end - k_start)*sizeof(half) - 1, attn_weights_stride*sizeof(half) - 1, 0, 0);
+    lsc::block_2d_desc<half, 1, REG_K, REG_N> desc_value(value + value_offset, k_end - k_start - 1, 64*sizeof(half) - 1, NUM_HEADS * HEAD_SIZE*sizeof(half) - 1, 0, 0);
+
+    matrix<float, 4, 8 * 16> acc;
+    vector<half, 8> sum;
+    vector<int, 32> seq;
+    cmtl::cm_vector_assign(seq.select_all(), 0, 1);
+    vector<uint, 32> dst_offsets = dst_offset + seq;
+
+    for (int m = 0; m < seqlen; m += 8) {
+        sum.format<int>() = cm_ptr_load<int, 4>((int*)sum_buf, (sum_offset + m) * (uint)sizeof(half));
+        auto sum_inv = 1.0f / sum;
+        matrix<half, REG_M, REG_K> a;
+        matrix<half, REG_K, REG_N> b;
+        auto comp_a = [] (matrix_ref<half, REG_M, REG_K> a_ref, vector_ref<float, 8> sum_ref) {
+            for (int i = 0; i < 8; i++)
+                a_ref.row(i) *= sum_ref[i];
+        };
+
+        desc_attn.set_block_y(m);
+        cm_load<lsc::Normal>(a.format<half>(), desc_attn.set_block_x(0));
+        comp_a(a, sum_inv);
+        desc_value.set_block_y(0);
+        #pragma unroll
+        for (int n = 0; n < 4; n++) {
+            cm_load<lsc::VNNI, CacheHint::Cached, CacheHint::Cached>(b.format<half>(), desc_value.set_block_x(16 * n));
+            acc.row(n) = cm_dpas<CM_PRECISION_HF, CM_PRECISION_HF, 8, 8, float>(
+                                0,
+                                b.format<int32_t>(),
+                                a.format<int32_t>());
+        }
+
+        for (int k = 16; k < k_end - k_start; k += 16) {
+            cm_load<lsc::Normal>(a.format<half>(), desc_attn.set_block_x(k));
+            comp_a(a, sum_inv);
+            desc_value.set_block_y(k);
+            #pragma unroll
+            for (int n = 0; n < 4; n++) {
+                cm_load<lsc::VNNI, CacheHint::Cached, CacheHint::Cached>(b.format<half>(), desc_value.set_block_x(16 * n));
+                acc.row(n) = cm_dpas<CM_PRECISION_HF, CM_PRECISION_HF, 8, 8, float>(
+                                    acc.row(n),
+                                    b.format<int32_t>(),
+                                    a.format<int32_t>());
+            }
+        }
+
+        // store
+        matrix<half, 8, 64> tmp;
+        #pragma unroll
+        for (int reg_n = 0; reg_n < 4; reg_n++) {
+            tmp.select<8, 1, 16, 1>(0, reg_n * 16) = acc.row(reg_n);
+        }
+        int valid_m = MYMIN(8, seqlen - m);
+        if (valid_m == 8) {
+            #pragma unroll
+            for (int reg_m = 0; reg_m < 8; reg_m++) {
+                vector<uint, 32> cur_dst_offsets = (dst_offsets + (m + reg_m) * NUM_HEADS * HEAD_SIZE) * (uint)sizeof(half);
+                cm_ptr_atomic<AtomicOp::FADD, half>((half*)output, cur_dst_offsets, tmp.row(reg_m).select<32, 1>());
+                cur_dst_offsets += 64;
+                cm_ptr_atomic<AtomicOp::FADD, half>((half*)output, cur_dst_offsets, tmp.row(reg_m).select<32, 1>(32));
+            }
+        } else {
+            for (int reg_m = 0; reg_m < valid_m; reg_m++) {
+                vector<uint, 32> cur_dst_offsets = (dst_offsets + (m + reg_m) * NUM_HEADS * HEAD_SIZE) * (uint)sizeof(half);
+                cm_ptr_atomic<AtomicOp::FADD, half>((half*)output, cur_dst_offsets, tmp.row(reg_m).select<32, 1>());
+                cur_dst_offsets += 64;
+                cm_ptr_atomic<AtomicOp::FADD, half>((half*)output, cur_dst_offsets, tmp.row(reg_m).select<32, 1>(32));
+            }
+        }
+    }
+}
+
+}
