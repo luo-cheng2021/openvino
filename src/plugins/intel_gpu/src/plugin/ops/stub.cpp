@@ -108,6 +108,8 @@ void CreateStub(ProgramBuilder& p, const std::shared_ptr<ov::Node>& op) {
 
     std::string layerName = layer_type_lower(op) + ":" + params.at("type") + "/" + op->get_friendly_name();
     auto stub = cldnn::stub(layerName, inputs, params);
+    stub.num_outputs = op->get_output_size();
+
     p.add_primitive(*op, stub);
 }
 
